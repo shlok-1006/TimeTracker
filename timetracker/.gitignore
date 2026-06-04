@@ -1,0 +1,36 @@
+# Rust
+/target
+**/target
+/target-test
+
+# Node
+node_modules
+.pnpm-store
+
+# Next.js
+.next
+out
+next-env.d.ts
+
+# Tauri
+apps/desktop/src-tauri/gen
+apps/desktop/src-tauri/target
+
+# Environment / secrets
+.env
+.env.local
+*.local
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor / OS
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# MinIO / docker volumes
+/.data

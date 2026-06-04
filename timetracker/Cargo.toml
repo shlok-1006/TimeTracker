@@ -1,0 +1,77 @@
+# Cargo workspace — Rust members for the TimeTracker platform.
+#
+# Members:
+#   server                     -> Axum API server (PostgreSQL + SQLx)
+#   apps/desktop/src-tauri     -> Tauri 2 desktop shell (SQLite)
+#
+# Shared dependency versions are pinned in [workspace.dependencies] so every
+# crate resolves the same versions (Architecture Rules 7 & 8).
+
+[workspace]
+resolver = "2"
+members = [
+    "server",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "UNLICENSED"
+authors = ["TimeTracker Team"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# Web framework
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Database (compile-time checked queries, migrations) — Rule 7
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "sqlite",
+    "uuid",
+    "chrono",
+    "macros",
+    "migrate",
+] }
+
+# Auth (Rule 6: Argon2 password hashing + JWT)
+argon2 = { version = "0.5", features = ["std"] }
+jsonwebtoken = "9"
+
+# S3 (SigV4) presigning — pure Rust, no C toolchain required.
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling — Rule 8
+anyhow = "1"
+thiserror = "1"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Misc
+dotenvy = "0.15"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+
+# Optimized release profile for the desktop binary (startup < 2s, memory < 200MB).
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

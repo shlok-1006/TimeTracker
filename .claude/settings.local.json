@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(function chk\\($n\\){ $c = Get-Command $n -ErrorAction SilentlyContinue; if\\($c\\){ \"$n -> $\\($c.Source\\)\" } else { \"$n -> NOT FOUND\" } }; chk cargo; chk rustc; chk node; chk pnpm; chk npm; chk docker; chk sqlx; chk cargo-tauri)"
+    ]
+  }
+}

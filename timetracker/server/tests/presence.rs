@@ -7,6 +7,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use server::jwt::JwtKeys;
+use server::linear_service::LinearService;
 use server::role::UserRole;
 use server::storage::{S3Config, StorageClient};
 use server::AppState;
@@ -21,6 +22,8 @@ fn app() -> axum::Router {
         pool,
         JwtKeys::new(SECRET, 900),
         StorageClient::new(S3Config::from_env()),
+        LinearService::from_env(),
+        2_592_000,
     ))
 }
 
@@ -48,7 +51,10 @@ async fn presence_requires_auth() {
 async fn admin_team_forbidden_for_employee() {
     let req = Request::builder()
         .uri("/admin/team")
-        .header("Authorization", format!("Bearer {}", token(UserRole::Employee)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", token(UserRole::Employee)),
+        )
         .body(Body::empty())
         .unwrap();
     assert_eq!(

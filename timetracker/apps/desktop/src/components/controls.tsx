@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoker, STATUS_LABEL } from "@/lib/tauri";
 
-/** Tracking controls: start/stop, break, meeting mode + live status badge. */
+/** Tracking controls: start/stop, break, meeting mode + live status badge.
+ *  Break/meeting are statuses within a session (recorded for the timeline);
+ *  break time is not counted as worked. */
 export function Controls({ userId }: { userId: string }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -58,20 +60,7 @@ export function Controls({ userId }: { userId: string }) {
         </span>
       </div>
 
-      {onBreak ? (
-        <button
-          disabled={busy}
-          onClick={() =>
-            run(async (i) => {
-              await i("set_break", { on: false });
-              await i("start_tracking", { userId });
-            })
-          }
-          className="rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          Resume work
-        </button>
-      ) : !tracking ? (
+      {!tracking ? (
         <button
           disabled={busy}
           onClick={() => run((i) => i("start_tracking", { userId }))}
@@ -83,12 +72,7 @@ export function Controls({ userId }: { userId: string }) {
         <div className="flex flex-col gap-3">
           <button
             disabled={busy}
-            onClick={() =>
-              run(async (i) => {
-                await i("stop_tracking");
-                await i("set_meeting", { on: false });
-              })
-            }
+            onClick={() => run((i) => i("stop_tracking"))}
             className="rounded-md bg-red-600 px-4 py-2 font-medium text-white hover:bg-red-700 disabled:opacity-50"
           >
             Stop tracking
@@ -96,16 +80,14 @@ export function Controls({ userId }: { userId: string }) {
           <div className="flex gap-3">
             <button
               disabled={busy}
-              onClick={() =>
-                run(async (i) => {
-                  await i("stop_tracking");
-                  await i("set_meeting", { on: false });
-                  await i("set_break", { on: true });
-                })
-              }
-              className="flex-1 rounded-md bg-slate-200 px-4 py-2 font-medium text-slate-800 hover:bg-slate-300 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+              onClick={() => run((i) => i("set_break", { on: !onBreak }))}
+              className={`flex-1 rounded-md px-4 py-2 font-medium disabled:opacity-50 ${
+                onBreak
+                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                  : "bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+              }`}
             >
-              Break
+              {onBreak ? "Resume work" : "Break"}
             </button>
             <button
               disabled={busy}

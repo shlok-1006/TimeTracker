@@ -16,6 +16,8 @@ pub struct Config {
     pub jwt_access_secret: String,
     /// Access-token lifetime in seconds.
     pub jwt_access_ttl_seconds: i64,
+    /// Refresh-token lifetime in seconds.
+    pub jwt_refresh_ttl_seconds: i64,
 }
 
 impl Config {
@@ -47,12 +49,17 @@ impl Config {
             .parse()
             .context("JWT_ACCESS_TTL_SECONDS must be an integer")?;
 
+        let jwt_refresh_ttl_seconds: i64 = env_or("JWT_REFRESH_TTL_SECONDS", "2592000")
+            .parse()
+            .context("JWT_REFRESH_TTL_SECONDS must be an integer")?;
+
         Ok(Self {
             socket_addr: SocketAddr::new(host, port),
             database_url,
             database_max_connections,
             jwt_access_secret,
             jwt_access_ttl_seconds,
+            jwt_refresh_ttl_seconds,
         })
     }
 }

@@ -9,6 +9,7 @@ use serde_json::Value;
 use tower::ServiceExt; // for `oneshot`
 
 use server::jwt::JwtKeys;
+use server::linear_service::LinearService;
 use server::storage::{S3Config, StorageClient};
 use server::AppState;
 
@@ -24,6 +25,8 @@ async fn health_returns_ok() {
         pool,
         JwtKeys::new("test-secret", 900),
         StorageClient::new(S3Config::from_env()),
+        LinearService::from_env(),
+        2_592_000,
     ));
 
     let response = app

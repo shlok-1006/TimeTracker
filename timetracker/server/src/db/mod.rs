@@ -4,9 +4,13 @@
 //! Repositories (users, hours, screenshots, …) are added in later steps under
 //! this module.
 
+pub mod audit;
 pub mod intervals;
+pub mod linear_repository;
 pub mod presence;
+pub mod refresh_tokens;
 pub mod screenshots;
+pub mod ticket_requests;
 pub mod users;
 
 use std::time::Duration;

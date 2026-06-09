@@ -53,10 +53,7 @@ pub async fn heartbeat(
 ///
 /// `manager_id = Some(id)` scopes to that manager's team; `None` (HR/admin)
 /// returns all employees. A stale heartbeat or missing row => `not_logged_in`.
-pub async fn team(
-    pool: &PgPool,
-    manager_id: Option<Uuid>,
-) -> Result<Vec<TeamMember>, AppError> {
+pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMember>, AppError> {
     let rows = sqlx::query!(
         r#"
         SELECT u.id, u.name, u.email, u.role::text AS "role!",
@@ -66,7 +63,7 @@ pub async fn team(
                p.last_seen_at AS "last_seen_at?",
                CAST(COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (i.end_utc - i.start_utc)))
                               FROM intervals i
-                              WHERE i.user_id = u.id AND NOT i.idle
+                              WHERE i.user_id = u.id AND i.kind IN ('active','meeting')
                                 AND i.start_utc >= date_trunc('day', now())), 0) AS BIGINT) AS "today_seconds!"
         FROM users u
         LEFT JOIN presence p ON p.user_id = u.id

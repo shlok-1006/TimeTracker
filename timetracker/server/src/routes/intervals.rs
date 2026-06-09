@@ -16,15 +16,14 @@ async fn create_intervals(
     Json(items): Json<Vec<IntervalDto>>,
 ) -> Result<Json<Value>, AppError> {
     let accepted = intervals::insert_batch(&state.db, user.id, &items).await?;
-    Ok(Json(json!({ "accepted": accepted, "received": items.len() })))
+    Ok(Json(
+        json!({ "accepted": accepted, "received": items.len() }),
+    ))
 }
 
 /// `GET /me/hours` — worked-time summary for the authenticated user, computed
 /// from intervals (Rule 2: derived, never a stored counter).
-async fn my_hours(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> Result<Json<Value>, AppError> {
+async fn my_hours(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, AppError> {
     let s = intervals::hours_summary(&state.db, user.id).await?;
     Ok(Json(json!({
         "total_seconds": s.total_seconds,
@@ -32,6 +31,8 @@ async fn my_hours(
         "week_seconds": s.week_seconds,
         "active_seconds": s.active_seconds,
         "idle_seconds": s.idle_seconds,
+        "meeting_seconds": s.meeting_seconds,
+        "break_seconds": s.break_seconds,
     })))
 }
 

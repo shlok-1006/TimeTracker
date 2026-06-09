@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { fetchTeam } from "@/lib/api";
@@ -11,12 +12,12 @@ import { cn } from "@/lib/utils";
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, token, ready } = useAdminSession();
+  const { user, ready } = useAdminSession();
   const clear = useAuthStore((s) => s.clear);
 
   const team = useQuery({
     queryKey: ["team"],
-    queryFn: () => fetchTeam(token as string),
+    queryFn: () => fetchTeam(),
     refetchInterval: 30_000, // spec: refresh every 30s
     enabled: ready,
   });
@@ -44,12 +45,22 @@ export default function DashboardPage() {
             {user!.role === "hr" ? "HR (all employees)" : "Project manager (own team)"}
           </p>
         </div>
-        <button
-          onClick={signOut}
-          className="rounded-md bg-secondary px-4 py-2 text-sm font-medium hover:opacity-90"
-        >
-          Sign out
-        </button>
+        <div className="flex items-center gap-2">
+          {user!.role === "hr" && (
+            <Link
+              href="/manage"
+              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+            >
+              Manage users
+            </Link>
+          )}
+          <button
+            onClick={signOut}
+            className="rounded-md bg-secondary px-4 py-2 text-sm font-medium hover:opacity-90"
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <section className="rounded-lg border bg-card p-6 text-card-foreground">

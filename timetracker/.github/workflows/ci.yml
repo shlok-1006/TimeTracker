@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  server:
+    name: Server (lint + test)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: timetracker
+          POSTGRES_PASSWORD: timetracker
+          POSTGRES_DB: timetracker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U timetracker"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://timetracker:timetracker@localhost:5432/timetracker
+      JWT_ACCESS_SECRET: ci-access-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply migrations (psql)
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          for f in server/migrations/*.sql; do
+            echo "applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy (server)
+        run: cargo clippy -p server
+      - name: Test (server)
+        run: cargo test -p server
+
+  desktop-rust:
+    name: Desktop crate (build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev libxdo-dev
+      - name: Build desktop frontend (needed by tauri context)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter desktop build
+      - name: Test desktop crate
+        run: cargo test -p timetracker-desktop --lib
+
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r build

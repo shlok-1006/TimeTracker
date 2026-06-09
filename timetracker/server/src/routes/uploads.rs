@@ -20,10 +20,7 @@ use crate::upload_service;
 const VIEW_URL_EXPIRES_SECS: u64 = 900;
 
 /// `POST /uploads/presign` — get a short-lived presigned PUT URL + storage key.
-async fn presign(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> Result<Json<Value>, AppError> {
+async fn presign(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, AppError> {
     let p = upload_service::presign_screenshot(&state.storage, user.id, Utc::now());
     Ok(Json(json!({
         "url": p.url,
@@ -49,7 +46,9 @@ async fn save_screenshot(
     Json(body): Json<SaveScreenshot>,
 ) -> Result<Json<Value>, AppError> {
     if !body.storage_key.starts_with(&format!("{}/", user.id)) {
-        return Err(AppError::BadRequest("storage_key outside user namespace".into()));
+        return Err(AppError::BadRequest(
+            "storage_key outside user namespace".into(),
+        ));
     }
     let id = screenshots::insert(
         &state.db,

@@ -11,6 +11,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use server::jwt::JwtKeys;
+use server::linear_service::LinearService;
 use server::role::UserRole;
 use server::storage::{S3Config, StorageClient};
 use server::AppState;
@@ -25,6 +26,8 @@ fn app() -> axum::Router {
         pool,
         JwtKeys::new(SECRET, 900),
         StorageClient::new(S3Config::from_env()),
+        LinearService::from_env(),
+        2_592_000,
     ))
 }
 
@@ -63,7 +66,10 @@ async fn malformed_token_is_unauthorized() {
 
 #[tokio::test]
 async fn any_authenticated_user_can_read_me() {
-    assert_eq!(status(Some(UserRole::Employee), "/me").await, StatusCode::OK);
+    assert_eq!(
+        status(Some(UserRole::Employee), "/me").await,
+        StatusCode::OK
+    );
     assert_eq!(status(Some(UserRole::Hr), "/me").await, StatusCode::OK);
 }
 

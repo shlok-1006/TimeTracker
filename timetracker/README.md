@@ -426,3 +426,97 @@ For `hr` and `project_manager`. Live status board + per-employee drill-down.
 
 > Assign a team by setting `users.manager_id = <pm-id>` for an employee.
 > **Restart `cargo run -p server`** for the new routes.
+
+---
+
+## STEP 7 — MVP Hardening
+
+### Secure token management (Rule 6)
+- **Access token** — short-lived JWT (default 15 min, `JWT_ACCESS_TTL_SECONDS`).
+- **Refresh token** — opaque random string; only its **SHA-256 hash** is stored
+  (`refresh_tokens` table — no plaintext at rest). `POST /auth/refresh` rotates
+  it (the used token is revoked, a new pair issued). `POST /auth/logout` revokes.
+- **Desktop**: both tokens live in the **OS keychain** (`keyring`,
+  `windows-native`/`apple-native`/`secret-service`). `http.rs` adds the bearer
+  and, on `401`, **transparently refreshes once and retries** — so all workers
+  (sync, presence, screenshot) and the dashboard keep working for long sessions.
+- Endpoints: `POST /auth/login` → `{access_token, refresh_token, expires_in}`;
+  `POST /auth/refresh`; `POST /auth/logout`.
+
+### Recording notice (transparency)
+The desktop shows an **always-visible "Screen recording active" indicator**
+whenever screenshots are being captured (while Working), and a red banner if the
+OS hasn't granted screen-recording permission.
+
+### Permissions
+- A `check_capture` command probes whether screen capture works; the UI warns if
+  it doesn't (covers macOS/Wayland where the user must grant access).
+- **macOS**: grant *System Settings → Privacy & Security → Screen Recording →
+  TimeTracker*. (Screen recording is TCC-gated; first capture prompts.)
+- **Linux/Wayland**: capture goes through the desktop portal — install
+  `xdg-desktop-portal` (+ `xdg-desktop-portal-wlr`/`-gnome`) and `pipewire`.
+  X11 sessions work out of the box.
+
+### CI/CD (`.github/workflows/`)
+- **`ci.yml`** — on push/PR: server lint+test (against a Postgres service,
+  migrations applied via `psql`), desktop-crate build+test (Linux Tauri deps),
+  and frontend typecheck+build.
+- **`release.yml`** — on tag `v*` (or manual): `tauri-action` matrix builds
+  installers for **Windows** (`.msi`/`.exe`), **macOS** (`.dmg`, Intel + Apple
+  Silicon), and **Linux** (`.deb`/`.AppImage`), attached to a draft release.
+
+### Tests
+- Server: refresh-token uniqueness + hash stability (no plaintext); existing
+  suites unchanged.
+- Live e2e (verification): login → refresh rotates → old refresh token rejected.
+
+> The server gained `/auth/refresh` + `/auth/logout` — **restart
+> `cargo run -p server`**, then sign out/in on the desktop so both tokens are
+> stored. Sessions now survive access-token expiry via silent refresh.
+
+---
+
+## STEP 8 — Linear Integration (read-only)
+
+Links employees to Linear and serves their assigned tickets. The Linear API
+token is **server-side only** (`LINEAR_API_KEY`) — never sent to any client.
+
+### Files (`server/src/`)
+- `linear_service.rs` — GraphQL client + `link_user_to_linear`,
+  `fetch_assigned_tickets` (hourly cache + stale fallback on rate-limit),
+  `get_ticket_context`.
+- `ticket_cache.rs` — per-user in-memory cache (1h TTL) that serves stale
+  results when a live fetch is rate-limited/fails.
+- `db/linear_repository.rs` + `migrations/0009_linear_links.sql` — `linear_links`
+  table (`user_id`, `linear_user_id`, `linked_at`). The token is **not** stored.
+
+### Endpoints (all require auth; employee-scoped)
+- `POST /me/linear/link` — match the caller's email to a Linear user and store
+  the link. → `{ linked, linear_user_id }`.
+- `GET /me/tickets` → `{ tickets: [{ id, title, state, project, labels,
+  description_excerpt }] }`.
+- `GET /me/tickets/:id/context` — full ticket context.
+
+### Setup
+1. Linear → **Settings → Security & access → Personal API keys** → create one.
+2. Put it in `.env`: `LINEAR_API_KEY=lin_api_...` and restart the server.
+3. Ensure the employee's email matches their Linear account email.
+4. `POST /me/linear/link` once, then `GET /me/tickets`.
+
+If `LINEAR_API_KEY` is empty the endpoints return a clear "not configured" error.
+
+### Requirements met
+- **Token never exposed** to clients (server-held; only ticket data is returned).
+- **Cached** hourly; **rate limits** handled (429 → serve stale cache).
+- **Read-only** (only GraphQL queries, no mutations).
+- Tests: GraphQL parsing, excerpt truncation, cache TTL/stale, route auth (401).
+
+### Verify
+```bash
+TOKEN=$(curl -s localhost:8090/auth/login -H 'content-type: application/json' \
+  -d '{"email":"employee@timetracker.local","password":"ChangeMe!Emp1"}' | jq -r .access_token)
+curl -s -X POST localhost:8090/me/linear/link -H "Authorization: Bearer $TOKEN"   # links by email
+curl -s localhost:8090/me/tickets -H "Authorization: Bearer $TOKEN" | jq          # assigned tickets
+```
+
+> **Restart `cargo run -p server`** after setting `LINEAR_API_KEY`.

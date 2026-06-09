@@ -5,6 +5,8 @@ import { useSession } from "@/lib/session";
 import { useEmployeeSession } from "@/components/use-employee-session";
 import { Controls } from "@/components/controls";
 import { Dashboard } from "@/components/dashboard";
+import { Tickets } from "@/components/tickets";
+import { RecordingIndicator } from "@/components/recording-indicator";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -24,6 +26,7 @@ export default function DashboardPage() {
 
   return (
     <main className="mx-auto flex max-w-4xl flex-col gap-6 p-8">
+      <RecordingIndicator />
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Welcome, {session.name}</h1>
@@ -37,6 +40,7 @@ export default function DashboardPage() {
         </button>
       </header>
       <Controls userId={session.id} />
+      <Tickets />
       <Dashboard userId={session.id} />
     </main>
   );

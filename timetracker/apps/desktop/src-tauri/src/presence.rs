@@ -11,13 +11,10 @@ use std::time::Duration;
 use tauri::State;
 
 use crate::auth;
+use crate::http;
 use crate::timer::DesktopState;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(45);
-
-fn api_base() -> String {
-    std::env::var("TIMETRACKER_API_BASE_URL").unwrap_or_else(|_| "http://localhost:8090".to_string())
-}
 
 /// Pure status derivation.
 ///
@@ -34,10 +31,10 @@ pub fn derive_status(
     is_tracking: bool,
     is_idle: bool,
 ) -> &'static str {
-    if on_break {
-        "break"
-    } else if !is_tracking {
+    if !is_tracking {
         "not_working"
+    } else if on_break {
+        "break"
     } else if in_meeting {
         "meeting"
     } else if is_idle {
@@ -97,27 +94,20 @@ pub async fn heartbeat_now(state: State<'_, DesktopState>) -> Result<(), String>
 }
 
 async fn send_heartbeat(state: &DesktopState) -> anyhow::Result<()> {
-    // Only beat while logged in (token present); otherwise the server derives
-    // `not_logged_in` after the grace period.
-    let token = match auth::stored_token() {
-        Some(t) => t,
-        None => return Ok(()),
-    };
+    // Only beat while logged in; otherwise the server derives `not_logged_in`
+    // after the grace period.
+    if auth::stored_access().is_none() {
+        return Ok(());
+    }
 
     let on_break = state.on_break.load(Ordering::Relaxed);
     let in_meeting = state.in_meeting.load(Ordering::Relaxed);
     let tracking = state.tracker.lock().await.is_some();
     let status = derive_status(on_break, in_meeting, tracking, state.idle.is_idle());
-    let resp = reqwest::Client::new()
-        .post(format!("{}/presence", api_base()))
-        .bearer_auth(token)
-        .json(&serde_json::json!({ "status": status }))
-        .send()
-        .await?;
 
-    if !resp.status().is_success() {
-        anyhow::bail!("server returned {}", resp.status());
-    }
+    http::post_json("/presence", serde_json::json!({ "status": status }))
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
     Ok(())
 }
 
@@ -130,9 +120,9 @@ mod tests {
         // (on_break, in_meeting, is_tracking, is_idle)
         assert_eq!(derive_status(false, false, true, false), "working"); // tracking + active
         assert_eq!(derive_status(false, false, true, true), "idle"); // tracking + no input
-        assert_eq!(derive_status(false, false, false, false), "not_working"); // logged in, timer off
-        assert_eq!(derive_status(false, true, false, true), "not_working"); // not tracking wins over flags
-        assert_eq!(derive_status(false, true, true, true), "meeting"); // meeting suppresses idle
-        assert_eq!(derive_status(true, false, false, false), "break"); // break overrides not_working
+        assert_eq!(derive_status(false, false, false, false), "not_working"); // timer off
+        assert_eq!(derive_status(true, false, false, false), "not_working"); // not tracking wins
+        assert_eq!(derive_status(false, true, true, true), "meeting"); // meeting > idle
+        assert_eq!(derive_status(true, true, true, false), "break"); // break > meeting
     }
 }

@@ -1,4 +1,4 @@
-//! Screenshot capture + upload (STEP 4).
+//! Screenshot capture + upload (STEP 4) with token-refreshing API calls.
 //!
 //! Captures the primary monitor **only while Working** (never on break, idle,
 //! meeting, or when not tracking). Flow per Rule 5:
@@ -6,27 +6,22 @@
 //!   2. PUT the JPEG bytes directly to storage (MinIO/R2)
 //!   3. POST /screenshots      -> store metadata only
 //!
-//! Captures never block the UI: capture runs on a blocking thread and failures
-//! are logged and retried next tick.
+//! Capture runs on a blocking thread; failures are logged and retried.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use chrono::Utc;
 use image::{codecs::jpeg::JpegEncoder, DynamicImage, ExtendedColorType, RgbaImage};
-use serde::Deserialize;
-use std::sync::atomic::Ordering;
 use xcap::Monitor;
 
 use crate::auth;
+use crate::http;
 use crate::presence::derive_status;
 use crate::timer::DesktopState;
 
 const DEFAULT_INTERVAL_SECS: u64 = 300; // 5 minutes
 const JPEG_QUALITY: u8 = 70;
-
-fn api_base() -> String {
-    std::env::var("TIMETRACKER_API_BASE_URL").unwrap_or_else(|_| "http://localhost:8090".to_string())
-}
 
 fn interval() -> Duration {
     let secs = std::env::var("TIMETRACKER_SCREENSHOT_INTERVAL_SECS")
@@ -68,10 +63,12 @@ pub fn capture_primary_jpeg(quality: u8) -> anyhow::Result<Vec<u8>> {
     encode_jpeg(&frame, quality)
 }
 
-#[derive(Deserialize)]
-struct PresignResponse {
-    url: String,
-    storage_key: String,
+/// Probe whether screen capture works (screen-recording permission granted).
+/// Used by the UI to warn on macOS/Wayland when permission is missing.
+#[tauri::command]
+pub async fn check_capture() -> Result<bool, String> {
+    let res = tokio::task::spawn_blocking(|| capture_primary_jpeg(JPEG_QUALITY)).await;
+    Ok(matches!(res, Ok(Ok(_))))
 }
 
 /// Background worker: every interval, capture + upload if Working.
@@ -90,7 +87,6 @@ pub async fn run(state: DesktopState) {
         if !should_capture(status) {
             continue;
         }
-
         if let Err(e) = capture_and_upload(&client).await {
             tracing::warn!("screenshot capture/upload failed (will retry): {e}");
         }
@@ -98,27 +94,31 @@ pub async fn run(state: DesktopState) {
 }
 
 async fn capture_and_upload(client: &reqwest::Client) -> anyhow::Result<()> {
-    let token = match auth::stored_token() {
-        Some(t) => t,
-        None => return Ok(()),
-    };
+    if auth::stored_access().is_none() {
+        return Ok(());
+    }
 
-    // 1. Presigned URL (server picks the namespaced key).
-    let presign: PresignResponse = client
-        .post(format!("{}/uploads/presign", api_base()))
-        .bearer_auth(&token)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    // 1. Presigned URL (server picks the namespaced key). Token auto-refreshes.
+    let presign = http::post_json("/uploads/presign", serde_json::json!({}))
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let url = presign
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing presign url"))?
+        .to_string();
+    let storage_key = presign
+        .get("storage_key")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing storage_key"))?
+        .to_string();
 
     // 2. Capture on a blocking thread (xcap is synchronous).
     let bytes = tokio::task::spawn_blocking(|| capture_primary_jpeg(JPEG_QUALITY)).await??;
 
-    // 3. Upload bytes directly to storage.
+    // 3. Upload bytes directly to storage (presigned — no auth header).
     let put = client
-        .put(&presign.url)
+        .put(&url)
         .header("content-type", "image/jpeg")
         .body(bytes)
         .send()
@@ -128,18 +128,14 @@ async fn capture_and_upload(client: &reqwest::Client) -> anyhow::Result<()> {
     }
 
     // 4. Notify the API (metadata only).
-    client
-        .post(format!("{}/screenshots", api_base()))
-        .bearer_auth(&token)
-        .json(&serde_json::json!({
-            "storage_key": presign.storage_key,
-            "taken_at": Utc::now().to_rfc3339(),
-        }))
-        .send()
-        .await?
-        .error_for_status()?;
+    http::post_json(
+        "/screenshots",
+        serde_json::json!({ "storage_key": storage_key, "taken_at": Utc::now().to_rfc3339() }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!(e))?;
 
-    tracing::info!("screenshot uploaded: {}", presign.storage_key);
+    tracing::info!("screenshot uploaded: {}", storage_key);
     Ok(())
 }
 
@@ -153,14 +149,13 @@ mod tests {
         assert!(!should_capture("idle"));
         assert!(!should_capture("break"));
         assert!(!should_capture("meeting"));
-        assert!(!should_capture("not_logged_in"));
+        assert!(!should_capture("not_working"));
     }
 
     #[test]
     fn encodes_jpeg_bytes() {
         let img = RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255]));
         let bytes = encode_jpeg(&img, 70).unwrap();
-        // JPEG SOI marker.
         assert!(bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8);
     }
 }

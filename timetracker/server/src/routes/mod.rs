@@ -9,7 +9,9 @@ pub mod admin;
 pub mod auth;
 pub mod health;
 pub mod intervals;
+pub mod linear;
 pub mod presence;
+pub mod ticket_requests;
 pub mod uploads;
 
 use axum::{routing::get, Json, Router};
@@ -53,7 +55,10 @@ pub fn build(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let public = Router::new().merge(health::router()).merge(auth::router());
+    let public = Router::new()
+        .merge(health::router())
+        .merge(auth::router())
+        .merge(ticket_requests::router());
 
     let protected = Router::new()
         .route("/me", get(me))
@@ -63,6 +68,7 @@ pub fn build(state: AppState) -> Router {
         .merge(intervals::router())
         .merge(presence::router())
         .merge(uploads::router())
+        .merge(linear::router())
         .merge(admin::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

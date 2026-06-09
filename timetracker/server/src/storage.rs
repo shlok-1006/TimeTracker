@@ -173,7 +173,10 @@ fn presigned_url(
     );
 
     // Derive the signing key.
-    let k_date = hmac(format!("AWS4{secret_key}").as_bytes(), date_stamp.as_bytes());
+    let k_date = hmac(
+        format!("AWS4{secret_key}").as_bytes(),
+        date_stamp.as_bytes(),
+    );
     let k_region = hmac(&k_date, region.as_bytes());
     let k_service = hmac(&k_region, b"s3");
     let k_signing = hmac(&k_service, b"aws4_request");

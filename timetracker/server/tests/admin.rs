@@ -8,6 +8,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use server::jwt::JwtKeys;
+use server::linear_service::LinearService;
 use server::role::UserRole;
 use server::storage::{S3Config, StorageClient};
 use server::AppState;
@@ -22,11 +23,15 @@ fn app() -> axum::Router {
         pool,
         JwtKeys::new(SECRET, 900),
         StorageClient::new(S3Config::from_env()),
+        LinearService::from_env(),
+        2_592_000,
     ))
 }
 
 fn token(role: UserRole) -> String {
-    JwtKeys::new(SECRET, 900).issue(Uuid::new_v4(), role, None).unwrap()
+    JwtKeys::new(SECRET, 900)
+        .issue(Uuid::new_v4(), role, None)
+        .unwrap()
 }
 
 async fn status(path: &str, role: Option<UserRole>) -> StatusCode {
@@ -34,25 +39,43 @@ async fn status(path: &str, role: Option<UserRole>) -> StatusCode {
     if let Some(r) = role {
         b = b.header("Authorization", format!("Bearer {}", token(r)));
     }
-    app().oneshot(b.body(Body::empty()).unwrap()).await.unwrap().status()
+    app()
+        .oneshot(b.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status()
 }
 
 #[tokio::test]
 async fn drilldown_requires_auth() {
     let id = Uuid::new_v4();
-    assert_eq!(status(&format!("/admin/users/{id}/hours"), None).await, StatusCode::UNAUTHORIZED);
-    assert_eq!(status(&format!("/admin/users/{id}/screenshots"), None).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        status(&format!("/admin/users/{id}/hours"), None).await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        status(&format!("/admin/users/{id}/screenshots"), None).await,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
 async fn drilldown_forbidden_for_employee() {
     let id = Uuid::new_v4();
     assert_eq!(
-        status(&format!("/admin/users/{id}/hours"), Some(UserRole::Employee)).await,
+        status(
+            &format!("/admin/users/{id}/hours"),
+            Some(UserRole::Employee)
+        )
+        .await,
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        status(&format!("/admin/users/{id}/screenshots"), Some(UserRole::Employee)).await,
+        status(
+            &format!("/admin/users/{id}/screenshots"),
+            Some(UserRole::Employee)
+        )
+        .await,
         StatusCode::FORBIDDEN
     );
 }

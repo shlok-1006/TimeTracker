@@ -41,6 +41,11 @@ impl JwtKeys {
         }
     }
 
+    /// Access-token lifetime in seconds (returned to clients as `expires_in`).
+    pub fn access_ttl_seconds(&self) -> i64 {
+        self.access_ttl_seconds
+    }
+
     /// Issue a signed access token for the given user.
     pub fn issue(
         &self,
@@ -89,7 +94,9 @@ mod tests {
     fn rejects_token_signed_with_other_secret() {
         let issuer = JwtKeys::new("secret-a", 900);
         let verifier = JwtKeys::new("secret-b", 900);
-        let token = issuer.issue(Uuid::new_v4(), UserRole::Employee, None).unwrap();
+        let token = issuer
+            .issue(Uuid::new_v4(), UserRole::Employee, None)
+            .unwrap();
         assert!(verifier.verify(&token).is_err());
     }
 
@@ -97,7 +104,9 @@ mod tests {
     fn rejects_expired_token() {
         // Expired well beyond jsonwebtoken's default 60s clock-skew leeway.
         let keys = JwtKeys::new("test-secret", -3600);
-        let token = keys.issue(Uuid::new_v4(), UserRole::Employee, None).unwrap();
+        let token = keys
+            .issue(Uuid::new_v4(), UserRole::Employee, None)
+            .unwrap();
         assert!(keys.verify(&token).is_err());
     }
 }

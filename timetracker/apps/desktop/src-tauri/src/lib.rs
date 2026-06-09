@@ -9,6 +9,7 @@
 mod auth;
 mod client;
 mod db;
+mod http;
 mod idle;
 mod interval_repository;
 mod presence;
@@ -41,10 +42,7 @@ pub fn run() {
             let handle = app.handle().clone();
             // Open the local DB, migrate, manage state, and start the sync worker.
             tauri::async_runtime::block_on(async move {
-                let data_dir = handle
-                    .path()
-                    .app_data_dir()
-                    .expect("resolve app data dir");
+                let data_dir = handle.path().app_data_dir().expect("resolve app data dir");
                 let db_path = data_dir.join("timetracker.db");
 
                 let pool = db::connect(&db_path).await.expect("open local database");
@@ -56,6 +54,7 @@ pub fn run() {
 
                 let state = timer::DesktopState::new(pool, idle);
                 handle.manage(state.clone());
+                tauri::async_runtime::spawn(timer::run_recorder(state.clone()));
                 tauri::async_runtime::spawn(sync_worker::run(state.clone()));
                 tauri::async_runtime::spawn(presence::run(state.clone()));
                 tauri::async_runtime::spawn(screenshot::run(state));
@@ -80,7 +79,11 @@ pub fn run() {
             reports::get_hours_summary,
             reports::get_daily_timeline,
             client::me_hours,
-            client::me_screenshots
+            client::me_screenshots,
+            client::me_tickets,
+            client::my_ticket_requests,
+            client::request_ticket,
+            screenshot::check_capture
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTracker desktop application");

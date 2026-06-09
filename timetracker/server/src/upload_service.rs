@@ -21,7 +21,12 @@ pub struct PresignedUpload {
 
 /// Storage key for a user's screenshot: `<user_id>/<yyyymmdd>/<uuid>.jpg`.
 pub fn screenshot_key(user_id: Uuid, now: DateTime<Utc>) -> String {
-    format!("{}/{}/{}.jpg", user_id, now.format("%Y%m%d"), Uuid::new_v4())
+    format!(
+        "{}/{}/{}.jpg",
+        user_id,
+        now.format("%Y%m%d"),
+        Uuid::new_v4()
+    )
 }
 
 /// Generate a presigned PUT for a new screenshot.

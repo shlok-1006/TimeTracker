@@ -44,16 +44,19 @@ pub fn summarize(intervals: &[Interval], now: DateTime<Local>) -> HoursSummary {
     for iv in intervals {
         let d = iv.start_utc.with_timezone(&Local).date_naive();
         let n = secs(iv);
-        if iv.idle {
-            s.idle_seconds += n;
-        } else {
-            s.active_seconds += n;
-            s.total_seconds += n;
-            if d == today {
-                s.today_seconds += n;
-            }
-            if d >= week_start {
-                s.week_seconds += n;
+        match iv.kind.as_str() {
+            "idle" => s.idle_seconds += n,
+            "break" => {} // recorded for the timeline, not counted as worked
+            // active + meeting count as worked.
+            _ => {
+                s.active_seconds += n;
+                s.total_seconds += n;
+                if d == today {
+                    s.today_seconds += n;
+                }
+                if d >= week_start {
+                    s.week_seconds += n;
+                }
             }
         }
     }
@@ -79,10 +82,10 @@ pub fn daily_timeline(intervals: &[Interval], now: DateTime<Local>, days: i64) -
         }
         let idx = (d - start).num_days() as usize;
         let n = secs(iv);
-        if iv.idle {
-            buckets[idx].idle_seconds += n;
-        } else {
-            buckets[idx].worked_seconds += n;
+        match iv.kind.as_str() {
+            "idle" => buckets[idx].idle_seconds += n,
+            "break" => {}
+            _ => buckets[idx].worked_seconds += n, // active + meeting
         }
     }
     buckets
@@ -117,22 +120,20 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    fn iv(start: DateTime<Local>, dur_secs: i64, idle: bool) -> Interval {
+    fn iv(start: DateTime<Local>, dur_secs: i64, kind: &str) -> Interval {
         let s = start.with_timezone(&chrono::Utc);
         Interval {
             id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             start_utc: s,
             end_utc: s + Duration::seconds(dur_secs),
-            idle,
+            kind: kind.to_string(),
         }
     }
 
     fn noon_today() -> DateTime<Local> {
         Local
-            .from_local_datetime(
-                &Local::now().date_naive().and_hms_opt(12, 0, 0).unwrap(),
-            )
+            .from_local_datetime(&Local::now().date_naive().and_hms_opt(12, 0, 0).unwrap())
             .unwrap()
     }
 
@@ -140,14 +141,15 @@ mod tests {
     fn summarize_today_week_total_idle() {
         let now = noon_today();
         let items = vec![
-            iv(now - Duration::hours(2), 3600, false), // today, worked 1h
-            iv(now - Duration::minutes(30), 900, true), // today, idle 15m
-            iv(now - Duration::days(20), 3600, false), // old worked (total only)
+            iv(now - Duration::hours(2), 3600, "active"), // today, worked 1h
+            iv(now - Duration::minutes(30), 900, "idle"), // today, idle 15m
+            iv(now - Duration::minutes(20), 600, "break"), // today, break 10m (excluded)
+            iv(now - Duration::days(20), 3600, "active"), // old worked (total only)
         ];
         let s = summarize(&items, now);
         assert_eq!(s.today_seconds, 3600);
         assert_eq!(s.week_seconds, 3600);
-        assert_eq!(s.total_seconds, 7200); // 2 worked intervals
+        assert_eq!(s.total_seconds, 7200); // 2 worked (active) intervals
         assert_eq!(s.active_seconds, 7200);
         assert_eq!(s.idle_seconds, 900);
     }
@@ -155,7 +157,7 @@ mod tests {
     #[test]
     fn daily_timeline_has_seven_buckets_with_today_last() {
         let now = noon_today();
-        let items = vec![iv(now - Duration::hours(1), 1800, false)];
+        let items = vec![iv(now - Duration::hours(1), 1800, "active")];
         let t = daily_timeline(&items, now, 7);
         assert_eq!(t.len(), 7);
         // Today is the last bucket and holds the worked time.

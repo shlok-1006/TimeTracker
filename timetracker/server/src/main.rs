@@ -29,7 +29,15 @@ async fn main() -> anyhow::Result<()> {
 
     let jwt = JwtKeys::new(&config.jwt_access_secret, config.jwt_access_ttl_seconds);
     let storage = StorageClient::new(S3Config::from_env());
-    let state = AppState::new(pool, jwt, storage);
+    let linear = server::linear_service::LinearService::from_env();
+    tracing::info!(linear_configured = linear.is_configured(), "linear integration");
+    let state = AppState::new(
+        pool,
+        jwt,
+        storage,
+        linear,
+        config.jwt_refresh_ttl_seconds,
+    );
     let app = server::build_router(state);
 
     let listener = tokio::net::TcpListener::bind(config.socket_addr)

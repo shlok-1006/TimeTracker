@@ -33,7 +33,7 @@ export default function LoginPage() {
         setError("This dashboard is for HR and project managers only.");
         return;
       }
-      setSession(res.access_token, {
+      setSession(res.access_token, res.refresh_token, {
         id: res.user.id,
         name: res.user.name,
         email: res.user.email,

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE analysis_jobs SET status = 'sampled' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "959c1df8033d44c72f36e7e75d288d0b88d482690a89b470d46401a1e2de7380"
+}

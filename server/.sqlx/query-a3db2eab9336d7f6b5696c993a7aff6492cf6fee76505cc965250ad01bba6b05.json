@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, ticket_id, ticket_title, owner_email, status, created_at, decided_at\n        FROM ticket_requests WHERE user_id = $1 ORDER BY created_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "ticket_title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "owner_email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "a3db2eab9336d7f6b5696c993a7aff6492cf6fee76505cc965250ad01bba6b05"
+}

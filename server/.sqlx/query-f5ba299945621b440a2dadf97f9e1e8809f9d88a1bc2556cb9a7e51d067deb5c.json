@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO presence (user_id, status, last_seen_at, current_interval_id)\n        VALUES ($1, $2::text::presence_status, now(), $3)\n        ON CONFLICT (user_id) DO UPDATE SET\n            status = EXCLUDED.status,\n            last_seen_at = now(),\n            current_interval_id = EXCLUDED.current_interval_id\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f5ba299945621b440a2dadf97f9e1e8809f9d88a1bc2556cb9a7e51d067deb5c"
+}

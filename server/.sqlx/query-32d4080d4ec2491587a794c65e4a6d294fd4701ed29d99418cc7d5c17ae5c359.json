@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting')),0) AS BIGINT) AS \"total!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting') AND start_utc >= date_trunc('day', now())),0) AS BIGINT) AS \"today!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting') AND start_utc >= date_trunc('week', now())),0) AS BIGINT) AS \"week!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='active'),0) AS BIGINT) AS \"active!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='idle'),0) AS BIGINT) AS \"idle!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='meeting'),0) AS BIGINT) AS \"meeting!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='break'),0) AS BIGINT) AS \"brk!\"\n        FROM intervals WHERE user_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "today!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "week!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "active!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "idle!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "meeting!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "brk!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "32d4080d4ec2491587a794c65e4a6d294fd4701ed29d99418cc7d5c17ae5c359"
+}

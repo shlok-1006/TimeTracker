@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO linear_links (user_id, linear_user_id)\n        VALUES ($1, $2)\n        ON CONFLICT (user_id) DO UPDATE SET\n            linear_user_id = EXCLUDED.linear_user_id,\n            linked_at = now()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4f996aab87ceabdc159689495cdce7812ff96a9757400e48667ce78249b7a83d"
+}

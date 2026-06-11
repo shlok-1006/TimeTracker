@@ -13,7 +13,7 @@ const ACCOUNT_REFRESH: &str = "refresh_token";
 
 pub fn api_base() -> String {
     std::env::var("TIMETRACKER_API_BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:8090".to_string())
+        .unwrap_or_else(|_| "http://localhost:9000".to_string())
 }
 
 fn entry(account: &str) -> Result<Entry, String> {

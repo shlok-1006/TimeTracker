@@ -2,7 +2,7 @@ import { z } from "zod";
 import { roleSchema, type Role } from "@timetracker/shared";
 import { useAuthStore } from "@/lib/auth-store";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8090";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:9000";
 
 const loginResponseSchema = z.object({
   access_token: z.string(),

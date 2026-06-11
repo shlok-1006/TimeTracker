@@ -1,0 +1,29 @@
+# Keep the build context small: the server image needs only the Rust workspace
+# root + the `server` crate (+ its committed server/.sqlx offline cache).
+
+# Rust build output
+target/
+target-test/
+# Leftover stale build cache from the old nested layout
+timetracker/
+
+# Node / frontend — not part of the server image
+**/node_modules/
+**/.next/
+**/dist/
+**/out/
+**/*.tsbuildinfo
+apps/
+packages/
+
+# VCS & CI
+.git/
+.github/
+
+# Local docs / compose
+docker-compose.yml
+
+# Secrets — NEVER bake these into the image
+.env
+**/.env
+**/.env.local

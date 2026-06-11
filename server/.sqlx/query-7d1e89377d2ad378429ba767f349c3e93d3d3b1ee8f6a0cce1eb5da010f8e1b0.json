@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO users (name, email, password_hash, role, manager_id)\n        VALUES ($1, $2, $3, $4::text::user_role, $5)\n        RETURNING id, name, email, role::text AS \"role!\", manager_id, team_id, created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "role!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "manager_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "team_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "7d1e89377d2ad378429ba767f349c3e93d3d3b1ee8f6a0cce1eb5da010f8e1b0"
+}

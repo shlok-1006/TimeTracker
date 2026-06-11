@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT start_utc, end_utc, kind\n        FROM intervals\n        WHERE user_id = $1 AND end_utc > $2 AND start_utc < $3\n        ORDER BY start_utc\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "start_utc",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "end_utc",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "dbdc5315034c18bb7d31cab14f52ac278725b155935c19f458509e5e67e5b536"
+}

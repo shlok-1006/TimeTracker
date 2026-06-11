@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT u.id, u.name, u.email, u.role::text AS \"role!\",\n               CASE WHEN p.last_seen_at IS NULL THEN 'not_logged_in'\n                    WHEN EXTRACT(EPOCH FROM (now() - p.last_seen_at))::double precision > $2 THEN 'not_logged_in'\n                    ELSE p.status::text END AS \"status!\",\n               p.last_seen_at AS \"last_seen_at?\",\n               CAST(COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (i.end_utc - i.start_utc)))\n                              FROM intervals i\n                              WHERE i.user_id = u.id AND i.kind IN ('active','meeting')\n                                AND i.start_utc >= date_trunc('day', now())), 0) AS BIGINT) AS \"today_seconds!\"\n        FROM users u\n        LEFT JOIN presence p ON p.user_id = u.id\n        WHERE u.role = 'employee' AND ($1::uuid IS NULL OR u.manager_id = $1)\n        ORDER BY u.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "role!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "status!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_seen_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "today_seconds!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "6846cb0e7f21faea9dacbbad4b366be58735589781f1ecdc2b0b58dd97422c09"
+}

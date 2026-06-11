@@ -1,0 +1,112 @@
+# Local development stack for TimeTracker.
+#   postgres -> source of truth for synced activity (Rule 4)        :5432
+#   minio    -> S3-compatible object storage for screenshots (Rule 5) :9100 (S3) / :9001 (console)
+#   server   -> Axum API server, built from ./Dockerfile             :9000
+#
+# The desktop app (:3000) and admin dashboard (:3001) run on the host via
+# `pnpm dev` — the desktop is a native Tauri app and is not containerized.
+#
+# Usage:
+#   docker compose up -d --build   # build + start db, storage, and the API server
+#   docker compose down            # keep volumes
+#   docker compose down -v         # wipe volumes
+#
+# MinIO console: http://localhost:9001  (user: minioadmin / pass: minioadmin)
+
+name: timetracker
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: timetracker-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: timetracker
+      POSTGRES_PASSWORD: timetracker
+      POSTGRES_DB: timetracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timetracker -d timetracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2024-09-22T00-33-43Z
+    container_name: timetracker-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9100:9000"   # S3 API on host :9100 (host :9000 is now the API server)
+      - "9001:9001"   # Web console
+    volumes:
+      - minio_data:/data
+
+  # One-shot job: create the screenshots bucket so the app can upload immediately.
+  # Retries until MinIO accepts connections (no dependency on a server healthcheck,
+  # which the minio image's missing tooling makes unreliable).
+  minio-init:
+    image: minio/mc:RELEASE.2024-09-16T17-43-14Z
+    container_name: timetracker-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do
+        echo 'waiting for minio...'; sleep 2;
+      done &&
+      mc mb --ignore-existing local/screenshots &&
+      mc anonymous set none local/screenshots &&
+      echo 'MinIO bucket ready: screenshots';
+      "
+
+  # API server — built from ./Dockerfile, exposed on :9000. Talks to the
+  # postgres + minio services over the compose network. Secrets are read from
+  # the project .env via ${VAR} interpolation (with safe dev defaults).
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: timetracker-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "9000"
+      # Internal compose-network hostnames (NOT localhost).
+      DATABASE_URL: postgres://timetracker:timetracker@postgres:5432/timetracker
+      DATABASE_MAX_CONNECTIONS: "10"
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev-access-secret-change-me}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-refresh-secret-change-me}
+      JWT_ACCESS_TTL_SECONDS: "900"
+      JWT_REFRESH_TTL_SECONDS: "2592000"
+      # The presigned-URL host must be reachable by the desktop/browser on the
+      # HOST, so point at MinIO's published port (localhost:9100) rather than the
+      # internal `minio:9000`. (In production this is the public R2 endpoint.)
+      S3_ENDPOINT: http://localhost:9100
+      S3_REGION: us-east-1
+      S3_BUCKET: screenshots
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      S3_FORCE_PATH_STYLE: "true"
+      PUBLIC_BASE_URL: http://localhost:9000
+      LINEAR_API_KEY: ${LINEAR_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      RUST_LOG: info,server=debug,sqlx=warn
+    ports:
+      - "9000:9000"
+
+volumes:
+  postgres_data:
+  minio_data:

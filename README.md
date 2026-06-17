@@ -336,13 +336,16 @@ PUT URLs, the desktop uploads directly to storage, then posts metadata only.
 `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` (defaults target local MinIO).
 
 ### Running storage without Docker
-Use the standalone MinIO binary:
+Use the standalone MinIO binary. **S3 must be on `:9100`** — `:9000` is the API
+server; if MinIO binds `:9000`, login returns `400 Bad Request`.
 ```powershell
-# download minio.exe, then:
+# download minio.exe to C:\minio\, then:
+.\scripts\start-minio.ps1
+# or manually:
 $env:MINIO_ROOT_USER='minioadmin'; $env:MINIO_ROOT_PASSWORD='minioadmin'
-.\minio.exe server C:\minio-data --console-address ":9001"
+.\minio.exe server C:\minio\data --address ":9100" --console-address ":9001"
 # create the bucket (mc.exe) or via the console at http://localhost:9001
-mc alias set local http://localhost:9000 minioadmin minioadmin
+mc alias set local http://localhost:9100 minioadmin minioadmin
 mc mb local/screenshots
 ```
 For production, point the `S3_*` vars at a Cloudflare R2 bucket (set

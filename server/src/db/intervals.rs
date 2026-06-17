@@ -19,6 +19,10 @@ pub struct IntervalDto {
     pub end_utc: DateTime<Utc>,
     /// active | idle | meeting | break
     pub kind: String,
+    /// Team the work was logged under (Feature 4). Optional so older desktop
+    /// builds that don't send it still sync.
+    #[serde(default)]
+    pub team_id: Option<Uuid>,
 }
 
 /// Insert a batch of intervals for `user_id` in a single transaction.
@@ -35,8 +39,8 @@ pub async fn insert_batch(
         let idle = item.kind == "idle";
         let res = sqlx::query!(
             r#"
-            INSERT INTO intervals (id, user_id, start_utc, end_utc, idle, kind)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO intervals (id, user_id, start_utc, end_utc, idle, kind, team_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (id) DO NOTHING
             "#,
             item.id,
@@ -44,7 +48,8 @@ pub async fn insert_batch(
             item.start_utc,
             item.end_utc,
             idle,
-            item.kind
+            item.kind,
+            item.team_id
         )
         .execute(&mut *tx)
         .await?;

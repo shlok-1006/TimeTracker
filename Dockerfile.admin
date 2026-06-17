@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1
+#
+# Production image for the TimeTracker admin dashboard (Next.js 15, pnpm monorepo).
+#
+# IMPORTANT: NEXT_PUBLIC_* vars are inlined into the client bundle at BUILD time,
+# not read at runtime. The API base URL therefore comes in as a build ARG
+# (defaults to "/api", i.e. same-origin behind the Nginx reverse proxy).
+#
+# This image needs the workspace source (apps/ + packages/), which the root
+# `.dockerignore` deliberately excludes to keep the *server* build context small.
+# A Dockerfile-specific ignore file — `Dockerfile.admin.dockerignore` in the
+# context root — overrides it for this build (BuildKit feature).
+
+############################
+# 1. Builder
+############################
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+
+# Manifests first so the dependency layer caches independently of source changes.
+# All workspace package.json files must be present for pnpm to resolve the graph,
+# even though we only install the admin-web subtree.
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY packages/shared/package.json packages/shared/
+COPY apps/admin-web/package.json apps/admin-web/
+COPY apps/desktop/package.json apps/desktop/
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --filter admin-web...
+
+# Source for the dashboard + the shared package it transpiles.
+COPY packages/shared packages/shared
+COPY apps/admin-web apps/admin-web
+
+# Same-origin API calls by default: the browser hits "/api/...", Nginx strips the
+# prefix and forwards to the API container. Override with --build-arg to point at
+# an absolute URL (e.g. https://api.example.com) instead.
+ARG NEXT_PUBLIC_API_BASE_URL=/api
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN pnpm --filter admin-web build
+
+############################
+# 2. Runtime
+############################
+FROM node:20-bookworm-slim AS runner
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Bring the built app + its pnpm node_modules symlink farm across intact.
+COPY --from=builder /app /app
+
+EXPOSE 3001
+# `next start` serves the production build on :3001 (see admin-web package.json).
+CMD ["pnpm", "--filter", "admin-web", "start"]

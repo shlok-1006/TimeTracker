@@ -3,10 +3,19 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
-import { fetchUserHours, fetchUserScreenshots, fetchUserTimeline } from "@/lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  analyzeUserDay,
+  fetchUserHours,
+  fetchUserReport,
+  fetchUserDayScreenshots,
+  fetchUserTeams,
+  fetchUserTimeline,
+} from "@/lib/api";
 import { useAdminSession } from "@/components/use-admin-session";
-import { ScreenshotGallery } from "@/components/screenshot-gallery";
+import { DayGallery } from "@/components/day-gallery";
+import { ReportCard } from "@/components/report-card";
+import { UserTasks } from "@/components/user-tasks";
 import { ActivityTimeline } from "@/components/activity-timeline";
 import { fmtHms } from "@/lib/format";
 
@@ -41,9 +50,27 @@ export default function UserDetailPage() {
     queryFn: () => fetchUserHours(id),
     enabled: ready && !!id,
   });
+  const report = useQuery({
+    queryKey: ["user_report", id, date],
+    queryFn: () => fetchUserReport(id, date),
+    enabled: ready && !!id,
+  });
+  const qc = useQueryClient();
+  const analyze = useMutation({
+    mutationFn: () => analyzeUserDay(id, date),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["user_report", id, date] });
+      qc.invalidateQueries({ queryKey: ["user_day_screenshots", id, date] });
+    },
+  });
+  const teams = useQuery({
+    queryKey: ["user_teams", id],
+    queryFn: () => fetchUserTeams(id),
+    enabled: ready && !!id,
+  });
   const shots = useQuery({
-    queryKey: ["user_screenshots", id],
-    queryFn: () => fetchUserScreenshots(id),
+    queryKey: ["user_day_screenshots", id, date],
+    queryFn: () => fetchUserDayScreenshots(id, date),
     enabled: ready && !!id,
   });
 
@@ -103,9 +130,61 @@ export default function UserDetailPage() {
       </section>
 
       <section className="rounded-lg border bg-card p-6 text-card-foreground">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Daily report</h2>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">{date}</span>
+            <button
+              onClick={() => analyze.mutate()}
+              disabled={analyze.isPending}
+              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              title="Sample this day's working screenshots and analyze them with the AI"
+            >
+              {analyze.isPending ? "Analyzing…" : "Analyze now"}
+            </button>
+          </div>
+        </div>
+        {analyze.isError && (
+          <p className="mb-3 text-sm text-red-600">
+            {(analyze.error as Error).message}
+          </p>
+        )}
+        {analyze.isSuccess && (
+          <p className="mb-3 text-sm text-green-600">
+            Analyzed {analyze.data.analyzed} screenshot
+            {analyze.data.analyzed === 1 ? "" : "s"}
+            {analyze.data.skipped > 0 ? ` (skipped ${analyze.data.skipped} meeting)` : ""}.
+          </p>
+        )}
+        {/* Teams the employee belongs to (self-selected). */}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">Teams:</span>
+          {teams.data && teams.data.length > 0 ? (
+            teams.data.map((t) => (
+              <Link
+                key={t.id}
+                href={`/teams/${t.id}`}
+                className="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium hover:opacity-80"
+              >
+                {t.name}
+              </Link>
+            ))
+          ) : (
+            <span className="text-xs text-muted-foreground">none</span>
+          )}
+        </div>
+        {report.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {report.error && <p className="text-red-600">{(report.error as Error).message}</p>}
+        {report.data !== undefined && <ReportCard report={report.data} />}
+      </section>
+
+      <UserTasks userId={id} />
+
+      <section className="rounded-lg border bg-card p-6 text-card-foreground">
         <h2 className="mb-3 text-lg font-semibold">Screenshots</h2>
         {shots.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-        {shots.data && <ScreenshotGallery shots={shots.data} />}
+        {shots.error && <p className="text-red-600">{(shots.error as Error).message}</p>}
+        {shots.data && <DayGallery shots={shots.data} />}
       </section>
     </main>
   );

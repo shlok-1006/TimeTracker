@@ -181,6 +181,14 @@ pub async fn list_all(pool: &PgPool) -> Result<Vec<UserSummary>, AppError> {
         .collect()
 }
 
+/// IDs of all employees (for batch jobs like the nightly attendance rollup).
+pub async fn employee_ids(pool: &PgPool) -> Result<Vec<Uuid>, AppError> {
+    let rows = sqlx::query!("SELECT id FROM users WHERE role = 'employee'::user_role")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.id).collect())
+}
+
 /// Create a new user. Returns `BadRequest` if the email already exists.
 pub async fn create(
     pool: &PgPool,

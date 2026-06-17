@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE candidates\n         SET converted_user_id = $2, status = 'hired', hired_at = now(),\n             stage_id = $3, updated_at = now()\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "555b6e55ea821cf9320a13b86ce8e1322fc6ecf412217ecac5bde17ab710c0e4"
+}

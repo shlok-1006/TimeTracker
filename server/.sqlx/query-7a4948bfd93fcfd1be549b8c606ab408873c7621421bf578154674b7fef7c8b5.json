@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lt.name\n           FROM leave_requests lr\n           JOIN leave_types lt ON lt.id = lr.leave_type_id\n           WHERE lr.user_id = $1 AND lr.status = 'approved'\n             AND lr.start_date <= $2 AND lr.end_date >= $2\n           ORDER BY lr.created_at\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7a4948bfd93fcfd1be549b8c606ab408873c7621421bf578154674b7fef7c8b5"
+}

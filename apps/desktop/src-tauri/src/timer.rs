@@ -27,6 +27,8 @@ const SEGMENT_ROLL: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone)]
 pub struct ActiveSession {
     pub user_id: Uuid,
+    /// Team the work is being logged under (Feature 4); `None` if unassigned.
+    pub team_id: Option<Uuid>,
     pub start_utc: DateTime<Utc>,
     pub start_instant: Instant,
 }
@@ -35,6 +37,7 @@ pub struct ActiveSession {
 #[derive(Debug, Clone)]
 struct RecSegment {
     user_id: Uuid,
+    team_id: Option<Uuid>,
     kind: String,
     start_utc: DateTime<Utc>,
     start_instant: Instant,
@@ -87,8 +90,15 @@ pub fn current_kind(
 pub async fn start_tracking(
     state: State<'_, DesktopState>,
     user_id: String,
+    team_id: Option<String>,
 ) -> Result<(), String> {
     let user_id = Uuid::parse_str(&user_id).map_err(|_| "invalid user id".to_string())?;
+    // Team is optional (an employee with no teams tracks untagged); when present
+    // it must be a valid UUID. Intervals of this session are stamped with it.
+    let team_id = match team_id.as_deref() {
+        None | Some("") => None,
+        Some(t) => Some(Uuid::parse_str(t).map_err(|_| "invalid team id".to_string())?),
+    };
     state.on_break.store(false, Ordering::Relaxed);
     state.in_meeting.store(false, Ordering::Relaxed);
     let mut guard = state.tracker.lock().await;
@@ -97,6 +107,7 @@ pub async fn start_tracking(
     }
     *guard = Some(ActiveSession {
         user_id,
+        team_id,
         start_utc: Utc::now(),
         start_instant: Instant::now(),
     });
@@ -146,9 +157,13 @@ pub async fn run_recorder(state: DesktopState) {
 /// One recorder step: roll the open segment on status change or after
 /// `SEGMENT_ROLL`, recording the elapsed time (monotonic) as an interval.
 async fn record_tick(state: &DesktopState) {
-    let (tracking, user_id) = {
+    let (tracking, user_id, team_id) = {
         let g = state.tracker.lock().await;
-        (g.is_some(), g.as_ref().map(|s| s.user_id))
+        (
+            g.is_some(),
+            g.as_ref().map(|s| s.user_id),
+            g.as_ref().and_then(|s| s.team_id),
+        )
     };
     let kind = current_kind(
         state.on_break.load(Ordering::Relaxed),
@@ -177,6 +192,7 @@ async fn record_tick(state: &DesktopState) {
                 start_utc: s.start_utc,
                 end_utc: s.start_utc + elapsed,
                 kind: s.kind,
+                team_id: s.team_id,
             };
             if let Err(e) = interval_repository::insert(&state.pool, &interval).await {
                 tracing::warn!("failed to record segment: {e}");
@@ -188,6 +204,7 @@ async fn record_tick(state: &DesktopState) {
     if let (Some(k), Some(uid)) = (kind, user_id) {
         *seg = Some(RecSegment {
             user_id: uid,
+            team_id,
             kind: k.to_string(),
             start_utc: Utc::now(),
             start_instant: Instant::now(),

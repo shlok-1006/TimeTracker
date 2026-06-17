@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.user_id, u.name AS employee_name, u.email AS employee_email, r.day,\n                  r.total_analyzed, r.aligned_count, r.partially_count, r.not_aligned_count,\n                  r.inconclusive_count, r.alignment_score, r.summary_text, r.model, r.created_at\n           FROM analysis_reports r\n           JOIN users u ON u.id = r.user_id\n           WHERE r.day = $1 AND ($2::uuid IS NULL OR u.manager_id = $2)\n           ORDER BY u.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "employee_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "employee_email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "day",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "partially_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "not_aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "inconclusive_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "summary_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "model",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Date",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "08a7ee108d5cca3834bc5c477627a74e23a80a4c541ed19b2bcd185d340d944e"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE candidate_tasks\n         SET done = $2, done_at = CASE WHEN $2 THEN now() ELSE NULL END\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6c0bb96b256c32a25a43b41fa4b60111ed1bcdd42029797ef83aef0176fce82a"
+}

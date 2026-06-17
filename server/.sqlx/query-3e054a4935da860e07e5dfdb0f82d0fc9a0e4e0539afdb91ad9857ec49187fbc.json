@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT user_id, day, status, worked_seconds, idle_seconds,\n                  first_in_utc, last_out_utc, note\n           FROM attendance_days\n           WHERE user_id = $1 AND day >= $2 AND day <= $3\n           ORDER BY day",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "day",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 2,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "worked_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "idle_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "first_in_utc",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "last_out_utc",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "note",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "3e054a4935da860e07e5dfdb0f82d0fc9a0e4e0539afdb91ad9857ec49187fbc"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO leave_allocations (user_id, leave_type_id, year, allotted_days)\n         VALUES ($1, $2, $3, $4)\n         ON CONFLICT (user_id, leave_type_id, year)\n         DO UPDATE SET allotted_days = EXCLUDED.allotted_days",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "68e0fca5845b5c58a60449e4ea5df05c1375fa379ca4eff6f2defdcb19332e73"
+}

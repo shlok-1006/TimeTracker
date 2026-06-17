@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            lt.id                                   AS leave_type_id,\n            lt.name                                 AS leave_type_name,\n            lt.paid                                 AS paid,\n            COALESCE(la.allotted_days, 0)           AS \"allotted!\",\n            COALESCE((\n                SELECT SUM(lr.days) FROM leave_requests lr\n                WHERE lr.user_id = $1 AND lr.leave_type_id = lt.id\n                  AND lr.status = 'approved'\n                  AND EXTRACT(YEAR FROM lr.start_date)::int = $2\n            ), 0)                                   AS \"used!\"\n        FROM leave_types lt\n        LEFT JOIN leave_allocations la\n               ON la.leave_type_id = lt.id AND la.user_id = $1 AND la.year = $2\n        ORDER BY lt.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "leave_type_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "leave_type_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "paid",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "allotted!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "used!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "ea36f7ba100e9b29bcbf4188eaebb79ab91d3fb3e7b85a48fb60cf60635b4d44"
+}

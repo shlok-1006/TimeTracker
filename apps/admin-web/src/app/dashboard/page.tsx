@@ -1,10 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { fetchTeam } from "@/lib/api";
-import { useAuthStore } from "@/lib/auth-store";
 import { useAdminSession } from "@/components/use-admin-session";
 import { STATUS_STYLES } from "@/lib/status";
 import { fmtHms, timeAgo } from "@/lib/format";
@@ -12,8 +10,7 @@ import { cn } from "@/lib/utils";
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, ready } = useAdminSession();
-  const clear = useAuthStore((s) => s.clear);
+  const { ready } = useAdminSession();
 
   const team = useQuery({
     queryKey: ["team"],
@@ -21,11 +18,6 @@ export default function DashboardPage() {
     refetchInterval: 30_000, // spec: refresh every 30s
     enabled: ready,
   });
-
-  function signOut() {
-    clear();
-    router.replace("/login");
-  }
 
   if (!ready) {
     return (
@@ -37,30 +29,9 @@ export default function DashboardPage() {
 
   return (
     <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-12">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">TimeTracker Admin</h1>
-          <p className="text-muted-foreground">
-            Signed in as {user!.name} ·{" "}
-            {user!.role === "hr" ? "HR (all employees)" : "Project manager (own team)"}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {user!.role === "hr" && (
-            <Link
-              href="/manage"
-              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-            >
-              Manage users
-            </Link>
-          )}
-          <button
-            onClick={signOut}
-            className="rounded-md bg-secondary px-4 py-2 text-sm font-medium hover:opacity-90"
-          >
-            Sign out
-          </button>
-        </div>
+      <header>
+        <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+        <p className="text-muted-foreground">Team — live status</p>
       </header>
 
       <section className="rounded-lg border bg-card p-6 text-card-foreground">

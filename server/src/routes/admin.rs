@@ -21,12 +21,12 @@ use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
 use crate::role::UserRole;
 use crate::state::AppState;
-use crate::{sampler, vision_analyzer};
+use crate::{analysis_service, sampler};
 
 const VIEW_URL_EXPIRES_SECS: u64 = 900;
 
 /// Which employees the caller may see in the team list (`None` = all).
-fn team_scope(user: &AuthUser) -> Option<Uuid> {
+pub(crate) fn team_scope(user: &AuthUser) -> Option<Uuid> {
     match user.role {
         UserRole::Hr => None,
         _ => Some(user.id), // project manager: own team
@@ -34,7 +34,11 @@ fn team_scope(user: &AuthUser) -> Option<Uuid> {
 }
 
 /// Authorize a drill-down on `target`. HR: anyone. PM: only their team.
-async fn authorize_view(state: &AppState, viewer: &AuthUser, target: Uuid) -> Result<(), AppError> {
+pub(crate) async fn authorize_view(
+    state: &AppState,
+    viewer: &AuthUser,
+    target: Uuid,
+) -> Result<(), AppError> {
     if viewer.role == UserRole::Hr {
         return Ok(());
     }
@@ -81,24 +85,22 @@ async fn user_hours(
     })))
 }
 
-/// `GET /admin/users/:id/screenshots` — drill-down screenshots (presigned URLs).
+/// `GET /admin/users/:id/screenshots?day=` — drill-down screenshots for a day,
+/// each with verdict, meeting flag, and a presigned view URL. `day` defaults to
+/// today (UTC). PM is team-scoped; HR sees anyone.
 async fn user_screenshots(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
     Path(target): Path<Uuid>,
+    Query(q): Query<SampleQuery>,
 ) -> Result<Json<Value>, AppError> {
     authorize_view(&state, &user, target).await?;
+    let day = q.day.unwrap_or_else(|| Utc::now().date_naive());
     let now = Utc::now();
-    let rows = screenshots::list_for_user(&state.db, target, 60).await?;
+    let rows = screenshots::list_for_day(&state.db, target, day).await?;
     let items: Vec<Value> = rows
-        .into_iter()
-        .map(|r| {
-            json!({
-                "id": r.id,
-                "taken_at": r.taken_at,
-                "url": state.storage.presign_get(&r.storage_key, VIEW_URL_EXPIRES_SECS, now),
-            })
-        })
+        .iter()
+        .map(|r| crate::routes::uploads::day_item(&state.storage, r, now))
         .collect();
     Ok(Json(Value::Array(items)))
 }
@@ -187,58 +189,24 @@ async fn analyze_day(
     }
     let day = q.day.unwrap_or_else(|| Utc::now().date_naive());
 
-    // Sampled screenshots for the day (idempotent) + the job that owns them.
-    let shots = sampler::sample_screenshots(&state.db, target, day).await?;
-    let job = sampler::create_daily_job(&state.db, target, day).await?;
-    // Ticket context: the employee's assigned Linear tickets (empty if unlinked).
-    let tickets = state.linear.fetch_assigned_tickets(&state.db, target).await?;
-
-    let mut results = Vec::new();
-    for s in shots {
-        let outcome = async {
-            let image = state
-                .storage
-                .fetch_object(&s.storage_key)
-                .await
-                .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
-            let analysis =
-                vision_analyzer::analyze_screenshot(&state.gemini, &image, "image/jpeg", &tickets)
-                    .await?;
-            analysis_results::upsert(&state.db, job.id, s.screenshot_id, &analysis).await?;
-            Ok::<_, AppError>(analysis)
-        }
-        .await;
-
-        match outcome {
-            Ok(a) => results.push(json!({
-                "screenshot_id": s.screenshot_id,
-                "bucket": s.bucket,
-                "verdict": a.verdict,
-                "matched_ticket_id": a.matched_ticket_id,
-                "confidence": a.confidence,
-                "observed": a.observed,
-                "rationale": a.rationale,
-                "inconclusive_reason": a.inconclusive_reason,
-                "model": a.model,
-            })),
-            Err(e) => {
-                tracing::warn!(screenshot = %s.screenshot_id, "analysis failed: {e}");
-                results.push(json!({
-                    "screenshot_id": s.screenshot_id,
-                    "bucket": s.bucket,
-                    "error": e.to_string(),
-                }));
-            }
-        }
-    }
+    // Shared with the nightly scheduler: sample → analyze → persist → report.
+    let out = analysis_service::analyze_user_day(
+        &state.db,
+        &state.storage,
+        &state.gemini,
+        &state.linear,
+        target,
+        day,
+    )
+    .await?;
 
     audit::log(&state.db, user.id, "screenshot.analyze", "user", Some(target)).await;
     Ok(Json(json!({
         "day": day,
-        "analyzed": results.len(),
-        "tickets_in_context": tickets.len(),
+        "analyzed": out.analyzed,
+        "skipped": out.skipped,
         "model": state.gemini.model(),
-        "results": results,
+        "report": out.report,
     })))
 }
 

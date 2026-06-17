@@ -31,6 +31,22 @@ pub struct AnalysisResult {
     pub model: String,
 }
 
+/// Outcome of an analysis attempt. A non-working screenshot is skipped *before*
+/// any model call, so it can never produce a stored result (Feature 2 Phase 4).
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnalysisOutcome {
+    Analyzed(AnalysisResult),
+    /// The screenshot was not captured while working — analysis was aborted and
+    /// Gemini was never called.
+    SkippedMeetingScreenshot,
+}
+
+/// Only screenshots captured while *working* may be analysed. Meeting/break/idle
+/// shots are stored and viewable but never sent to the model.
+pub fn is_analyzable(captured_status: &str) -> bool {
+    captured_status == "working"
+}
+
 /// Raw model output (the required JSON contract).
 #[derive(Debug, Deserialize)]
 struct RawOutput {
@@ -150,12 +166,26 @@ fn finalize(raw: RawOutput, valid_ids: &[String], model: &str) -> AnalysisResult
 
 /// Analyze one screenshot against the ticket context. Retries on malformed
 /// model output, then validates and applies the confidence threshold.
+///
+/// Phase 4 protection: if `captured_status` is anything other than `working`
+/// (e.g. a meeting screenshot accidentally passed in), analysis is aborted
+/// immediately with `SkippedMeetingScreenshot` and Gemini is never called.
 pub async fn analyze_screenshot(
     gemini: &GeminiProvider,
     image: &[u8],
     image_mime: &str,
+    captured_status: &str,
     tickets: &[Ticket],
-) -> Result<AnalysisResult, AppError> {
+) -> Result<AnalysisOutcome, AppError> {
+    // Hard guard FIRST — before the provider check and before any network call.
+    if !is_analyzable(captured_status) {
+        tracing::info!(
+            status = captured_status,
+            "analyzer: non-working screenshot skipped (Gemini not called)"
+        );
+        return Ok(AnalysisOutcome::SkippedMeetingScreenshot);
+    }
+
     if !gemini.is_configured() {
         return Err(AppError::BadRequest(
             "Vision AI is not configured (set GEMINI_API_KEY)".into(),
@@ -169,7 +199,13 @@ pub async fn analyze_screenshot(
     for attempt in 1..=MAX_ATTEMPTS {
         match gemini.generate_json(&prompt, image, image_mime).await {
             Ok(text) => match parse_and_validate(&text) {
-                Ok(raw) => return Ok(finalize(raw, &valid_ids, gemini.model())),
+                Ok(raw) => {
+                    return Ok(AnalysisOutcome::Analyzed(finalize(
+                        raw,
+                        &valid_ids,
+                        gemini.model(),
+                    )))
+                }
                 Err(e) => {
                     last_err = e;
                     tracing::warn!(attempt, "vision analysis: malformed output: {last_err}");
@@ -204,6 +240,38 @@ mod tests {
 
     fn ids() -> Vec<String> {
         vec!["ENG-1".to_string(), "ENG-2".to_string()]
+    }
+
+    // ---- Phase 4: analyzer protection ----
+
+    #[test]
+    fn only_working_status_is_analyzable() {
+        assert!(is_analyzable("working"));
+        for status in ["meeting", "break", "idle", "not_working", ""] {
+            assert!(!is_analyzable(status), "{status:?} must not be analyzable");
+        }
+    }
+
+    #[tokio::test]
+    async fn meeting_screenshot_is_skipped_without_calling_gemini() {
+        // Bogus bytes + (possibly unconfigured) provider: if Gemini were ever
+        // called this would error. Instead the guard returns Skipped first.
+        let gemini = crate::gemini_provider::GeminiProvider::from_env();
+        let out = analyze_screenshot(&gemini, b"not-an-image", "image/jpeg", "meeting", &[])
+            .await
+            .expect("guard returns Ok(Skipped), never an error");
+        assert_eq!(out, AnalysisOutcome::SkippedMeetingScreenshot);
+    }
+
+    #[tokio::test]
+    async fn break_idle_notworking_are_also_skipped() {
+        let gemini = crate::gemini_provider::GeminiProvider::from_env();
+        for status in ["break", "idle", "not_working"] {
+            let out = analyze_screenshot(&gemini, b"x", "image/jpeg", status, &[])
+                .await
+                .unwrap();
+            assert_eq!(out, AnalysisOutcome::SkippedMeetingScreenshot, "status {status}");
+        }
     }
 
     #[test]

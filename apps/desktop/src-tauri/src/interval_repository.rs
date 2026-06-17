@@ -18,6 +18,8 @@ pub struct Interval {
     pub end_utc: DateTime<Utc>,
     /// active | idle | meeting | break
     pub kind: String,
+    /// Team the session was logged under (Feature 4); `None` if unassigned.
+    pub team_id: Option<Uuid>,
 }
 
 impl Interval {
@@ -43,19 +45,25 @@ fn row_to_interval(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<Interval> {
     let start_utc: String = row.try_get("start_utc")?;
     let end_utc: String = row.try_get("end_utc")?;
     let kind: String = row.try_get("kind")?;
+    let team_id: Option<String> = row.try_get("team_id")?;
+    let team_id = match team_id {
+        Some(t) => Some(Uuid::parse_str(&t).context("invalid team id")?),
+        None => None,
+    };
     Ok(Interval {
         id: Uuid::parse_str(&id).context("invalid interval id")?,
         user_id: Uuid::parse_str(&user_id).context("invalid user id")?,
         start_utc: parse_ts(&start_utc)?,
         end_utc: parse_ts(&end_utc)?,
         kind,
+        team_id,
     })
 }
 
 /// Persist a finished segment. Insert-only (Rule 2).
 pub async fn insert(pool: &SqlitePool, interval: &Interval) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO intervals (id, user_id, start_utc, end_utc, idle, kind) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO intervals (id, user_id, start_utc, end_utc, idle, kind, team_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(interval.id.to_string())
     .bind(interval.user_id.to_string())
@@ -63,6 +71,7 @@ pub async fn insert(pool: &SqlitePool, interval: &Interval) -> anyhow::Result<()
     .bind(interval.end_utc.to_rfc3339())
     .bind((interval.kind == "idle") as i64)
     .bind(&interval.kind)
+    .bind(interval.team_id.map(|t| t.to_string()))
     .execute(pool)
     .await
     .context("failed to insert interval")?;
@@ -73,7 +82,7 @@ pub async fn insert(pool: &SqlitePool, interval: &Interval) -> anyhow::Result<()
 pub async fn pending_sync(pool: &SqlitePool) -> anyhow::Result<Vec<Interval>> {
     let rows = sqlx::query(
         r#"
-        SELECT i.id, i.user_id, i.start_utc, i.end_utc, i.kind
+        SELECT i.id, i.user_id, i.start_utc, i.end_utc, i.kind, i.team_id
         FROM intervals i
         LEFT JOIN interval_sync s ON s.interval_id = i.id
         WHERE s.interval_id IS NULL
@@ -105,7 +114,7 @@ pub async fn mark_synced(pool: &SqlitePool, ids: &[Uuid]) -> anyhow::Result<()> 
 /// Load all intervals for a user.
 pub async fn for_user(pool: &SqlitePool, user_id: Uuid) -> anyhow::Result<Vec<Interval>> {
     let rows = sqlx::query(
-        "SELECT id, user_id, start_utc, end_utc, kind FROM intervals WHERE user_id = ? ORDER BY start_utc",
+        "SELECT id, user_id, start_utc, end_utc, kind, team_id FROM intervals WHERE user_id = ? ORDER BY start_utc",
     )
     .bind(user_id.to_string())
     .fetch_all(pool)
@@ -136,6 +145,7 @@ mod tests {
             start_utc: DateTime::parse_from_rfc3339(start).unwrap().with_timezone(&Utc),
             end_utc: DateTime::parse_from_rfc3339(end).unwrap().with_timezone(&Utc),
             kind: kind.to_string(),
+            team_id: None,
         }
     }
 

@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lr.id, lr.user_id, u.name AS employee_name, u.email AS employee_email,\n                  lt.name AS leave_type_name, lr.start_date, lr.end_date, lr.days,\n                  lr.reason, lr.created_at\n           FROM leave_requests lr\n           JOIN users u       ON u.id = lr.user_id\n           JOIN leave_types lt ON lt.id = lr.leave_type_id\n           WHERE lr.status = 'pending'\n             AND ($1::uuid IS NULL OR u.manager_id = $1)\n           ORDER BY lr.created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "employee_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "employee_email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "leave_type_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "start_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 6,
+        "name": "end_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 7,
+        "name": "days",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 8,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6cf67e5b5408cab288519872d546aaa2ca6ac9f7ad1ec422decbc2614629da44"
+}

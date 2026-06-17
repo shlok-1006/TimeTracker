@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listUsers, createUser, deleteUser, resetPassword, type ManagedUser } from "@/lib/api";
@@ -84,14 +83,8 @@ export default function ManageUsersPage() {
 
   return (
     <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-12">
-      <header className="flex items-center justify-between">
+      <header>
         <h1 className="text-3xl font-bold tracking-tight">Manage users</h1>
-        <Link
-          href="/dashboard"
-          className="rounded-md bg-secondary px-4 py-2 text-sm font-medium hover:opacity-90"
-        >
-          ← Back to team
-        </Link>
       </header>
 
       {/* New-password banner (shown once after a reset) */}

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT day FROM attendance_days WHERE user_id = $1 AND day >= $2 AND day <= $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "day",
+        "type_info": "Date"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "33bd2909862b3b10eebbd1c739835f24eabe6d1ed6d2af1e59f4982e6aa2c2c5"
+}

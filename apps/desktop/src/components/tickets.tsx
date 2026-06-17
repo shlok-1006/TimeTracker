@@ -115,7 +115,7 @@ export function Tickets() {
           <button
             type="submit"
             disabled={request.isPending}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-md bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
           >
             {request.isPending ? "Sending…" : "Request"}
           </button>

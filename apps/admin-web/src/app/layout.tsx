@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "./providers";
+import { AppChrome } from "@/components/admin-shell";
 
 export const metadata: Metadata = {
   title: "TimeTracker Admin",
@@ -15,7 +16,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background text-foreground antialiased">
-        <Providers>{children}</Providers>
+        <Providers>
+          <AppChrome>{children}</AppChrome>
+        </Providers>
       </body>
     </html>
   );

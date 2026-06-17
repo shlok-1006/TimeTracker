@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::db::linear_repository;
+use crate::db::{linear_repository, users};
 use crate::error::AppError;
 use crate::ticket_cache::{Ticket, TicketCache};
 
@@ -97,10 +97,18 @@ impl LinearService {
             .map(String::from))
     }
 
-    /// Fetch issues assigned to a Linear user.
+    /// Fetch OPEN issues assigned to a Linear user. Completed ("done") and
+    /// canceled issues are excluded by state type so they don't clutter the
+    /// employee dashboard.
     async fn fetch_assigned(&self, linear_user_id: &str) -> Result<Vec<Ticket>, LinearError> {
         let q = r#"query($assignee: ID!) {
-            issues(filter: { assignee: { id: { eq: $assignee } } }, first: 50) {
+            issues(
+                filter: {
+                    assignee: { id: { eq: $assignee } }
+                    state: { type: { nin: ["completed", "canceled"] } }
+                }
+                first: 50
+            ) {
                 nodes {
                     id title description
                     state { name }
@@ -151,6 +159,29 @@ impl LinearService {
         }
     }
 
+    /// Best-effort: link a user to their Linear account by matching the email on
+    /// their TimeTracker profile. Returns the Linear user id (and stores the
+    /// link) if a match is found, else `None`. A transient Linear lookup error
+    /// is treated as "not linked this time" so it never breaks the dashboard.
+    async fn auto_link(&self, db: &PgPool, user_id: Uuid) -> Result<Option<String>, AppError> {
+        let user = match users::find_by_id(db, user_id).await? {
+            Some(u) => u,
+            None => return Ok(None),
+        };
+        match self.find_user_by_email(&user.email).await {
+            Ok(Some(linear_id)) => {
+                linear_repository::upsert(db, user_id, &linear_id).await?;
+                tracing::info!(%user_id, email = %user.email, "auto-linked to Linear by email");
+                Ok(Some(linear_id))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => {
+                tracing::warn!("auto-link email lookup failed ({e}); treating as unlinked");
+                Ok(None)
+            }
+        }
+    }
+
     /// Assigned tickets for a user. Serves the hourly cache; on rate-limit /
     /// failure falls back to the last cached result if available.
     pub async fn fetch_assigned_tickets(
@@ -168,7 +199,12 @@ impl LinearService {
         }
         let linear_id = match linear_repository::get_linear_user_id(db, user_id).await? {
             Some(id) => id,
-            None => return Ok(vec![]),
+            // Not linked yet → try to auto-link by matching the employee's email
+            // to a Linear account. No match → no assigned tickets.
+            None => match self.auto_link(db, user_id).await? {
+                Some(id) => id,
+                None => return Ok(vec![]),
+            },
         };
 
         match self.fetch_assigned(&linear_id).await {

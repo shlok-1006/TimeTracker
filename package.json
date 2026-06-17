@@ -18,6 +18,7 @@
     "typecheck": "pnpm -r typecheck",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
+    "minio": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-minio.ps1",
     "server": "cargo run -p server"
   },
   "devDependencies": {

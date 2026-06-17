@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lr.id, lr.user_id, lr.leave_type_id, lt.name AS \"leave_type_name!\",\n                  lr.start_date, lr.end_date, lr.days, lr.reason, lr.status,\n                  lr.approver_id, lr.decided_at, lr.created_at\n           FROM leave_requests lr\n           JOIN leave_types lt ON lt.id = lr.leave_type_id\n           WHERE lr.user_id = $1\n           ORDER BY lr.start_date DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "leave_type_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "leave_type_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "start_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 5,
+        "name": "end_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 6,
+        "name": "days",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "approver_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "9810d78c969f786272ffff9d345389ecd98ced5c8c506f8287bdfa9ce5c587ae"
+}

@@ -18,9 +18,11 @@ export default function LoginPage() {
     hydrate();
   }, [hydrate]);
 
-  // Already signed in → go straight to the dashboard.
+  // Already signed in → HR lands on Manage users, PMs on the team dashboard.
   useEffect(() => {
-    if (hydrated && user && token) router.replace("/dashboard");
+    if (hydrated && user && token) {
+      router.replace(user.role === "hr" ? "/manage" : "/dashboard");
+    }
   }, [hydrated, user, token, router]);
 
   async function onSubmit(e: FormEvent) {
@@ -40,7 +42,7 @@ export default function LoginPage() {
         role: res.user.role,
         team: res.user.team,
       });
-      router.replace("/dashboard");
+      router.replace(res.user.role === "hr" ? "/manage" : "/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed.");
     } finally {

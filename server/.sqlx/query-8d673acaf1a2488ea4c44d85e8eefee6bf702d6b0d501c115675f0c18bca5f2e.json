@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE manual_tasks\n           SET title = COALESCE($2, title), description = COALESCE($3, description), updated_at = now()\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8d673acaf1a2488ea4c44d85e8eefee6bf702d6b0d501c115675f0c18bca5f2e"
+}

@@ -1,13 +1,17 @@
-# Local development stack for TimeTracker.
-#   postgres -> source of truth for synced activity (Rule 4)        :5432
-#   minio    -> S3-compatible object storage for screenshots (Rule 5) :9100 (S3) / :9001 (console)
-#   server   -> Axum API server, built from ./Dockerfile             :9000
+# Full TimeTracker stack (dev + single-VM production).
+#   postgres  -> source of truth for synced activity (Rule 4)         :5432
+#   minio     -> S3-compatible object storage for screenshots (Rule 5) :9100 (S3) / :9001 (console)
+#   server    -> Axum API server, built from ./Dockerfile              :9000
+#   admin-web -> Next.js admin dashboard, built from ./Dockerfile.admin :3001 (internal)
+#   nginx     -> reverse proxy / web entrypoint                        :80
 #
-# The desktop app (:3000) and admin dashboard (:3001) run on the host via
-# `pnpm dev` — the desktop is a native Tauri app and is not containerized.
+# The desktop app is a native Tauri app and is NOT containerized; it talks to the
+# API directly on :9000 and uploads screenshots straight to MinIO on :9100.
+#
+# Web entrypoint (browser): http://<VM_HOST>/  -> dashboard, http://<VM_HOST>/api -> API.
 #
 # Usage:
-#   docker compose up -d --build   # build + start db, storage, and the API server
+#   docker compose up -d --build   # build + start the whole stack
 #   docker compose down            # keep volumes
 #   docker compose down -v         # wipe volumes
 #
@@ -91,21 +95,53 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-refresh-secret-change-me}
       JWT_ACCESS_TTL_SECONDS: "900"
       JWT_REFRESH_TTL_SECONDS: "2592000"
-      # The presigned-URL host must be reachable by the desktop/browser on the
-      # HOST, so point at MinIO's published port (localhost:9100) rather than the
-      # internal `minio:9000`. (In production this is the public R2 endpoint.)
-      S3_ENDPOINT: http://localhost:9100
-      S3_REGION: us-east-1
-      S3_BUCKET: screenshots
-      S3_ACCESS_KEY_ID: minioadmin
-      S3_SECRET_ACCESS_KEY: minioadmin
-      S3_FORCE_PATH_STYLE: "true"
-      PUBLIC_BASE_URL: http://localhost:9000
+      # Presigned-URL host: must be reachable by clients. Locally that's MinIO's
+      # published port (localhost:9100); on a VM set S3_ENDPOINT in .env to the
+      # public address (or a Cloudflare R2 endpoint). Driven by .env so the same
+      # compose file works in dev and prod.
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://localhost:9100}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-screenshots}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:9000}
       LINEAR_API_KEY: ${LINEAR_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       RUST_LOG: info,server=debug,sqlx=warn
     ports:
       - "9000:9000"
+
+  # Admin dashboard (Next.js). NEXT_PUBLIC_API_BASE_URL is inlined at BUILD time,
+  # so it is passed as a build arg (not a runtime env). Default "/api" => the
+  # browser makes same-origin calls that Nginx routes to the API container.
+  admin-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
+    container_name: timetracker-admin-web
+    restart: unless-stopped
+    depends_on:
+      - server
+    expose:
+      - "3001"   # internal only; reached through Nginx
+
+  # Reverse proxy / single web entrypoint on :80.
+  #   /     -> admin-web:3001
+  #   /api/ -> server:9000  (prefix stripped)
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: timetracker-nginx
+    restart: unless-stopped
+    depends_on:
+      - admin-web
+      - server
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
 
 volumes:
   postgres_data:

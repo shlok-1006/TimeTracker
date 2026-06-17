@@ -1,15 +1,23 @@
 # Rust
 /target
 **/target
-/target-test
+target-test/
+**/target-test/
+
+# Deploy / local build artifacts (never commit)
+server-linux
+seed-linux
+key
+key.pub
 
 # Node
 node_modules
 .pnpm-store
+*.tsbuildinfo
 
 # Next.js
-.next
-out
+.next/
+out/
 next-env.d.ts
 
 # Tauri

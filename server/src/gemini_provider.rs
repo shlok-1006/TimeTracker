@@ -60,9 +60,6 @@ impl GeminiProvider {
         image: &[u8],
         image_mime: &str,
     ) -> Result<String, GeminiError> {
-        let key = self.api_key.as_ref().ok_or(GeminiError::NotConfigured)?;
-        let url = format!("{API_BASE}/{}:generateContent?key={key}", self.model);
-
         let body = json!({
             "contents": [{
                 "parts": [
@@ -70,11 +67,25 @@ impl GeminiProvider {
                     { "inline_data": { "mime_type": image_mime, "data": BASE64.encode(image) } }
                 ]
             }],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": 0.1
-            }
+            "generationConfig": { "responseMimeType": "application/json", "temperature": 0.1 }
         });
+        self.post_generate(body).await
+    }
+
+    /// Send a TEXT-only prompt requesting a JSON response (no image). Used for
+    /// the daily summary generator (Feature 1 Phase 3).
+    pub async fn generate_text_json(&self, prompt: &str) -> Result<String, GeminiError> {
+        let body = json!({
+            "contents": [{ "parts": [ { "text": prompt } ] }],
+            "generationConfig": { "responseMimeType": "application/json", "temperature": 0.2 }
+        });
+        self.post_generate(body).await
+    }
+
+    /// POST a generateContent request body and return the first candidate's text.
+    async fn post_generate(&self, body: Value) -> Result<String, GeminiError> {
+        let key = self.api_key.as_ref().ok_or(GeminiError::NotConfigured)?;
+        let url = format!("{API_BASE}/{}:generateContent?key={key}", self.model);
 
         let resp = self
             .client

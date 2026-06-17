@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.bucket, sc.id, sc.taken_at, sc.storage_key, sc.captured_status\n           FROM analysis_job_samples s\n           JOIN screenshots sc ON sc.id = s.screenshot_id\n           WHERE s.job_id = $1\n           ORDER BY sc.taken_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bucket",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "taken_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "captured_status",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "91f2507a6592c021905e8178917ae79852affd9b75811907dd56d85b9a5ad521"
+}

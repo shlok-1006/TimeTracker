@@ -1,0 +1,31 @@
+# Build context for the admin dashboard image (Dockerfile.admin).
+# Unlike the root .dockerignore (which excludes apps/ + packages/ for the slim
+# server build), this build NEEDS the workspace source — so we only strip
+# build output, deps, VCS, and secrets.
+
+# Dependencies & build output (reinstalled / rebuilt inside the image)
+**/node_modules
+**/.next
+**/out
+**/dist
+**/*.tsbuildinfo
+
+# Rust workspace — not part of the dashboard image
+target/
+target-test/
+apps/desktop/src-tauri/target/
+
+# VCS & CI
+.git/
+.github/
+
+# Compose / other Dockerfiles
+docker-compose.yml
+Dockerfile
+*.dockerignore
+
+# Secrets — never bake these into the image (also keeps .env.local from
+# overriding the NEXT_PUBLIC_API_BASE_URL build arg)
+.env
+**/.env
+**/.env.local

@@ -4,10 +4,9 @@
 //! the workday. The day is split into five time-of-day buckets and one random
 //! screenshot is drawn from each non-empty bucket.
 //!
-//! Eligibility: only *Working* screenshots count. Screenshots are only ever
-//! captured while the employee's status is `working` (see desktop `screenshot.rs`
-//! / `should_capture`), so every row in `screenshots` is already a working shot —
-//! the whole day window is eligible.
+//! Eligibility: only *Working* screenshots count (`captured_status = 'working'`).
+//! The desktop also captures during meetings (tagged `meeting`, Feature 2); those
+//! are stored and viewable but are filtered out here and never sampled/analysed.
 //!
 //! Idempotency (Rules: "never resample same day"): the chosen set is persisted in
 //! `analysis_job_samples` and `analysis_jobs` is UNIQUE per (user, day). Re-running
@@ -63,12 +62,22 @@ pub struct SampledShot {
     pub bucket: String,
     pub taken_at: DateTime<Utc>,
     pub storage_key: String,
+    /// Capture-time status (always `working` for sampled shots; carried so the
+    /// analyzer can re-assert the Phase 4 guard).
+    pub captured_status: String,
 }
 
-/// An eligible (working) screenshot in the day window.
-struct EligibleShot {
+/// A screenshot in the day window, with its capture-time status.
+struct CandidateShot {
     id: Uuid,
     taken_at: DateTime<Utc>,
+    captured_status: String,
+}
+
+/// Sampling eligibility (Feature 2): ONLY Working screenshots may be analysed.
+/// Meeting/break/idle shots remain stored and viewable but never sampled.
+fn is_eligible(shot: &CandidateShot) -> bool {
+    shot.captured_status == "working"
 }
 
 /// Pick one element uniformly at random, or `None` if empty.
@@ -81,12 +90,15 @@ fn pick_one<T>(items: &[T]) -> Option<&T> {
 }
 
 /// Choose at most one screenshot per bucket (the pure sampling strategy).
+/// Applies `is_eligible` first (defense in depth on top of the SQL filter), so
+/// non-working shots can never be chosen even if the query were loosened.
 /// Returns `(bucket, screenshot_id)` in bucket order — between 0 and 5 entries.
-fn choose_samples(shots: &[EligibleShot]) -> Vec<(&'static str, Uuid)> {
+fn choose_samples(shots: &[CandidateShot]) -> Vec<(&'static str, Uuid)> {
     let mut chosen = Vec::with_capacity(BUCKETS.len());
     for (name, _, _) in BUCKETS {
         let in_bucket: Vec<Uuid> = shots
             .iter()
+            .filter(|s| is_eligible(s))
             .filter(|s| bucket_of(s.taken_at.hour()) == name)
             .map(|s| s.id)
             .collect();
@@ -171,7 +183,7 @@ pub async fn load_existing_job(
 /// The stored sampled set for a job, ordered by capture time.
 async fn load_samples(pool: &PgPool, job_id: Uuid) -> Result<Vec<SampledShot>, AppError> {
     let rows = sqlx::query!(
-        r#"SELECT s.bucket, sc.id, sc.taken_at, sc.storage_key
+        r#"SELECT s.bucket, sc.id, sc.taken_at, sc.storage_key, sc.captured_status
            FROM analysis_job_samples s
            JOIN screenshots sc ON sc.id = s.screenshot_id
            WHERE s.job_id = $1
@@ -188,6 +200,7 @@ async fn load_samples(pool: &PgPool, job_id: Uuid) -> Result<Vec<SampledShot>, A
             bucket: r.bucket,
             taken_at: r.taken_at,
             storage_key: r.storage_key,
+            captured_status: r.captured_status,
         })
         .collect())
 }
@@ -210,11 +223,13 @@ pub async fn sample_screenshots(
         return Ok(existing);
     }
 
-    // Eligible = all (working) screenshots in the day window.
+    // Eligible = Working screenshots only (meeting/break shots are never analysed).
+    // Filtered both here (indexed) and again in `choose_samples` (defense in depth).
     let (from, to) = day_bounds(day);
     let rows = sqlx::query!(
-        "SELECT id, taken_at FROM screenshots
-         WHERE user_id = $1 AND taken_at >= $2 AND taken_at < $3
+        "SELECT id, taken_at, captured_status FROM screenshots
+         WHERE user_id = $1 AND captured_status = 'working'
+           AND taken_at >= $2 AND taken_at < $3
          ORDER BY taken_at",
         user_id,
         from,
@@ -223,11 +238,12 @@ pub async fn sample_screenshots(
     .fetch_all(pool)
     .await?;
 
-    let shots: Vec<EligibleShot> = rows
+    let shots: Vec<CandidateShot> = rows
         .into_iter()
-        .map(|r| EligibleShot {
+        .map(|r| CandidateShot {
             id: r.id,
             taken_at: r.taken_at,
+            captured_status: r.captured_status,
         })
         .collect();
 
@@ -257,12 +273,17 @@ pub async fn sample_screenshots(
 mod tests {
     use super::*;
 
-    fn shot(id: u8, hour: u32) -> EligibleShot {
+    fn shot_with_status(id: u8, hour: u32, status: &str) -> CandidateShot {
         let d = NaiveDate::from_ymd_opt(2026, 6, 8).unwrap();
-        EligibleShot {
+        CandidateShot {
             id: Uuid::from_u128(id as u128),
             taken_at: Utc.from_utc_datetime(&d.and_hms_opt(hour, 0, 0).unwrap()),
+            captured_status: status.to_string(),
         }
+    }
+
+    fn shot(id: u8, hour: u32) -> CandidateShot {
+        shot_with_status(id, hour, "working")
     }
 
     #[test]
@@ -324,5 +345,37 @@ mod tests {
     #[test]
     fn no_screenshots_yields_empty() {
         assert!(choose_samples(&[]).is_empty());
+    }
+
+    #[test]
+    fn meeting_shots_are_never_sampled() {
+        // Working at 09:00 + meeting at 11:00 and 15:00 → ONLY the working shot
+        // is chosen, even though the meeting shots sit in otherwise-empty buckets.
+        let shots = vec![
+            shot_with_status(1, 9, "working"),
+            shot_with_status(2, 11, "meeting"),
+            shot_with_status(3, 15, "meeting"),
+        ];
+        let chosen = choose_samples(&shots);
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(chosen[0].0, "morning");
+        assert_eq!(chosen[0].1, Uuid::from_u128(1));
+    }
+
+    #[test]
+    fn only_working_status_is_eligible() {
+        assert!(is_eligible(&shot_with_status(1, 9, "working")));
+        for status in ["meeting", "break", "idle", "not_working"] {
+            assert!(!is_eligible(&shot_with_status(1, 9, status)), "{status} must be ineligible");
+        }
+    }
+
+    #[test]
+    fn all_meeting_day_samples_nothing() {
+        let shots = vec![
+            shot_with_status(1, 9, "meeting"),
+            shot_with_status(2, 13, "meeting"),
+        ];
+        assert!(choose_samples(&shots).is_empty());
     }
 }

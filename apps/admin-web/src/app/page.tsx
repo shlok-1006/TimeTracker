@@ -14,8 +14,12 @@ export default function Home() {
   }, [hydrate]);
 
   useEffect(() => {
-    if (hydrated) {
-      router.replace(user && token ? "/dashboard" : "/login");
+    if (!hydrated) return;
+    if (!user || !token) {
+      router.replace("/login");
+    } else {
+      // Manage users is the main page for HR; PMs land on the team dashboard.
+      router.replace(user.role === "hr" ? "/manage" : "/dashboard");
     }
   }, [hydrated, user, token, router]);
 

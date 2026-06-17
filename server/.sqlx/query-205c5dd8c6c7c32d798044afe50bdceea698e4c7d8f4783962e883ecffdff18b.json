@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, candidate_id, doc_type, storage_key, created_at\n         FROM candidate_documents WHERE candidate_id = $1 ORDER BY created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "candidate_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "doc_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "205c5dd8c6c7c32d798044afe50bdceea698e4c7d8f4783962e883ecffdff18b"
+}

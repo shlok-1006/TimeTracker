@@ -4,13 +4,19 @@
 //! Repositories (users, hours, screenshots, …) are added in later steps under
 //! this module.
 
+pub mod analysis_reports;
 pub mod analysis_results;
+pub mod attendance;
 pub mod audit;
 pub mod intervals;
+pub mod leave;
 pub mod linear_repository;
+pub mod manual_tasks;
+pub mod onboarding;
 pub mod presence;
 pub mod refresh_tokens;
 pub mod screenshots;
+pub mod teams;
 pub mod ticket_requests;
 pub mod users;
 

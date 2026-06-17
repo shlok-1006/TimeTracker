@@ -1,7 +1,9 @@
 //! Screenshot capture + upload (STEP 4) with token-refreshing API calls.
 //!
-//! Captures the primary monitor **only while Working** (never on break, idle,
-//! meeting, or when not tracking). Flow per Rule 5:
+//! Captures the primary monitor while **Working or in a Meeting** (never on
+//! break, idle, or when not tracking). Each upload is tagged with the
+//! capture-time status (Feature 2): meeting screenshots are stored and
+//! viewable but excluded from AI sampling/analysis. Flow per Rule 5:
 //!   1. POST /uploads/presign  -> presigned PUT URL + storage key
 //!   2. PUT the JPEG bytes directly to storage (MinIO/R2)
 //!   3. POST /screenshots      -> store metadata only
@@ -32,9 +34,10 @@ fn interval() -> Duration {
     Duration::from_secs(secs)
 }
 
-/// Capture is allowed only while actively working.
+/// Capture is allowed while actively working or in a meeting. Meeting shots
+/// are tagged `meeting` and excluded from AI analysis server-side (Feature 2).
 pub fn should_capture(status: &str) -> bool {
-    status == "working"
+    status == "working" || status == "meeting"
 }
 
 /// Encode an RGBA frame as JPEG bytes.
@@ -87,13 +90,14 @@ pub async fn run(state: DesktopState) {
         if !should_capture(status) {
             continue;
         }
-        if let Err(e) = capture_and_upload(&client).await {
+        // Tag the upload with the status that authorized the capture (Feature 2).
+        if let Err(e) = capture_and_upload(&client, status).await {
             tracing::warn!("screenshot capture/upload failed (will retry): {e}");
         }
     }
 }
 
-async fn capture_and_upload(client: &reqwest::Client) -> anyhow::Result<()> {
+async fn capture_and_upload(client: &reqwest::Client, status: &str) -> anyhow::Result<()> {
     if auth::stored_access().is_none() {
         return Ok(());
     }
@@ -127,10 +131,14 @@ async fn capture_and_upload(client: &reqwest::Client) -> anyhow::Result<()> {
         anyhow::bail!("storage upload returned {}", put.status());
     }
 
-    // 4. Notify the API (metadata only).
+    // 4. Notify the API (metadata only) with the capture-time status.
     http::post_json(
         "/screenshots",
-        serde_json::json!({ "storage_key": storage_key, "taken_at": Utc::now().to_rfc3339() }),
+        serde_json::json!({
+            "storage_key": storage_key,
+            "taken_at": Utc::now().to_rfc3339(),
+            "captured_status": status,
+        }),
     )
     .await
     .map_err(|e| anyhow::anyhow!(e))?;
@@ -144,11 +152,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn captures_only_while_working() {
+    fn captures_while_working_or_meeting() {
         assert!(should_capture("working"));
+        assert!(should_capture("meeting"));
         assert!(!should_capture("idle"));
         assert!(!should_capture("break"));
-        assert!(!should_capture("meeting"));
         assert!(!should_capture("not_working"));
     }
 

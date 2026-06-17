@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting')),0) AS BIGINT) AS \"total!\",\n             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='active'),0) AS BIGINT) AS \"active!\",\n             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='idle'),0) AS BIGINT) AS \"idle!\",\n             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='meeting'),0) AS BIGINT) AS \"meeting!\",\n             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='break'),0) AS BIGINT) AS \"brk!\"\n           FROM intervals WHERE team_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "active!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "idle!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "meeting!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "brk!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "ec2be2c614f60c0dfe4bc18a2615dc06ab57932f0d6e57953f74cbd932aae05f"
+}

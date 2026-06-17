@@ -6,11 +6,17 @@
 //!   * protected — `auth_middleware` validates the JWT; handlers add role guards
 
 pub mod admin;
+pub mod attendance;
 pub mod auth;
 pub mod health;
 pub mod intervals;
+pub mod leave;
 pub mod linear;
+pub mod onboarding;
 pub mod presence;
+pub mod reports;
+pub mod tasks;
+pub mod teams;
 pub mod ticket_requests;
 pub mod uploads;
 
@@ -69,6 +75,12 @@ pub fn build(state: AppState) -> Router {
         .merge(presence::router())
         .merge(uploads::router())
         .merge(linear::router())
+        .merge(leave::router())
+        .merge(reports::router())
+        .merge(teams::router())
+        .merge(tasks::router())
+        .merge(onboarding::router())
+        .merge(attendance::router())
         .merge(admin::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

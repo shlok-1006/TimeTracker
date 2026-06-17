@@ -62,7 +62,14 @@ pub async fn send_approval_request(e: ApprovalEmail<'_>) -> anyhow::Result<()> {
         .header(ContentType::TEXT_PLAIN)
         .body(body)?;
 
-    let mut builder = AsyncSmtpTransport::<Tokio1Executor>::relay(&host)?.port(port);
+    // Port 465 = implicit TLS (SMTPS); 587/2525 = STARTTLS. Pick the matching
+    // transport so the common provider configs work.
+    let mut builder = if port == 465 {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&host)?
+    } else {
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host)?
+    }
+    .port(port);
     if !user.is_empty() {
         builder = builder.credentials(Credentials::new(user, pass));
     }

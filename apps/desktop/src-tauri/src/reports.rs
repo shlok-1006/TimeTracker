@@ -128,6 +128,7 @@ mod tests {
             start_utc: s,
             end_utc: s + Duration::seconds(dur_secs),
             kind: kind.to_string(),
+            team_id: None,
         }
     }
 

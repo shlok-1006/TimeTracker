@@ -22,6 +22,7 @@ struct IntervalPayload {
     start_utc: String,
     end_utc: String,
     kind: String,
+    team_id: Option<Uuid>,
 }
 
 impl From<&Interval> for IntervalPayload {
@@ -31,6 +32,7 @@ impl From<&Interval> for IntervalPayload {
             start_utc: i.start_utc.to_rfc3339(),
             end_utc: i.end_utc.to_rfc3339(),
             kind: i.kind.clone(),
+            team_id: i.team_id,
         }
     }
 }

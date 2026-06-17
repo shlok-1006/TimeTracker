@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO candidate_documents (candidate_id, doc_type, storage_key)\n         VALUES ($1, $2, $3)\n         RETURNING id, candidate_id, doc_type, storage_key, created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "candidate_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "doc_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6caacc54572b61c5ca35240f5c200b965241a2607a2b340c5d37add8e8db7d51"
+}

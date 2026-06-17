@@ -45,6 +45,11 @@ async fn main() -> anyhow::Result<()> {
         gemini,
         config.jwt_refresh_ttl_seconds,
     );
+    // Nightly analysis: builds the previous day's reports for every employee.
+    tokio::spawn(server::analysis_scheduler::run(state.clone()));
+    // Nightly attendance: rolls up the previous day's attendance for every employee.
+    tokio::spawn(server::attendance_scheduler::run(state.clone()));
+
     let app = server::build_router(state);
 
     let listener = tokio::net::TcpListener::bind(config.socket_addr)

@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT sc.id, sc.taken_at, sc.storage_key, sc.captured_status,\n               ar.verdict AS \"verdict?\"\n        FROM screenshots sc\n        LEFT JOIN analysis_results ar ON ar.screenshot_id = sc.id\n        WHERE sc.user_id = $1 AND sc.taken_at >= $2 AND sc.taken_at < $3\n        ORDER BY sc.taken_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "taken_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "captured_status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "verdict?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "18eb8aa89b37f0927d4c2a0de7e1ae909cd4760f5b0bbbf50e8bdfaa4bf67a43"
+}

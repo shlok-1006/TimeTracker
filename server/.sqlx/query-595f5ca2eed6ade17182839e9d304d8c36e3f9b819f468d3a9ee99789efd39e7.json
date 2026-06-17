@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, summary_text, model, created_at\n           FROM analysis_reports WHERE user_id = $1 AND day = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "day",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 3,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "partially_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "not_aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "inconclusive_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "summary_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "model",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "595f5ca2eed6ade17182839e9d304d8c36e3f9b819f468d3a9ee99789efd39e7"
+}

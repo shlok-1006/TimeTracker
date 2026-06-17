@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id, u.name, u.email,\n                  CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind IN ('active','meeting')),0) AS BIGINT) AS \"worked!\"\n           FROM users u\n           JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = $1\n           LEFT JOIN intervals i ON i.user_id = u.id AND i.team_id = $1\n           GROUP BY u.id, u.name, u.email\n           ORDER BY 4 DESC, u.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "worked!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "a0a45c8b374dce9f7668906e1c9e5a0aeecc2f77c4acef2c73dab7214017e07a"
+}

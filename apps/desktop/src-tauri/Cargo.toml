@@ -30,8 +30,9 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-# Cross-platform input polling for idle detection (Rule: idle.rs).
-device_query = "2"
+# OS-native idle timer for idle detection (Rule: idle.rs). Uses CoreGraphics on
+# macOS (no Input-Monitoring permission needed) and GetLastInputInfo on Windows.
+user-idle = "0.6"
 # Screen capture (Rule: screenshot.rs) + JPEG encoding. `image` must match the
 # version xcap depends on (^0.25) so RgbaImage types unify.
 xcap = "0.9"

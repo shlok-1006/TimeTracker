@@ -1,13 +1,15 @@
-//! Idle detection (STEP 3) via the `device_query` crate.
+//! Idle detection (STEP 3) via the OS-native idle timer (`user-idle`).
 //!
-//! A background thread samples mouse position + pressed keys every ~2s. Any
-//! change marks "activity" (updates a monotonic `Instant`). `is_idle` is true
-//! once no activity has occurred for the configured threshold.
+//! Reports how long since the last system-wide input event. On macOS this uses
+//! CoreGraphics (`CGEventSourceSecondsSinceLastEventType`) and needs **no**
+//! special permission; on Windows it uses `GetLastInputInfo`. This replaces the
+//! previous global mouse/keyboard polling, which on macOS required Input
+//! Monitoring / Accessibility permission and — when that was missing — never
+//! observed activity, leaving the app permanently stuck in "idle".
 
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use device_query::{DeviceQuery, DeviceState};
+use user_idle::UserIdle;
 
 /// Default idle threshold if `TIMETRACKER_IDLE_THRESHOLD_SECS` is unset.
 /// 3 minutes of no mouse/keyboard input => idle.
@@ -15,16 +17,12 @@ const DEFAULT_THRESHOLD_SECS: u64 = 180;
 
 #[derive(Clone)]
 pub struct IdleHandle {
-    last_activity: Arc<Mutex<Instant>>,
     threshold: Duration,
 }
 
 impl IdleHandle {
     pub fn new(threshold: Duration) -> Self {
-        Self {
-            last_activity: Arc::new(Mutex::new(Instant::now())),
-            threshold,
-        }
+        Self { threshold }
     }
 
     /// Build from the `TIMETRACKER_IDLE_THRESHOLD_SECS` env var (configurable).
@@ -37,17 +35,17 @@ impl IdleHandle {
         Self::new(Duration::from_secs(secs))
     }
 
-    pub fn mark_active(&self) {
-        if let Ok(mut last) = self.last_activity.lock() {
-            *last = Instant::now();
-        }
-    }
-
+    /// Time since the last system-wide input event. On a transient failure or
+    /// unsupported platform we report zero, so the user is treated as **active**
+    /// rather than being falsely marked idle.
     pub fn idle_for(&self) -> Duration {
-        self.last_activity
-            .lock()
-            .map(|t| t.elapsed())
-            .unwrap_or_default()
+        match UserIdle::get_time() {
+            Ok(t) => Duration::from_secs(t.as_seconds()),
+            Err(e) => {
+                tracing::debug!("idle query failed, assuming active: {e}");
+                Duration::ZERO
+            }
+        }
     }
 
     pub fn is_idle(&self) -> bool {
@@ -55,38 +53,23 @@ impl IdleHandle {
     }
 }
 
-/// Spawn the input sampler on a dedicated OS thread (device_query is blocking).
-pub fn spawn_sampler(handle: IdleHandle) {
-    std::thread::spawn(move || {
-        let device = DeviceState::new();
-        let mut last_mouse = device.get_mouse().coords;
-        let mut last_keys = device.get_keys();
-        loop {
-            std::thread::sleep(Duration::from_secs(2));
-            let mouse = device.get_mouse().coords;
-            let keys = device.get_keys();
-            if mouse != last_mouse || keys != last_keys {
-                handle.mark_active();
-                last_mouse = mouse;
-                last_keys = keys;
-            }
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn detects_idle_after_threshold_and_resets_on_activity() {
-        let handle = IdleHandle::new(Duration::from_millis(60));
-        assert!(!handle.is_idle(), "fresh handle is active");
+    fn recent_input_is_not_idle_under_large_threshold() {
+        // We are running this test now, so the last input is recent (or the
+        // query fails on a headless CI host and reports zero) — either way the
+        // session is well under a one-day threshold.
+        let handle = IdleHandle::new(Duration::from_secs(86_400));
+        assert!(!handle.is_idle());
+    }
 
-        std::thread::sleep(Duration::from_millis(90));
-        assert!(handle.is_idle(), "idle after threshold elapses");
-
-        handle.mark_active();
-        assert!(!handle.is_idle(), "activity resets idle state");
+    #[test]
+    fn zero_threshold_reports_idle() {
+        // A zero threshold means any elapsed time counts as idle.
+        let handle = IdleHandle::new(Duration::ZERO);
+        assert!(handle.is_idle());
     }
 }

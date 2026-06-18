@@ -49,8 +49,8 @@ pub fn run() {
                 db::migrate(&pool).await.expect("run local migrations");
 
                 // Idle detection (configurable threshold) + background workers.
+                // Idle is now read from the OS on demand (no sampler thread).
                 let idle = idle::IdleHandle::from_env();
-                idle::spawn_sampler(idle.clone());
 
                 let state = timer::DesktopState::new(pool, idle);
                 handle.manage(state.clone());

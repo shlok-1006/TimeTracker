@@ -17,12 +17,13 @@ jobs:
       matrix:
         include:
           - platform: windows-latest
-          - platform: macos-latest # Apple Silicon
-            args: --target aarch64-apple-darwin
-          - platform: macos-13 # Intel
-            args: --target x86_64-apple-darwin
+          # One universal .dmg (Intel + Apple Silicon) built on the fast
+          # Apple-Silicon runner. Avoids the scarce/slow macos-13 Intel runner.
+          - platform: macos-latest
+            args: --target universal-apple-darwin
           - platform: ubuntu-latest
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 40 # never let a queued/hung runner stall the release for hours
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +45,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || matrix.platform == 'macos-13' && 'x86_64-apple-darwin' || '' }}
+          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
@@ -63,6 +64,6 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: "TimeTracker ${{ github.ref_name }}"
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

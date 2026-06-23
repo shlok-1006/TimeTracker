@@ -13,12 +13,14 @@ const ACCOUNT_REFRESH: &str = "refresh_token";
 
 pub fn api_base() -> String {
     // Resolution order:
-    //   1. runtime env var  -> lets a dev point a local build at any server
-    //   2. compile-time env  -> the production URL baked in by CI at build time
-    //                           (`option_env!` reads the value present during `cargo build`)
-    //   3. localhost default -> plain `cargo run` / `tauri dev`
+    //   1. runtime env var   -> lets a dev point a local build at any server
+    //   2. user-configured   -> the URL entered on the login screen (config.json);
+    //                           takes precedence so a shipped app can be retargeted
+    //   3. compile-time env   -> production URL baked in by CI at build time
+    //   4. localhost default  -> plain `cargo run` / `tauri dev`
     std::env::var("TIMETRACKER_API_BASE_URL")
         .ok()
+        .or_else(crate::config::server_url)
         .or_else(|| option_env!("TIMETRACKER_API_BASE_URL").map(str::to_string))
         .unwrap_or_else(|| "http://localhost:9000".to_string())
 }

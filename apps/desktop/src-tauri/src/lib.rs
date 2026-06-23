@@ -8,6 +8,7 @@
 
 mod auth;
 mod client;
+mod config;
 mod db;
 mod http;
 mod idle;
@@ -43,6 +44,9 @@ pub fn run() {
             // Open the local DB, migrate, manage state, and start the sync worker.
             tauri::async_runtime::block_on(async move {
                 let data_dir = handle.path().app_data_dir().expect("resolve app data dir");
+                // Load the user-configured server URL before any network worker
+                // starts, so api_base() resolves to it from the first heartbeat.
+                config::init(&data_dir);
                 let db_path = data_dir.join("timetracker.db");
 
                 let pool = db::connect(&db_path).await.expect("open local database");
@@ -63,6 +67,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            config::get_server_url,
+            config::set_server_url,
             auth::login,
             auth::restore_session,
             auth::logout,

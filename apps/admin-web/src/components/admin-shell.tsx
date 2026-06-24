@@ -16,7 +16,10 @@ const NAV: NavItem[] = [
   { href: "/teams", label: "Teams" },
   { href: "/leave", label: "Leave" },
   { href: "/attendance", label: "Attendance" },
-  { href: "/onboarding", label: "Onboarding", hrOnly: true },
+  // Temporarily removed from the admin-web — onboarding system parked for
+  // later. Uncomment this single line to bring it back. The page code
+  // (app/onboarding/*) and API helpers (api.ts, Feature 6A) are left intact.
+  // { href: "/onboarding", label: "Onboarding", hrOnly: true },
   { href: "/manage", label: "Manage users", hrOnly: true },
 ];
 

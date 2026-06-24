@@ -174,6 +174,19 @@ export async function analyzeUserDay(
   return res;
 }
 
+/** Analyze EVERY working screenshot in a wall-clock window across a date range
+ *  (`POST /admin/users/:id/analyze-range`). `start`/`end` are "HH:MM" in the
+ *  admin's local time; the browser's tz offset is sent so the server matches it. */
+export async function analyzeUserRange(
+  userId: string,
+  input: { from: string; to: string; start_time: string; end_time: string },
+): Promise<{ analyzed: number; skipped: number; days: number }> {
+  return (await authedJson("POST", `/admin/users/${userId}/analyze-range`, {
+    ...input,
+    tz_offset_minutes: -new Date().getTimezoneOffset(),
+  })) as { analyzed: number; skipped: number; days: number };
+}
+
 // ---- Day-based screenshots with verdicts (Feature 3) ----
 
 const dayShotSchema = z.object({
@@ -528,7 +541,6 @@ const attendanceRowSchema = z.object({
   name: z.string(),
   email: z.string(),
   present: z.number(),
-  partial: z.number(),
   absent: z.number(),
   leave: z.number(),
   holiday: z.number(),

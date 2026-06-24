@@ -4,11 +4,74 @@
 //! presence status at capture time — so sampling/analysis can exclude
 //! non-working (e.g. meeting) shots.
 
-use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveTime, TimeZone, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
+
+/// A working screenshot selected for range analysis (shape the analyzer needs).
+#[derive(Debug, Clone)]
+pub struct WindowShot {
+    pub screenshot_id: Uuid,
+    pub taken_at: DateTime<Utc>,
+    pub storage_key: String,
+    pub captured_status: String,
+}
+
+/// All **working** screenshots taken on `local_day` whose wall-clock time falls
+/// in `[start_time, end_time]`, evaluated in the admin's timezone.
+///
+/// `tz_offset_minutes` is the offset to ADD to the stored UTC `taken_at` to get
+/// the admin's local time (i.e. `-getTimezoneOffset()` in the browser; +330 for
+/// IST). An overnight window (`start_time > end_time`, e.g. 22:00–02:00) wraps
+/// across midnight. Meeting/idle/break shots are excluded (Feature 2).
+pub async fn list_working_in_window(
+    pool: &PgPool,
+    user_id: Uuid,
+    local_day: NaiveDate,
+    start_time: NaiveTime,
+    end_time: NaiveTime,
+    tz_offset_minutes: i32,
+) -> Result<Vec<WindowShot>, AppError> {
+    let wraps = start_time > end_time;
+    let rows = sqlx::query!(
+        r#"
+        SELECT id, taken_at, storage_key, captured_status
+        FROM screenshots
+        WHERE user_id = $1
+          AND captured_status = 'working'
+          AND (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::date = $2::date
+          AND (
+                ($6::bool AND (
+                    (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::time >= $3::time
+                    OR (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::time <= $4::time))
+             OR (NOT $6::bool AND
+                    (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::time >= $3::time
+                    AND (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::time <= $4::time)
+              )
+        ORDER BY taken_at
+        "#,
+        user_id,
+        local_day,
+        start_time,
+        end_time,
+        tz_offset_minutes,
+        wraps,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| WindowShot {
+            screenshot_id: r.id,
+            taken_at: r.taken_at,
+            storage_key: r.storage_key,
+            captured_status: r.captured_status,
+        })
+        .collect())
+}
 
 /// UTC `[start, end)` bounds of a calendar day.
 fn day_bounds(day: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {

@@ -100,7 +100,6 @@ export default function AttendancePage() {
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="py-2 font-medium">Employee</th>
                   <th className="py-2 text-center font-medium">Present</th>
-                  <th className="py-2 text-center font-medium">Partial</th>
                   <th className="py-2 text-center font-medium">Absent</th>
                   <th className="py-2 text-center font-medium">Leave</th>
                   <th className="py-2 text-center font-medium">Holiday</th>
@@ -117,7 +116,6 @@ export default function AttendancePage() {
                       <div className="text-xs text-muted-foreground">{r.email}</div>
                     </td>
                     <td className="py-2 text-center tabular-nums text-green-700">{r.present}</td>
-                    <td className="py-2 text-center tabular-nums text-amber-700">{r.partial}</td>
                     <td className="py-2 text-center tabular-nums text-red-700">{r.absent}</td>
                     <td className="py-2 text-center tabular-nums">{r.leave}</td>
                     <td className="py-2 text-center tabular-nums text-muted-foreground">

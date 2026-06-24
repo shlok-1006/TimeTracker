@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, taken_at, storage_key, captured_status\n        FROM screenshots\n        WHERE user_id = $1\n          AND captured_status = 'working'\n          AND (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::date = $2::date\n          AND (\n                ($6::bool AND (\n                    (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::time >= $3::time\n                    OR (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::time <= $4::time))\n             OR (NOT $6::bool AND\n                    (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::time >= $3::time\n                    AND (taken_at + make_interval(0, 0, 0, 0, 0, $5::int))::time <= $4::time)\n              )\n        ORDER BY taken_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "taken_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "captured_status",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Time",
+        "Time",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8da53c80da8640fc31cb43dfc8da2315533fa087455c3c3026ee6fda2f87f5ae"
+}

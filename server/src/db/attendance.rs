@@ -194,7 +194,6 @@ pub struct UserAttendanceSummary {
     pub name: String,
     pub email: String,
     pub present: i64,
-    pub partial: i64,
     pub absent: i64,
     pub leave: i64,
     pub holiday: i64,
@@ -212,7 +211,6 @@ pub async fn report(
         r#"
         SELECT u.id AS user_id, u.name, u.email,
           COUNT(ad.*) FILTER (WHERE ad.status = 'present') AS "present!",
-          COUNT(ad.*) FILTER (WHERE ad.status = 'partial') AS "partial!",
           COUNT(ad.*) FILTER (WHERE ad.status = 'absent')  AS "absent!",
           COUNT(ad.*) FILTER (WHERE ad.status = 'leave')   AS "leave!",
           COUNT(ad.*) FILTER (WHERE ad.status = 'holiday') AS "holiday!",
@@ -239,7 +237,6 @@ pub async fn report(
             name: r.name,
             email: r.email,
             present: r.present,
-            partial: r.partial,
             absent: r.absent,
             leave: r.leave,
             holiday: r.holiday,

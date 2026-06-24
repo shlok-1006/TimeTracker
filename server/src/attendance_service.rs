@@ -1,8 +1,9 @@
 //! Attendance business logic (Feature 6C): derive a day's attendance status
 //! from the interval log, integrating approved leave and company holidays.
 //!
-//! Precedence: actual worked time always wins (present/partial). Only when there
-//! is *no* work do we explain the day as leave → holiday → weekend → absent.
+//! Precedence: any worked time counts as present (a started timer = present).
+//! Only when there is *no* work do we explain the day as
+//! leave → holiday → weekend → absent.
 
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use sqlx::PgPool;
@@ -10,9 +11,6 @@ use uuid::Uuid;
 
 use crate::db::{attendance, leave};
 use crate::error::AppError;
-
-/// Worked seconds at/above which a day counts as a full "present" day.
-pub const FULL_DAY_SECONDS: i64 = 6 * 3600;
 
 /// UTC `[start, end)` bounds for a calendar day.
 fn day_bounds(day: NaiveDate) -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
@@ -31,10 +29,8 @@ fn derive_status(
     holiday_name: Option<&str>,
     day: NaiveDate,
 ) -> (&'static str, String) {
-    if worked_seconds >= FULL_DAY_SECONDS {
+    if worked_seconds > 0 {
         ("present", String::new())
-    } else if worked_seconds > 0 {
-        ("partial", String::new())
     } else if let Some(lt) = leave_type {
         ("leave", lt.to_string())
     } else if let Some(h) = holiday_name {
@@ -135,21 +131,16 @@ mod tests {
     }
 
     #[test]
-    fn full_day_is_present() {
-        let (s, _) = derive_status(FULL_DAY_SECONDS, None, None, d(2026, 6, 8));
-        assert_eq!(s, "present");
-    }
-
-    #[test]
-    fn some_work_is_partial() {
-        let (s, _) = derive_status(3600, None, None, d(2026, 6, 8));
-        assert_eq!(s, "partial");
+    fn any_work_is_present() {
+        // No threshold: a full day or a single minute both count as present.
+        assert_eq!(derive_status(6 * 3600, None, None, d(2026, 6, 8)).0, "present");
+        assert_eq!(derive_status(60, None, None, d(2026, 6, 8)).0, "present");
     }
 
     #[test]
     fn work_overrides_leave_and_holiday() {
         // A weekend day with work still counts as worked.
-        let (s, _) = derive_status(FULL_DAY_SECONDS, Some("Annual"), Some("X"), d(2026, 6, 13));
+        let (s, _) = derive_status(3600, Some("Annual"), Some("X"), d(2026, 6, 13));
         assert_eq!(s, "present");
     }
 

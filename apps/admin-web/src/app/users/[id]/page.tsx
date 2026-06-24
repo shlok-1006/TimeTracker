@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   analyzeUserDay,
+  analyzeUserRange,
   fetchUserHours,
   fetchUserReport,
   fetchUserDayScreenshots,
@@ -61,6 +62,19 @@ export default function UserDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["user_report", id, date] });
       qc.invalidateQueries({ queryKey: ["user_day_screenshots", id, date] });
+    },
+  });
+  // Deep analysis over a date + wall-clock time window (analyzes every working
+  // screenshot in the window, not just the daily sample).
+  const [range, setRange] = useState(() => {
+    const today = new Date().toLocaleDateString("en-CA");
+    return { from: today, to: today, start_time: "15:00", end_time: "19:00" };
+  });
+  const analyzeRange = useMutation({
+    mutationFn: () => analyzeUserRange(id, range),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["user_report", id] });
+      qc.invalidateQueries({ queryKey: ["user_day_screenshots", id] });
     },
   });
   const teams = useQuery({
@@ -176,6 +190,72 @@ export default function UserDetailPage() {
         {report.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
         {report.error && <p className="text-red-600">{(report.error as Error).message}</p>}
         {report.data !== undefined && <ReportCard report={report.data} />}
+      </section>
+
+      {/* Deep analysis: analyze every working screenshot in a time window. */}
+      <section className="rounded-lg border bg-card p-6 text-card-foreground">
+        <h2 className="mb-1 text-lg font-semibold">Deep analysis (time range)</h2>
+        <p className="mb-4 text-xs text-muted-foreground">
+          Analyzes <strong>every</strong> working screenshot taken between the chosen times,
+          across the date range (not just the daily sample). Times are in your local timezone.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground">From date</span>
+            <input
+              type="date"
+              value={range.from}
+              onChange={(e) => setRange({ ...range, from: e.target.value })}
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground">To date</span>
+            <input
+              type="date"
+              value={range.to}
+              onChange={(e) => setRange({ ...range, to: e.target.value })}
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground">From time</span>
+            <input
+              type="time"
+              value={range.start_time}
+              onChange={(e) => setRange({ ...range, start_time: e.target.value })}
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground">To time</span>
+            <input
+              type="time"
+              value={range.end_time}
+              onChange={(e) => setRange({ ...range, end_time: e.target.value })}
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+            />
+          </label>
+          <button
+            onClick={() => analyzeRange.mutate()}
+            disabled={analyzeRange.isPending}
+            className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {analyzeRange.isPending ? "Analyzing…" : "Analyze range"}
+          </button>
+        </div>
+        {analyzeRange.isError && (
+          <p className="mt-3 text-sm text-red-600">{(analyzeRange.error as Error).message}</p>
+        )}
+        {analyzeRange.isSuccess && (
+          <p className="mt-3 text-sm text-green-600">
+            Analyzed {analyzeRange.data.analyzed} screenshot
+            {analyzeRange.data.analyzed === 1 ? "" : "s"} across {analyzeRange.data.days} day
+            {analyzeRange.data.days === 1 ? "" : "s"}
+            {analyzeRange.data.skipped > 0 ? ` (skipped ${analyzeRange.data.skipped})` : ""}. Open
+            a day in that range to see its updated report.
+          </p>
+        )}
       </section>
 
       <UserTasks userId={id} />

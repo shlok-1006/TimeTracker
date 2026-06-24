@@ -9,7 +9,7 @@ use axum::{
     routing::{delete, get},
     Json, Router,
 };
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::str::FromStr;
@@ -210,6 +210,80 @@ async fn analyze_day(
     })))
 }
 
+/// Max days a single range-analysis request may span (guards against huge runs).
+const MAX_ANALYZE_RANGE_DAYS: i64 = 92;
+
+#[derive(Deserialize)]
+struct AnalyzeRangeBody {
+    from: NaiveDate,
+    to: NaiveDate,
+    /// Wall-clock window in the admin's local time, "HH:MM" or "HH:MM:SS".
+    start_time: String,
+    end_time: String,
+    /// Minutes to add to UTC to reach the admin's local time (-getTimezoneOffset()).
+    #[serde(default)]
+    tz_offset_minutes: i32,
+}
+
+/// Accept "HH:MM" or "HH:MM:SS" (the `<input type="time">` value omits seconds).
+fn parse_hm(s: &str) -> Result<NaiveTime, AppError> {
+    NaiveTime::parse_from_str(s, "%H:%M:%S")
+        .or_else(|_| NaiveTime::parse_from_str(s, "%H:%M"))
+        .map_err(|_| AppError::BadRequest(format!("invalid time '{s}' (use HH:MM)")))
+}
+
+/// `POST /admin/users/:id/analyze-range` — analyze EVERY working screenshot
+/// whose capture time falls in `[start_time, end_time]` (admin-local) across the
+/// `from..=to` date range. Unlike the daily route this does not sample; each
+/// day's verdicts are stored and its report rebuilt.
+async fn analyze_range(
+    State(state): State<AppState>,
+    RequireAdmin(user): RequireAdmin,
+    Path(target): Path<Uuid>,
+    Json(body): Json<AnalyzeRangeBody>,
+) -> Result<Json<Value>, AppError> {
+    authorize_view(&state, &user, target).await?;
+    if !state.gemini.is_configured() {
+        return Err(AppError::BadRequest(
+            "Vision AI is not configured (set GEMINI_API_KEY)".into(),
+        ));
+    }
+    if body.to < body.from {
+        return Err(AppError::BadRequest("`to` is before `from`".into()));
+    }
+    if (body.to - body.from).num_days() > MAX_ANALYZE_RANGE_DAYS {
+        return Err(AppError::BadRequest(format!(
+            "date range too large (max {MAX_ANALYZE_RANGE_DAYS} days)"
+        )));
+    }
+    let start_time = parse_hm(&body.start_time)?;
+    let end_time = parse_hm(&body.end_time)?;
+
+    let out = analysis_service::analyze_user_range(
+        &state.db,
+        &state.storage,
+        &state.gemini,
+        &state.linear,
+        target,
+        body.from,
+        body.to,
+        start_time,
+        end_time,
+        body.tz_offset_minutes,
+    )
+    .await?;
+
+    audit::log(&state.db, user.id, "screenshot.analyze_range", "user", Some(target)).await;
+    Ok(Json(json!({
+        "from": body.from,
+        "to": body.to,
+        "analyzed": out.analyzed,
+        "skipped": out.skipped,
+        "days": out.days,
+        "model": state.gemini.model(),
+    })))
+}
+
 /// `GET /admin/users/:id/analysis?day=YYYY-MM-DD` — stored analysis results.
 async fn analysis_for_day(
     State(state): State<AppState>,
@@ -343,5 +417,6 @@ pub fn router() -> Router<AppState> {
         .route("/admin/users/:id/timeline", get(user_timeline))
         .route("/admin/users/:id/sample", axum::routing::post(sample_day))
         .route("/admin/users/:id/analyze", axum::routing::post(analyze_day))
+        .route("/admin/users/:id/analyze-range", axum::routing::post(analyze_range))
         .route("/admin/users/:id/analysis", get(analysis_for_day))
 }

@@ -2,12 +2,12 @@
 //! scheduler): sample the day's screenshots → vision-analyze the working ones →
 //! persist verdicts → build the daily report.
 
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate, NaiveTime};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::db::analysis_reports::AnalysisReport;
-use crate::db::{analysis_results, manual_tasks};
+use crate::db::{analysis_results, manual_tasks, screenshots};
 use crate::error::AppError;
 use crate::gemini_provider::GeminiProvider;
 use crate::linear_service::LinearService;
@@ -108,6 +108,81 @@ pub async fn analyze_user_day(
 
     let report = report_service::build_report(db, user_id, day, job.id, gemini).await?;
     Ok(AnalyzeOutcome { analyzed, skipped, report })
+}
+
+/// Counts from a range analysis run.
+pub struct RangeOutcome {
+    pub analyzed: usize,
+    pub skipped: usize,
+    /// Days in the range that had at least one matching working screenshot.
+    pub days: usize,
+}
+
+/// Analyze **every** working screenshot in a wall-clock time window across a date
+/// range for one employee (unlike `analyze_user_day`, which samples). Each day's
+/// verdicts are stored under that day's analysis job and its report is rebuilt,
+/// so the existing per-day report/calendar views reflect the deeper analysis.
+///
+/// `tz_offset_minutes` interprets `start_time`/`end_time` in the admin's local
+/// timezone (offset to add to UTC). The context (Linear tickets + open manual
+/// tasks) is built once and reused across all days.
+#[allow(clippy::too_many_arguments)]
+pub async fn analyze_user_range(
+    db: &PgPool,
+    storage: &StorageClient,
+    gemini: &GeminiProvider,
+    linear: &LinearService,
+    user_id: Uuid,
+    from: NaiveDate,
+    to: NaiveDate,
+    start_time: NaiveTime,
+    end_time: NaiveTime,
+    tz_offset_minutes: i32,
+) -> Result<RangeOutcome, AppError> {
+    let tickets = build_context(db, linear, user_id).await?;
+
+    let mut analyzed = 0usize;
+    let mut skipped = 0usize;
+    let mut days = 0usize;
+
+    let mut day = from;
+    while day <= to {
+        let shots = screenshots::list_working_in_window(
+            db, user_id, day, start_time, end_time, tz_offset_minutes,
+        )
+        .await?;
+
+        if !shots.is_empty() {
+            let job = sampler::create_daily_job(db, user_id, day).await?;
+            for s in shots {
+                let image = match storage.fetch_object(&s.storage_key).await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        tracing::warn!(screenshot = %s.screenshot_id, "fetch failed: {e}");
+                        continue;
+                    }
+                };
+                match vision_analyzer::analyze_screenshot(
+                    gemini, &image, "image/jpeg", &s.captured_status, &tickets,
+                )
+                .await
+                {
+                    Ok(AnalysisOutcome::Analyzed(a)) => {
+                        analysis_results::upsert(db, job.id, s.screenshot_id, &a).await?;
+                        analyzed += 1;
+                    }
+                    Ok(AnalysisOutcome::SkippedMeetingScreenshot) => skipped += 1,
+                    Err(e) => tracing::warn!(screenshot = %s.screenshot_id, "analysis failed: {e}"),
+                }
+            }
+            report_service::build_report(db, user_id, day, job.id, gemini).await?;
+            days += 1;
+        }
+
+        day += Duration::days(1);
+    }
+
+    Ok(RangeOutcome { analyzed, skipped, days })
 }
 
 #[cfg(test)]

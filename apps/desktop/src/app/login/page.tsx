@@ -8,7 +8,6 @@ import { useSession } from "@/lib/session";
 export default function LoginPage() {
   const router = useRouter();
   const { session, hydrated, hydrate, setSession } = useSession();
-  const [serverUrl, setServerUrl] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -17,19 +16,6 @@ export default function LoginPage() {
   useEffect(() => {
     if (!hydrated) hydrate();
   }, [hydrated, hydrate]);
-
-  // Pre-fill the server URL with whatever was saved previously.
-  useEffect(() => {
-    (async () => {
-      try {
-        const invoke = await invoker();
-        const saved = await invoke<string | null>("get_server_url");
-        if (saved) setServerUrl(saved);
-      } catch {
-        /* not running under Tauri (plain browser) — ignore */
-      }
-    })();
-  }, []);
 
   useEffect(() => {
     if (hydrated && session) router.replace("/dashboard");
@@ -41,10 +27,6 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const invoke = await invoker();
-      // Save the server URL first so the login request targets the right server.
-      if (serverUrl.trim()) {
-        await invoke("set_server_url", { url: serverUrl.trim() });
-      }
       const result = await invoke<EmployeeSession>("login", { email, password });
       setSession(result);
       invoke("heartbeat_now").catch(() => {});
@@ -63,20 +45,6 @@ export default function LoginPage() {
         <p className="text-slate-500">Employee sign in</p>
       </header>
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
-        <label className="flex flex-col gap-1 text-sm">
-          Server URL
-          <input
-            type="text"
-            required
-            value={serverUrl}
-            onChange={(e) => setServerUrl(e.target.value)}
-            className="rounded-md border border-slate-300 px-3 py-2 dark:border-slate-700 dark:bg-slate-900"
-            placeholder="http://35.254.50.208/api"
-          />
-          <span className="text-xs text-slate-400">
-            Your company&apos;s TimeTracker server address (ask your admin).
-          </span>
-        </label>
         <label className="flex flex-col gap-1 text-sm">
           Email
           <input

@@ -4900,7 +4900,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "argon2",
@@ -5847,7 +5847,7 @@ dependencies = [
 
 [[package]]
 name = "timetracker-desktop"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",

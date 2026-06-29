@@ -11,7 +11,7 @@
 use anyhow::Context;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use server::storage::{S3Config, StorageClient};
+use server::storage::{GcsConfig, StorageClient};
 use server::{config::Config, db, jwt::JwtKeys, AppState};
 
 #[tokio::main]
@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("database connected and migrations applied");
 
     let jwt = JwtKeys::new(&config.jwt_access_secret, config.jwt_access_ttl_seconds);
-    let storage = StorageClient::new(S3Config::from_env());
+    let storage = StorageClient::new(GcsConfig::from_env());
     let linear = server::linear_service::LinearService::from_env();
     tracing::info!(linear_configured = linear.is_configured(), "linear integration");
     let gemini = server::gemini_provider::GeminiProvider::from_env();

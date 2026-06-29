@@ -34,7 +34,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 argon2 = { workspace = true }
 jsonwebtoken = { workspace = true }
-hmac = { workspace = true }
+rsa = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 # HTTP client for the Linear GraphQL API (rustls — no C toolchain).

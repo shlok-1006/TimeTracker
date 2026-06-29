@@ -10,7 +10,7 @@ use tower::ServiceExt; // for `oneshot`
 
 use server::jwt::JwtKeys;
 use server::linear_service::LinearService;
-use server::storage::{S3Config, StorageClient};
+use server::storage::{GcsConfig, StorageClient};
 use server::AppState;
 
 #[tokio::test]
@@ -24,7 +24,7 @@ async fn health_returns_ok() {
     let app = server::build_router(AppState::new(
         pool,
         JwtKeys::new("test-secret", 900),
-        StorageClient::new(S3Config::from_env()),
+        StorageClient::new(GcsConfig::from_env()),
         LinearService::from_env(),
         server::gemini_provider::GeminiProvider::from_env(),
         2_592_000,

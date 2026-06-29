@@ -98,10 +98,10 @@ async fn user_screenshots(
     let day = q.day.unwrap_or_else(|| Utc::now().date_naive());
     let now = Utc::now();
     let rows = screenshots::list_for_day(&state.db, target, day).await?;
-    let items: Vec<Value> = rows
+    let items = rows
         .iter()
         .map(|r| crate::routes::uploads::day_item(&state.storage, r, now))
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(Value::Array(items)))
 }
 
@@ -155,17 +155,17 @@ async fn sample_day(
 
     let shots = sampler::sample_screenshots(&state.db, target, day).await?;
     let now = Utc::now();
-    let samples: Vec<Value> = shots
+    let samples = shots
         .into_iter()
-        .map(|s| {
-            json!({
+        .map(|s| -> Result<Value, AppError> {
+            Ok(json!({
                 "id": s.screenshot_id,
                 "bucket": s.bucket,
                 "taken_at": s.taken_at,
-                "url": state.storage.presign_get(&s.storage_key, VIEW_URL_EXPIRES_SECS, now),
-            })
+                "url": state.storage.presign_get(&s.storage_key, VIEW_URL_EXPIRES_SECS, now)?,
+            }))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     audit::log(&state.db, user.id, "screenshot.sample", "user", Some(target)).await;
     Ok(Json(json!({ "day": day, "count": samples.len(), "samples": samples })))

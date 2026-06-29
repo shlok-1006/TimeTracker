@@ -34,15 +34,15 @@ pub fn presign_screenshot(
     storage: &StorageClient,
     user_id: Uuid,
     now: DateTime<Utc>,
-) -> PresignedUpload {
+) -> anyhow::Result<PresignedUpload> {
     let storage_key = screenshot_key(user_id, now);
-    let url = storage.presign_put(&storage_key, PRESIGN_EXPIRES_SECS, now);
-    PresignedUpload {
+    let url = storage.presign_put(&storage_key, PRESIGN_EXPIRES_SECS, now)?;
+    Ok(PresignedUpload {
         url,
         method: "PUT",
         storage_key,
         expires_in: PRESIGN_EXPIRES_SECS,
-    }
+    })
 }
 
 #[cfg(test)]

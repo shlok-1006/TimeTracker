@@ -5,7 +5,7 @@
 //! capture-time status (Feature 2): meeting screenshots are stored and
 //! viewable but excluded from AI sampling/analysis. Flow per Rule 5:
 //!   1. POST /uploads/presign  -> presigned PUT URL + storage key
-//!   2. PUT the JPEG bytes directly to storage (MinIO/R2)
+//!   2. PUT the JPEG bytes directly to storage (Google Cloud Storage)
 //!   3. POST /screenshots      -> store metadata only
 //!
 //! Capture runs on a blocking thread; failures are logged and retried.

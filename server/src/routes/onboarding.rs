@@ -116,18 +116,18 @@ async fn get_candidate(
     let tasks = onboarding::list_tasks(&state.db, id).await?;
     let docs = onboarding::list_documents(&state.db, id).await?;
     let now = Utc::now();
-    let documents: Vec<Value> = docs
+    let documents = docs
         .iter()
-        .map(|d| {
-            json!({
+        .map(|d| -> Result<Value, AppError> {
+            Ok(json!({
                 "id": d.id,
                 "doc_type": d.doc_type,
                 "storage_key": d.storage_key,
                 "created_at": d.created_at,
-                "url": state.storage.presign_get(&d.storage_key, VIEW_URL_EXPIRES_SECS, now),
-            })
+                "url": state.storage.presign_get(&d.storage_key, VIEW_URL_EXPIRES_SECS, now)?,
+            }))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(json!({
         "candidate": candidate,
         "tasks": tasks,
@@ -289,7 +289,7 @@ async fn presign_document(
     }
     let suffix = sanitize_filename(body.filename.as_deref().unwrap_or(""));
     let storage_key = format!("{}{}-{}", doc_prefix(id), Uuid::new_v4(), suffix);
-    let url = state.storage.presign_put(&storage_key, UPLOAD_URL_EXPIRES_SECS, Utc::now());
+    let url = state.storage.presign_put(&storage_key, UPLOAD_URL_EXPIRES_SECS, Utc::now())?;
     Ok(Json(json!({
         "url": url,
         "method": "PUT",
@@ -324,12 +324,13 @@ async fn save_document(
     let doc = onboarding::add_document(&state.db, id, body.doc_type.trim(), &body.storage_key).await?;
     audit::log(&state.db, hr.id, "candidate.document.add", "candidate_document", Some(doc.id)).await;
     let now = Utc::now();
+    let url = state.storage.presign_get(&doc.storage_key, VIEW_URL_EXPIRES_SECS, now)?;
     Ok(Json(json!({
         "id": doc.id,
         "doc_type": doc.doc_type,
         "storage_key": doc.storage_key,
         "created_at": doc.created_at,
-        "url": state.storage.presign_get(&doc.storage_key, VIEW_URL_EXPIRES_SECS, now),
+        "url": url,
     })))
 }
 

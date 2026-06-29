@@ -46,9 +46,10 @@ sqlx = { version = "0.8", default-features = false, features = [
 argon2 = { version = "0.5", features = ["std"] }
 jsonwebtoken = "9"
 
-# S3 (SigV4) presigning — pure Rust, no C toolchain required.
-hmac = "0.12"
-sha2 = "0.10"
+# GCS V4 (GOOG4-RSA-SHA256) signed-URL presigning — pure Rust, no C toolchain.
+# `sha2/oid` supplies the SHA-256 OID for the PKCS#1 v1.5 DigestInfo prefix.
+rsa = { version = "0.9", features = ["pem"] }
+sha2 = { version = "0.10", features = ["oid"] }
 hex = "0.4"
 
 # Serialization

@@ -29,9 +29,13 @@ pub(crate) struct DayQuery {
 /// Build one day-listing item: the screenshot, its verdict, a meeting flag, and
 /// a short-lived presigned view URL (Rule 5). Shared by the `/me` and admin
 /// listings. Top-level `id`/`taken_at`/`url` are kept as back-compat aliases.
-pub(crate) fn day_item(storage: &StorageClient, s: &DayScreenshot, now: DateTime<Utc>) -> Value {
-    let url = storage.presign_get(&s.storage_key, VIEW_URL_EXPIRES_SECS, now);
-    json!({
+pub(crate) fn day_item(
+    storage: &StorageClient,
+    s: &DayScreenshot,
+    now: DateTime<Utc>,
+) -> Result<Value, AppError> {
+    let url = storage.presign_get(&s.storage_key, VIEW_URL_EXPIRES_SECS, now)?;
+    Ok(json!({
         "screenshot": {
             "id": s.id,
             "taken_at": s.taken_at,
@@ -44,12 +48,12 @@ pub(crate) fn day_item(storage: &StorageClient, s: &DayScreenshot, now: DateTime
         "id": s.id,
         "taken_at": s.taken_at,
         "url": url,
-    })
+    }))
 }
 
 /// `POST /uploads/presign` — get a short-lived presigned PUT URL + storage key.
 async fn presign(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, AppError> {
-    let p = upload_service::presign_screenshot(&state.storage, user.id, Utc::now());
+    let p = upload_service::presign_screenshot(&state.storage, user.id, Utc::now())?;
     Ok(Json(json!({
         "url": p.url,
         "method": p.method,
@@ -115,7 +119,10 @@ async fn my_screenshots(
     let day = q.day.unwrap_or_else(|| Utc::now().date_naive());
     let now = Utc::now();
     let rows = screenshots::list_for_day(&state.db, user.id, day).await?;
-    let items: Vec<Value> = rows.iter().map(|r| day_item(&state.storage, r, now)).collect();
+    let items = rows
+        .iter()
+        .map(|r| day_item(&state.storage, r, now))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(Value::Array(items)))
 }
 

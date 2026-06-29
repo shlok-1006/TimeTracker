@@ -13,7 +13,7 @@ layered on in subsequent steps.
 | Admin Dashboard | Next.js 15 + TypeScript + Tailwind + Shadcn UI        |
 | API Server      | Rust + Axum + SQLx                                     |
 | Database        | PostgreSQL                                            |
-| Object Storage  | MinIO (local) / Cloudflare R2 (production)            |
+| Object Storage  | Google Cloud Storage (GCS)                            |
 
 ## File tree
 
@@ -22,7 +22,7 @@ timetracker/
 ├── Cargo.toml                  # Rust workspace (server + desktop)
 ├── package.json                # pnpm workspace root + scripts
 ├── pnpm-workspace.yaml
-├── docker-compose.yml          # PostgreSQL + MinIO
+├── docker-compose.yml          # PostgreSQL + API + admin-web (storage is GCS)
 ├── rust-toolchain.toml
 ├── .env.example                # copy to .env
 ├── apps/
@@ -64,7 +64,8 @@ timetracker/
 
 - Rust (stable) + Cargo — <https://rustup.rs>
 - Node.js ≥ 20 and pnpm ≥ 9 — `npm install -g pnpm`
-- Docker (for PostgreSQL + MinIO)
+- Docker (for PostgreSQL)
+- A Google Cloud Storage bucket + a service-account key (for screenshots)
 - Tauri 2 system deps — <https://tauri.app/start/prerequisites/>
 - `sqlx-cli` (optional, for manual migrations) — `cargo install sqlx-cli --no-default-features --features rustls,postgres`
 
@@ -74,7 +75,8 @@ timetracker/
 # 0. From the timetracker/ directory, create your env file
 cp .env.example .env
 
-# 1. Start infrastructure (PostgreSQL + MinIO + bucket)
+# 1. Start infrastructure (PostgreSQL). Screenshots use Google Cloud Storage —
+#    set GCS_BUCKET + GCS_SA_KEY_JSON in .env (see .env.example).
 docker compose up -d
 
 # 2. Install JS dependencies (whole workspace)
@@ -126,8 +128,6 @@ pnpm -r lint
 | Desktop frontend | 3000 |
 | Admin dashboard  | 3001 |
 | PostgreSQL       | 5432 |
-| MinIO S3 API     | 9000 |
-| MinIO console    | 9001 |
 
 ## Architecture notes
 
@@ -148,8 +148,9 @@ pnpm -r lint
   truth; it never talks to Postgres directly (Rule 4). STEP 0 ships the shell and
   a proven Rust⇄JS bridge (`app_info` command); the SQLite layer and sync worker
   arrive in later steps.
-- **Screenshots** (Rule 5): the server stores only metadata; bytes live in
-  MinIO/R2. The `screenshots` bucket is provisioned by `docker compose`.
+- **Screenshots** (Rule 5): the server stores only metadata; bytes live in a
+  Google Cloud Storage bucket. The server mints short-lived V4 signed URLs and
+  clients upload/fetch bytes directly to/from GCS.
 
 ---
 
@@ -321,9 +322,10 @@ PUT URLs, the desktop uploads directly to storage, then posts metadata only.
 - Flow: `POST /uploads/presign` → `PUT` bytes to storage → `POST /screenshots`.
 
 ### Server
-- `storage.rs` — S3-compatible **SigV4 presigner** (pure Rust, verified against
-  AWS's documented test vector; path-style for MinIO).
-- `upload_service.rs` — mints presigned PUTs with a user-namespaced key
+- `storage.rs` — **GCS V4 signer** (`GOOG4-RSA-SHA256`, pure Rust via `rsa`;
+  signs locally with the service-account key, no GCS SDK). Round-trip verified
+  in unit tests against the matching public key.
+- `upload_service.rs` — mints signed PUTs with a user-namespaced key
   (`<user_id>/<yyyymmdd>/<uuid>.jpg`).
 - `migrations/0005_screenshots.sql` + `db/screenshots.rs` — metadata table
   (`id, user_id, storage_key, taken_at, interval_id`).
@@ -332,33 +334,36 @@ PUT URLs, the desktop uploads directly to storage, then posts metadata only.
   namespace.
 
 ### Storage config (`.env`)
-`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`,
-`S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` (defaults target local MinIO).
+`GCS_BUCKET` (default `ruh-time-tracker`), `GCS_LOCATION` (default `auto`), and
+the service-account key as **`GCS_SA_KEY_BASE64`** — the SA key JSON, base64-encoded
+(one line; raw JSON breaks `.env` on the multi-line `private_key`). Raw
+`GCS_SA_KEY_JSON` and `GOOGLE_APPLICATION_CREDENTIALS` (file path) are accepted as
+fallbacks. See `.env.example`.
 
-### Running storage without Docker
-Use the standalone MinIO binary. **S3 must be on `:9100`** — `:9000` is the API
-server; if MinIO binds `:9000`, login returns `400 Bad Request`.
-```powershell
-# download minio.exe to C:\minio\, then:
-.\scripts\start-minio.ps1
-# or manually:
-$env:MINIO_ROOT_USER='minioadmin'; $env:MINIO_ROOT_PASSWORD='minioadmin'
-.\minio.exe server C:\minio\data --address ":9100" --console-address ":9001"
-# create the bucket (mc.exe) or via the console at http://localhost:9001
-mc alias set local http://localhost:9100 minioadmin minioadmin
-mc mb local/screenshots
+### Provisioning the bucket (gcloud)
+```bash
+# Create the bucket and a service account with object access.
+gcloud storage buckets create gs://ruh-time-tracker --location=US
+gcloud iam service-accounts create timetracker-storage
+gcloud storage buckets add-iam-policy-binding gs://ruh-time-tracker \
+  --member=serviceAccount:timetracker-storage@$PROJECT.iam.gserviceaccount.com \
+  --role=roles/storage.objectAdmin     # or roles/storage.objectUser (no delete)
+# Mint a signing key (its private key signs the V4 URLs), then base64-encode it.
+gcloud iam service-accounts keys create key.json \
+  --iam-account=timetracker-storage@$PROJECT.iam.gserviceaccount.com
+base64 -w0 key.json   # -> paste into GCS_SA_KEY_BASE64 (PowerShell: [Convert]::ToBase64String(...))
 ```
-For production, point the `S3_*` vars at a Cloudflare R2 bucket (set
-`S3_FORCE_PATH_STYLE=false`).
+Browser uploads (admin) need a CORS rule allowing `PUT`/`GET` from the dashboard
+origin: `gcloud storage buckets update gs://ruh-time-tracker --cors-file=cors.json`.
 
 ### Tests
-- Server: `matches_aws_documented_vector` (SigV4 correctness), path-style
-  presign, namespaced key.
+- Server: `signed_url_round_trips` (signature verifies), `canonical_request_is_v4_scoped_and_sorted`,
+  `unconfigured_client_errors`, namespaced key.
 - Desktop: `captures_only_while_working`, JPEG encoding.
 
 > New routes/enum in STEP 4 — **restart `cargo run -p server`**. Screenshots
-> upload to storage only once MinIO/R2 is reachable; presign + metadata work
-> regardless.
+> upload to storage only once GCS credentials are configured; presign + metadata
+> work regardless.
 
 ---
 
@@ -393,8 +398,8 @@ only their own hours/screenshots/status and cannot reach `/admin/*` (403).
 - Desktop: `summarize_today_week_total_idle`, `daily_timeline_has_seven_buckets`.
 - Server: `/me/hours` SQL validated; `/me/screenshots` presigns GET URLs.
 
-> Screenshots only display once MinIO/R2 is running (the gallery hides images
-> that fail to load). **Restart `cargo run -p server`** for the new routes.
+> Screenshots only display once GCS credentials are configured (the gallery
+> hides images that fail to load). **Restart `cargo run -p server`** for the new routes.
 
 ---
 

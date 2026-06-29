@@ -14,7 +14,7 @@ use server::db::users;
 use server::jwt::JwtKeys;
 use server::linear_service::LinearService;
 use server::role::UserRole;
-use server::storage::{S3Config, StorageClient};
+use server::storage::{GcsConfig, StorageClient};
 use server::AppState;
 
 const SECRET: &str = "teams-api-test-secret";
@@ -23,7 +23,7 @@ fn app_with(pool: PgPool) -> Router {
     server::build_router(AppState::new(
         pool,
         JwtKeys::new(SECRET, 900),
-        StorageClient::new(S3Config::from_env()),
+        StorageClient::new(GcsConfig::from_env()),
         LinearService::from_env(),
         server::gemini_provider::GeminiProvider::from_env(),
         2_592_000,

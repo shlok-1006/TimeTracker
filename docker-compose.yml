@@ -92,20 +92,20 @@ services:
     expose:
       - "3001"   # internal only; reached through Nginx
 
-  # Reverse proxy / single web entrypoint on :80.
+  # Reverse proxy / single web entrypoint on :80 (origin behind Cloudflare).
   #   /     -> admin-web:3001
   #   /api/ -> server:9000  (prefix stripped)
-  # nginx:
-  #   image: nginx:1.27-alpine
-  #   container_name: timetracker-nginx
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - admin-web
-  #     - server
-  #   ports:
-  #     - "80:80"
-  #   volumes:
-  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: timetracker-nginx
+    restart: unless-stopped
+    depends_on:
+      - admin-web
+      - server
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
 
 volumes:
   postgres_data:

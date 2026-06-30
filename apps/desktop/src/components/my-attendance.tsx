@@ -14,7 +14,6 @@ type Calendar = { from: string; to: string; days: AttendanceDay[] };
 
 const STATUS_STYLE: Record<string, { bg: string; label: string }> = {
   present: { bg: "bg-green-500 text-white", label: "Present" },
-  partial: { bg: "bg-amber-400 text-slate-900", label: "Partial" },
   absent: { bg: "bg-red-500 text-white", label: "Absent" },
   leave: { bg: "bg-blue-500 text-white", label: "Leave" },
   holiday: { bg: "bg-purple-400 text-white", label: "Holiday" },

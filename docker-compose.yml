@@ -70,6 +70,15 @@ services:
       GCS_LOCATION: ${GCS_LOCATION:-auto}
       GCS_SA_KEY_BASE64: ${GCS_SA_KEY_BASE64:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:9000}
+      # Email (approval notifications + new-employee credentials). Empty SMTP_HOST
+      # => log-mode (no real send). Set these in the VM's .env for delivery.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-timetracker@localhost}
+      # Optional desktop-app download link included in the credentials email.
+      APP_DOWNLOAD_URL: ${APP_DOWNLOAD_URL:-}
       LINEAR_API_KEY: ${LINEAR_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       RUST_LOG: info,server=debug,sqlx=warn

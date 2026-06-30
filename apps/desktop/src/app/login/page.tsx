@@ -40,8 +40,9 @@ export default function LoginPage() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-8">
-      <header>
-        <h1 className="text-3xl font-bold">TimeTracker</h1>
+      <header className="flex flex-col gap-2">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/ruh-logo.svg" alt="RUH" className="h-9 w-auto self-start dark:brightness-0 dark:invert" />
         <p className="text-slate-500">Employee sign in</p>
       </header>
       <form onSubmit={onSubmit} className="flex flex-col gap-4">

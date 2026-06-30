@@ -16,7 +16,7 @@ export const STATUS_LABEL: Record<string, { label: string; dot: string }> = {
   idle: { label: "Idle", dot: "bg-amber-500" },
   break: { label: "On break", dot: "bg-blue-500" },
   meeting: { label: "In meeting", dot: "bg-purple-500" },
-  not_working: { label: "Not working", dot: "bg-slate-400" },
+  not_working: { label: "Day ended", dot: "bg-slate-400" },
 };
 
 export type EmployeeSession = {

@@ -57,6 +57,12 @@ export function MyLeave() {
   const today = new Date().toLocaleDateString("en-CA");
   const [form, setForm] = useState({ leave_type_id: "", start_date: today, end_date: today, reason: "" });
 
+  // The effective selected type: the explicit choice, else the first available
+  // type (which is what the <select> shows by default). Submitting must use
+  // THIS — not the raw form state — so an untouched dropdown still sends a valid
+  // leave_type_id instead of "" (which the server rejects with 422).
+  const typeId = form.leave_type_id || types.data?.[0]?.id || "";
+
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["me_leave_requests"] });
     qc.invalidateQueries({ queryKey: ["me_leave_balance"] });
@@ -65,7 +71,7 @@ export function MyLeave() {
   const apply = useMutation({
     mutationFn: () =>
       call("request_leave", {
-        leaveTypeId: form.leave_type_id,
+        leaveTypeId: typeId,
         startDate: form.start_date,
         endDate: form.end_date,
         reason: form.reason.trim(),
@@ -79,9 +85,6 @@ export function MyLeave() {
     mutationFn: (id: string) => call("cancel_leave", { id }),
     onSuccess: refresh,
   });
-
-  // Default the type select to the first available type.
-  const typeId = form.leave_type_id || types.data?.[0]?.id || "";
 
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-slate-200 p-6 dark:border-slate-800">

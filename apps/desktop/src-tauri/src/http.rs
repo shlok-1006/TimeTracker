@@ -43,8 +43,18 @@ async fn authed(
 }
 
 async fn parse_json(resp: reqwest::Response) -> Result<Value, String> {
-    if !resp.status().is_success() {
-        return Err(format!("server returned {}", resp.status()));
+    let status = resp.status();
+    if !status.is_success() {
+        // Surface the API's `{ "error": "..." }` message when present (e.g.
+        // "insufficient balance: 0 day(s) remaining, 1 requested"); fall back to
+        // the bare status line otherwise.
+        let body = resp.text().await.unwrap_or_default();
+        let msg = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("server returned {status}"));
+        return Err(msg);
     }
     resp.json::<Value>().await.map_err(|e| e.to_string())
 }

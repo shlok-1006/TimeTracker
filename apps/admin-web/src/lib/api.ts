@@ -644,17 +644,31 @@ export type ManagedUser = z.infer<typeof userSummarySchema>;
 export type NewUser = {
   name: string;
   email: string;
-  password: string;
+  /** Optional — when omitted the server generates a temp password and emails it. */
+  password?: string;
   role: Role;
   manager_id?: string | null;
 };
+
+/** Result of creating a user: the saved record, the password (shown once), and
+ *  whether the credentials email actually went out. */
+export type CreatedUser = { user: ManagedUser; password: string; email_sent: boolean };
 
 export async function listUsers(): Promise<ManagedUser[]> {
   return z.array(userSummarySchema).parse(await authedGetJson("/admin/users"));
 }
 
-export async function createUser(u: NewUser): Promise<ManagedUser> {
-  return userSummarySchema.parse(await authedJson("POST", "/admin/users", u));
+export async function createUser(u: NewUser): Promise<CreatedUser> {
+  const res = (await authedJson("POST", "/admin/users", u)) as {
+    user: unknown;
+    password: string;
+    email_sent: boolean;
+  };
+  return {
+    user: userSummarySchema.parse(res.user),
+    password: res.password,
+    email_sent: res.email_sent,
+  };
 }
 
 export async function deleteUser(id: string): Promise<void> {

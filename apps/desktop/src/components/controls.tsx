@@ -6,9 +6,10 @@ import { invoker, STATUS_LABEL } from "@/lib/tauri";
 
 type Team = { id: string; name: string; description: string; created_at: string };
 
-/** Tracking controls: start/stop, break, meeting mode + live status badge.
- *  Break/meeting are statuses within a session (recorded for the timeline);
- *  break time is not counted as worked. */
+/** Tracking controls: start tracking, break, meeting mode, end-of-day + live
+ *  status badge. After starting, the employee can take a break, enter meeting
+ *  mode, or end their day. Break/meeting are statuses within a session (recorded
+ *  for the timeline); break time is not counted as worked. */
 export function Controls({ userId }: { userId: string }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -115,13 +116,6 @@ export function Controls({ userId }: { userId: string }) {
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          <button
-            disabled={busy}
-            onClick={() => run((i) => i("stop_tracking"))}
-            className="rounded-md bg-red-600 px-4 py-2 font-medium text-white hover:bg-red-700 disabled:opacity-50"
-          >
-            Stop tracking
-          </button>
           <div className="flex gap-3">
             <button
               disabled={busy}
@@ -146,6 +140,14 @@ export function Controls({ userId }: { userId: string }) {
               {inMeeting ? "End meeting" : "Meeting mode"}
             </button>
           </div>
+          {/* End the day. Reuses stop_tracking → presence becomes "Clocked out". */}
+          <button
+            disabled={busy}
+            onClick={() => run((i) => i("stop_tracking"))}
+            className="rounded-md bg-red-600 px-4 py-2 font-medium text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            End My Day
+          </button>
         </div>
       )}
       {error && <p className="text-sm text-red-600">{error}</p>}

@@ -60,8 +60,9 @@ function AdminShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen">
       <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col border-r bg-card">
         <div className="border-b px-5 py-5">
-          <h1 className="text-lg font-bold tracking-tight">TimeTracker</h1>
-          <p className="text-xs text-muted-foreground">Admin</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/ruh-logo.svg" alt="RUH" className="h-7 w-auto dark:brightness-0 dark:invert" />
+          <p className="mt-2 text-xs text-muted-foreground">Admin</p>
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">

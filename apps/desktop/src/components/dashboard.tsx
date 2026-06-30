@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bar,
@@ -20,6 +21,8 @@ type HoursSummary = {
   week_seconds: number;
   active_seconds: number;
   idle_seconds: number;
+  today_idle_seconds: number;
+  week_idle_seconds: number;
 };
 type DayBucket = { date: string; worked_seconds: number; idle_seconds: number };
 
@@ -63,15 +66,29 @@ export function Dashboard({ userId }: { userId: string }) {
     dot: "bg-slate-400",
   };
 
+  // Charts can show Today or the current week (Mon–Sun).
+  const [scope, setScope] = useState<"today" | "week">("today");
+  const activeSecs = scope === "today" ? s?.today_seconds ?? 0 : s?.week_seconds ?? 0;
+  const idleSecs = scope === "today" ? s?.today_idle_seconds ?? 0 : s?.week_idle_seconds ?? 0;
+
   const pieData = [
-    { name: "Active", value: s?.active_seconds ?? 0, color: "#22c55e" },
-    { name: "Idle", value: s?.idle_seconds ?? 0, color: "#f59e0b" },
+    { name: "Active", value: activeSecs, color: "#22c55e" },
+    { name: "Idle", value: idleSecs, color: "#f59e0b" },
   ];
-  const barData =
+
+  // Week view: worked hours per weekday (Mon–Sun). Today view: today's worked vs idle.
+  const weekBars =
     timeline.data?.map((d) => ({
-      day: d.date.slice(5),
+      day: new Date(`${d.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "short" }),
       hours: +(d.worked_seconds / 3600).toFixed(2),
     })) ?? [];
+  const barData =
+    scope === "today"
+      ? [
+          { day: "Worked", hours: +(activeSecs / 3600).toFixed(2) },
+          { day: "Idle", hours: +(idleSecs / 3600).toFixed(2) },
+        ]
+      : weekBars;
 
   return (
     <div className="flex flex-col gap-6">
@@ -94,9 +111,31 @@ export function Dashboard({ userId }: { userId: string }) {
           : "Reconciling with server…"}
       </p>
 
+      {/* Today / This week toggle for the charts below. */}
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold">Activity</h3>
+        <div className="inline-flex rounded-md border border-slate-200 p-0.5 text-sm dark:border-slate-700">
+          {(["today", "week"] as const).map((opt) => (
+            <button
+              key={opt}
+              onClick={() => setScope(opt)}
+              className={`rounded px-3 py-1 font-medium transition ${
+                scope === opt
+                  ? "bg-purple-600 text-white"
+                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+              }`}
+            >
+              {opt === "today" ? "Today" : "This week"}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-slate-200 p-5 dark:border-slate-800">
-          <h3 className="mb-3 font-semibold">Active vs Idle</h3>
+          <h3 className="mb-3 font-semibold">
+            Active vs Idle · {scope === "today" ? "today" : "this week"}
+          </h3>
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -111,18 +150,18 @@ export function Dashboard({ userId }: { userId: string }) {
           </div>
           <div className="flex justify-center gap-6 text-sm">
             <span className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-green-500" /> Active{" "}
-              {fmtHms(s?.active_seconds ?? 0)}
+              <span className="h-2.5 w-2.5 rounded-full bg-green-500" /> Active {fmtHms(activeSecs)}
             </span>
             <span className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-amber-500" /> Idle{" "}
-              {fmtHms(s?.idle_seconds ?? 0)}
+              <span className="h-2.5 w-2.5 rounded-full bg-amber-500" /> Idle {fmtHms(idleSecs)}
             </span>
           </div>
         </div>
 
         <div className="rounded-lg border border-slate-200 p-5 dark:border-slate-800">
-          <h3 className="mb-3 font-semibold">Daily timeline (hours)</h3>
+          <h3 className="mb-3 font-semibold">
+            {scope === "today" ? "Today — worked vs idle (hours)" : "Worked hours by day (Mon–Sun)"}
+          </h3>
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData}>

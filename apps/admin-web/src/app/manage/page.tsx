@@ -44,11 +44,17 @@ export default function ManageUsersPage() {
       createUser({
         name: form.name,
         email: form.email,
-        password: form.password,
+        password: form.password.trim() || undefined,
         role: form.role,
         manager_id: form.manager_id || null,
       }),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      setIssued({
+        name: data.user.name,
+        email: data.user.email,
+        password: data.password,
+        emailed: data.email_sent,
+      });
       setForm({ name: "", email: "", password: "", role: "employee", manager_id: "" });
       setFormError(null);
       qc.invalidateQueries({ queryKey: ["users"] });
@@ -61,7 +67,9 @@ export default function ManageUsersPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
   });
 
-  const [issued, setIssued] = useState<{ name: string; password: string } | null>(null);
+  const [issued, setIssued] = useState<
+    { name: string; password: string; emailed?: boolean; email?: string } | null
+  >(null);
   const reset = useMutation({
     mutationFn: async (u: ManagedUser) => ({ name: u.name, password: await resetPassword(u.id) }),
     onSuccess: (r) => setIssued(r),
@@ -92,10 +100,24 @@ export default function ManageUsersPage() {
         <div className="rounded-lg border border-green-300 bg-green-50 p-4 text-green-900">
           <div className="flex items-start justify-between gap-4">
             <p className="text-sm">
-              New password for <strong>{issued.name}</strong>:{" "}
+              {issued.emailed !== undefined ? (
+                <>
+                  Account created for <strong>{issued.name}</strong>
+                  {issued.email ? ` (${issued.email})` : ""}.{" "}
+                  {issued.emailed
+                    ? "Their credentials were emailed to them."
+                    : "Email could not be sent — share the password manually."}
+                  <br />
+                </>
+              ) : (
+                <>
+                  New password for <strong>{issued.name}</strong>.{" "}
+                </>
+              )}
+              Password:{" "}
               <code className="rounded bg-white px-2 py-0.5 font-mono">{issued.password}</code>
               <br />
-              Share it securely — it won&apos;t be shown again (it&apos;s stored only as a hash).
+              It won&apos;t be shown again (it&apos;s stored only as a hash).
             </p>
             <button onClick={() => setIssued(null)} className="text-sm underline">
               Dismiss
@@ -119,7 +141,7 @@ export default function ManageUsersPage() {
             className="rounded-md border border-input bg-background px-3 py-2"
           />
           <input
-            required type="password" placeholder="Temp password (min 8)" value={form.password}
+            type="password" placeholder="Password (blank = auto-generate & email)" value={form.password}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
             className="rounded-md border border-input bg-background px-3 py-2"
           />

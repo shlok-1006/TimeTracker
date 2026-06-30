@@ -12,10 +12,15 @@ use crate::timer::DesktopState;
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct HoursSummary {
     pub total_seconds: i64,
+    /// Worked (active + meeting) seconds, scoped by period.
     pub today_seconds: i64,
     pub week_seconds: i64,
+    /// All-time worked / idle (kept for reconciliation; UI uses the scoped ones).
     pub active_seconds: i64,
     pub idle_seconds: i64,
+    /// Idle seconds scoped to today / this week (Mon–Sun), for the donut.
+    pub today_idle_seconds: i64,
+    pub week_idle_seconds: i64,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -40,12 +45,22 @@ pub fn summarize(intervals: &[Interval], now: DateTime<Local>) -> HoursSummary {
         week_seconds: 0,
         active_seconds: 0,
         idle_seconds: 0,
+        today_idle_seconds: 0,
+        week_idle_seconds: 0,
     };
     for iv in intervals {
         let d = iv.start_utc.with_timezone(&Local).date_naive();
         let n = secs(iv);
         match iv.kind.as_str() {
-            "idle" => s.idle_seconds += n,
+            "idle" => {
+                s.idle_seconds += n;
+                if d == today {
+                    s.today_idle_seconds += n;
+                }
+                if d >= week_start {
+                    s.week_idle_seconds += n;
+                }
+            }
             "break" => {} // recorded for the timeline, not counted as worked
             // active + meeting count as worked.
             _ => {
@@ -63,13 +78,15 @@ pub fn summarize(intervals: &[Interval], now: DateTime<Local>) -> HoursSummary {
     s
 }
 
-/// Per-day worked/idle totals for the last `days` days (oldest first).
-pub fn daily_timeline(intervals: &[Interval], now: DateTime<Local>, days: i64) -> Vec<DayBucket> {
+/// Per-day worked/idle totals for the current calendar week (Monday→Sunday,
+/// oldest first). Days later in the week than today are simply zero.
+pub fn weekly_timeline(intervals: &[Interval], now: DateTime<Local>) -> Vec<DayBucket> {
     let today = now.date_naive();
-    let start = today - Duration::days(days - 1);
-    let mut buckets: Vec<DayBucket> = (0..days)
+    let monday = today - Duration::days(today.weekday().num_days_from_monday() as i64);
+    let sunday = monday + Duration::days(6);
+    let mut buckets: Vec<DayBucket> = (0..7)
         .map(|i| DayBucket {
-            date: (start + Duration::days(i)).format("%Y-%m-%d").to_string(),
+            date: (monday + Duration::days(i)).format("%Y-%m-%d").to_string(),
             worked_seconds: 0,
             idle_seconds: 0,
         })
@@ -77,10 +94,10 @@ pub fn daily_timeline(intervals: &[Interval], now: DateTime<Local>, days: i64) -
 
     for iv in intervals {
         let d = iv.start_utc.with_timezone(&Local).date_naive();
-        if d < start || d > today {
+        if d < monday || d > sunday {
             continue;
         }
-        let idx = (d - start).num_days() as usize;
+        let idx = (d - monday).num_days() as usize;
         let n = secs(iv);
         match iv.kind.as_str() {
             "idle" => buckets[idx].idle_seconds += n,
@@ -112,13 +129,13 @@ pub async fn get_daily_timeline(
     let items = interval_repository::for_user(&state.pool, uid)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(daily_timeline(&items, Local::now(), 7))
+    Ok(weekly_timeline(&items, Local::now()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{Datelike, TimeZone};
 
     fn iv(start: DateTime<Local>, dur_secs: i64, kind: &str) -> Interval {
         let s = start.with_timezone(&chrono::Utc);
@@ -153,16 +170,21 @@ mod tests {
         assert_eq!(s.total_seconds, 7200); // 2 worked (active) intervals
         assert_eq!(s.active_seconds, 7200);
         assert_eq!(s.idle_seconds, 900);
+        // Idle is scoped to today / this week as well (for the donut).
+        assert_eq!(s.today_idle_seconds, 900);
+        assert_eq!(s.week_idle_seconds, 900);
     }
 
     #[test]
-    fn daily_timeline_has_seven_buckets_with_today_last() {
+    fn weekly_timeline_is_monday_to_sunday_with_today_in_place() {
         let now = noon_today();
         let items = vec![iv(now - Duration::hours(1), 1800, "active")];
-        let t = daily_timeline(&items, now, 7);
+        let t = weekly_timeline(&items, now);
         assert_eq!(t.len(), 7);
-        // Today is the last bucket and holds the worked time.
-        assert_eq!(t[6].worked_seconds, 1800);
-        assert_eq!(t[0].worked_seconds, 0);
+        // Bucket 0 is this week's Monday; today's worked time lands in its weekday slot.
+        let idx = now.date_naive().weekday().num_days_from_monday() as usize;
+        assert_eq!(t[idx].worked_seconds, 1800);
+        let monday = now.date_naive() - Duration::days(idx as i64);
+        assert_eq!(t[0].date, monday.format("%Y-%m-%d").to_string());
     }
 }

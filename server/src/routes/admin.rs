@@ -21,7 +21,7 @@ use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
 use crate::role::UserRole;
 use crate::state::AppState;
-use crate::{analysis_service, sampler};
+use crate::{analysis_service, email_service, sampler};
 
 const VIEW_URL_EXPIRES_SECS: u64 = 900;
 
@@ -316,13 +316,19 @@ async fn list_users(
 struct CreateUser {
     name: String,
     email: String,
-    password: String,
+    /// Optional: when blank, a temporary password is generated and emailed.
+    #[serde(default)]
+    password: Option<String>,
     role: String,
     #[serde(default)]
     manager_id: Option<Uuid>,
 }
 
-/// `POST /admin/users` — create a user (HR only). Logged to audit_logs.
+/// `POST /admin/users` — create a user (HR only) and email them their sign-in
+/// credentials, so HR doesn't have to hand them over manually. The password is
+/// whatever HR typed, or an auto-generated temporary one when left blank. The
+/// response returns the password ONCE plus whether the email actually sent, so
+/// HR can still share it if delivery is unavailable. Logged to audit_logs.
 async fn create_user(
     State(state): State<AppState>,
     RequireHr(hr): RequireHr,
@@ -330,26 +336,45 @@ async fn create_user(
 ) -> Result<Json<Value>, AppError> {
     let role = UserRole::from_str(&body.role)
         .map_err(|_| AppError::BadRequest("role must be employee, project_manager or hr".into()))?;
-    if body.password.len() < 8 {
-        return Err(AppError::BadRequest("password must be at least 8 characters".into()));
-    }
-    if !body.email.contains('@') {
+    let email = body.email.trim();
+    if !email.contains('@') {
         return Err(AppError::BadRequest("invalid email".into()));
     }
+    // Explicit password (>= 8 chars) or an auto-generated temporary one.
+    let password = match body.password.as_deref().map(str::trim) {
+        Some(p) if p.len() >= 8 => p.to_string(),
+        Some(p) if !p.is_empty() => {
+            return Err(AppError::BadRequest("password must be at least 8 characters".into()))
+        }
+        _ => temp_password(),
+    };
 
-    let password_hash = auth::hash_password(&body.password).map_err(AppError::Internal)?;
-    let user = users::create(
-        &state.db,
-        body.name.trim(),
-        body.email.trim(),
-        &password_hash,
-        role,
-        body.manager_id,
-    )
-    .await?;
-
+    let password_hash = auth::hash_password(&password).map_err(AppError::Internal)?;
+    let user =
+        users::create(&state.db, body.name.trim(), email, &password_hash, role, body.manager_id)
+            .await?;
     audit::log(&state.db, hr.id, "user.create", "user", Some(user.id)).await;
-    Ok(Json(json!(user)))
+
+    // Email the new employee their credentials (best-effort; never fails the
+    // creation). `email_sent` reflects an actual SMTP send, not dev log-mode.
+    let download = std::env::var("APP_DOWNLOAD_URL").ok();
+    let email_sent = match email_service::send_credentials(email_service::CredentialsEmail {
+        to: &user.email,
+        name: &user.name,
+        login_email: &user.email,
+        password: &password,
+        download_url: download.as_deref(),
+    })
+    .await
+    {
+        Ok(d) => d == email_service::Delivery::Sent,
+        Err(e) => {
+            tracing::warn!(user_id = %user.id, "credentials email failed: {e}");
+            false
+        }
+    };
+
+    Ok(Json(json!({ "user": user, "password": password, "email_sent": email_sent })))
 }
 
 /// `DELETE /admin/users/:id` — delete a user (HR only). Logged to audit_logs.

@@ -47,8 +47,9 @@ export default function DashboardPage() {
 
       <aside className="flex h-screen w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
         <div className="border-b border-slate-200 px-5 py-5 dark:border-slate-800">
-          <h1 className="text-lg font-bold">TimeTracker</h1>
-          <p className="text-xs text-slate-500">Employee</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/ruh-logo.svg" alt="RUH" className="h-7 w-auto dark:brightness-0 dark:invert" />
+          <p className="mt-2 text-xs text-slate-500">Employee</p>
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">

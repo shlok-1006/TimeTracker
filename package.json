@@ -10,8 +10,10 @@
   },
   "scripts": {
     "dev:admin": "pnpm --filter admin-web dev",
+    "dev:employee": "pnpm --filter employee-web dev",
     "dev:desktop": "pnpm --filter desktop tauri dev",
     "build:admin": "pnpm --filter admin-web build",
+    "build:employee": "pnpm --filter employee-web build",
     "build:desktop": "pnpm --filter desktop tauri build",
     "build:shared": "pnpm --filter @timetracker/shared build",
     "lint": "pnpm -r lint",

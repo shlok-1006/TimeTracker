@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* RUH People Ops palette: purple/fuchsia primary on a soft off-white. */
+    --background: 30 12% 98%;
+    --foreground: 240 24% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 24% 12%;
+    --primary: 271 81% 56%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 270 24% 96%;
+    --secondary-foreground: 240 24% 16%;
+    --muted: 270 20% 96%;
+    --muted-foreground: 240 8% 46%;
+    --accent: 270 40% 95%;
+    --accent-foreground: 271 60% 32%;
+    --border: 270 18% 90%;
+    --input: 270 18% 90%;
+    --ring: 271 81% 56%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 260 24% 7%;
+    --foreground: 270 20% 96%;
+    --card: 260 22% 10%;
+    --card-foreground: 270 20% 96%;
+    --primary: 271 81% 66%;
+    --primary-foreground: 260 24% 8%;
+    --secondary: 265 20% 18%;
+    --secondary-foreground: 270 20% 96%;
+    --muted: 265 20% 18%;
+    --muted-foreground: 265 12% 66%;
+    --accent: 265 24% 20%;
+    --accent-foreground: 270 30% 92%;
+    --border: 265 18% 20%;
+    --input: 265 18% 20%;
+    --ring: 271 81% 66%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

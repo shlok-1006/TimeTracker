@@ -37,7 +37,7 @@ fn input(user_id: Uuid, day: NaiveDate, job_id: Uuid) -> ReportInput {
         inconclusive_count: 0,
         alignment_score: 70.0,
         summary_text: "Mostly aligned with assigned work.".into(),
-        model: "gemini-2.5-flash".into(),
+        model: "claude-haiku-4-5-20251001".into(),
     }
 }
 
@@ -73,7 +73,7 @@ async fn upsert_get_and_unique_per_user_day() {
         .expect("report exists");
     assert_eq!(got.id, created.id);
     assert_eq!(got.summary_text, "Mostly aligned with assigned work.");
-    assert_eq!(got.model, "gemini-2.5-flash");
+    assert_eq!(got.model, "claude-haiku-4-5-20251001");
 
     // Upsert again for the same (user, day): UPDATE, not a duplicate.
     let mut second = input(user.id, day, job.id);
@@ -105,7 +105,7 @@ fn result_with(verdict: &str) -> AnalysisResult {
         observed: "x".into(),
         rationale: "y".into(),
         inconclusive_reason: None,
-        model: "gemini-2.5-flash".into(),
+        model: "claude-haiku-4-5-20251001".into(),
     }
 }
 
@@ -144,7 +144,7 @@ async fn build_report_computes_score_from_results() {
 
     // Unconfigured provider → AI summary errors → deterministic fallback. The
     // counts/score assertions are independent of the summary text.
-    let provider = server::gemini_provider::GeminiProvider::from_env();
+    let provider = server::claude_provider::ClaudeProvider::from_env();
     let report = report_service::build_report(&pool, user.id, day, job.id, &provider)
         .await
         .expect("build report");
@@ -155,7 +155,7 @@ async fn build_report_computes_score_from_results() {
     assert_eq!(report.not_aligned_count, 1);
     assert_eq!(report.inconclusive_count, 1);
     assert!((report.alignment_score - 62.5).abs() < 1e-9, "score was {}", report.alignment_score);
-    assert_eq!(report.model, "gemini-2.5-flash");
+    assert_eq!(report.model, "claude-haiku-4-5-20251001");
 
     users::delete(&pool, user.id).await.expect("cleanup user");
 }

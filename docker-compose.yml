@@ -107,7 +107,8 @@ services:
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:9000}
       LINEAR_API_KEY: ${LINEAR_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
       RUST_LOG: info,server=debug,sqlx=warn
     ports:
       - "9000:9000"

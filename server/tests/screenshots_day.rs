@@ -25,7 +25,7 @@ fn verdict_result(verdict: &str) -> AnalysisResult {
         observed: "x".into(),
         rationale: "y".into(),
         inconclusive_reason: None,
-        model: "gemini-2.5-flash".into(),
+        model: "claude-haiku-4-5-20251001".into(),
     }
 }
 

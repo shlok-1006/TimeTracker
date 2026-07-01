@@ -182,9 +182,9 @@ async fn analyze_day(
     Query(q): Query<SampleQuery>,
 ) -> Result<Json<Value>, AppError> {
     authorize_view(&state, &user, target).await?;
-    if !state.gemini.is_configured() {
+    if !state.claude.is_configured() {
         return Err(AppError::BadRequest(
-            "Vision AI is not configured (set GEMINI_API_KEY)".into(),
+            "Vision AI is not configured (set ANTHROPIC_API_KEY)".into(),
         ));
     }
     let day = q.day.unwrap_or_else(|| Utc::now().date_naive());
@@ -193,7 +193,7 @@ async fn analyze_day(
     let out = analysis_service::analyze_user_day(
         &state.db,
         &state.storage,
-        &state.gemini,
+        &state.claude,
         &state.linear,
         target,
         day,
@@ -205,7 +205,7 @@ async fn analyze_day(
         "day": day,
         "analyzed": out.analyzed,
         "skipped": out.skipped,
-        "model": state.gemini.model(),
+        "model": state.claude.model(),
         "report": out.report,
     })))
 }

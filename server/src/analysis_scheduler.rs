@@ -38,8 +38,8 @@ fn duration_until_next_run() -> std::time::Duration {
 
 /// Build yesterday's reports for every employee with working screenshots.
 async fn run_once(state: &AppState) {
-    if !state.gemini.is_configured() {
-        tracing::info!("nightly analysis skipped: Gemini not configured");
+    if !state.claude.is_configured() {
+        tracing::info!("nightly analysis skipped: Claude not configured");
         return;
     }
     let yesterday = (Utc::now() - Duration::days(1)).date_naive();
@@ -55,7 +55,7 @@ async fn run_once(state: &AppState) {
         match analysis_service::analyze_user_day(
             &state.db,
             &state.storage,
-            &state.gemini,
+            &state.claude,
             &state.linear,
             user_id,
             yesterday,

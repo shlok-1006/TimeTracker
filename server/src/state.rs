@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 
-use crate::gemini_provider::GeminiProvider;
+use crate::claude_provider::ClaudeProvider;
 use crate::jwt::JwtKeys;
 use crate::linear_service::LinearService;
 use crate::storage::StorageClient;
@@ -18,8 +18,8 @@ pub struct AppState {
     pub jwt: Arc<JwtKeys>,
     pub storage: Arc<StorageClient>,
     pub linear: Arc<LinearService>,
-    /// Vision AI provider (Gemini 2.5 Flash) for screenshot analysis (STEP 10).
-    pub gemini: Arc<GeminiProvider>,
+    /// Vision AI provider (Claude Haiku) for screenshot analysis.
+    pub claude: Arc<ClaudeProvider>,
     /// Refresh-token lifetime in seconds.
     pub refresh_ttl_seconds: i64,
 }
@@ -30,7 +30,7 @@ impl AppState {
         jwt: JwtKeys,
         storage: StorageClient,
         linear: LinearService,
-        gemini: GeminiProvider,
+        claude: ClaudeProvider,
         refresh_ttl_seconds: i64,
     ) -> Self {
         Self {
@@ -38,7 +38,7 @@ impl AppState {
             jwt: Arc::new(jwt),
             storage: Arc::new(storage),
             linear: Arc::new(linear),
-            gemini: Arc::new(gemini),
+            claude: Arc::new(claude),
             refresh_ttl_seconds,
         }
     }

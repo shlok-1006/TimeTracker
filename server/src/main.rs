@@ -31,10 +31,10 @@ async fn main() -> anyhow::Result<()> {
     let storage = StorageClient::new(S3Config::from_env());
     let linear = server::linear_service::LinearService::from_env();
     tracing::info!(linear_configured = linear.is_configured(), "linear integration");
-    let gemini = server::gemini_provider::GeminiProvider::from_env();
+    let claude = server::claude_provider::ClaudeProvider::from_env();
     tracing::info!(
-        gemini_configured = gemini.is_configured(),
-        model = gemini.model(),
+        claude_configured = claude.is_configured(),
+        model = claude.model(),
         "vision AI provider"
     );
     let state = AppState::new(
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
         jwt,
         storage,
         linear,
-        gemini,
+        claude,
         config.jwt_refresh_ttl_seconds,
     );
     // Nightly analysis: builds the previous day's reports for every employee.

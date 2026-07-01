@@ -6,10 +6,10 @@ use chrono::NaiveDate;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::claude_provider::ClaudeProvider;
 use crate::db::analysis_reports::AnalysisReport;
 use crate::db::{analysis_results, manual_tasks};
 use crate::error::AppError;
-use crate::gemini_provider::GeminiProvider;
 use crate::linear_service::LinearService;
 use crate::report_service;
 use crate::sampler;
@@ -74,7 +74,7 @@ pub struct AnalyzeOutcome {
 pub async fn analyze_user_day(
     db: &PgPool,
     storage: &StorageClient,
-    gemini: &GeminiProvider,
+    claude: &ClaudeProvider,
     linear: &LinearService,
     user_id: Uuid,
     day: NaiveDate,
@@ -94,7 +94,7 @@ pub async fn analyze_user_day(
                 continue;
             }
         };
-        match vision_analyzer::analyze_screenshot(gemini, &image, "image/jpeg", &s.captured_status, &tickets)
+        match vision_analyzer::analyze_screenshot(claude, &image, "image/jpeg", &s.captured_status, &tickets)
             .await
         {
             Ok(AnalysisOutcome::Analyzed(a)) => {
@@ -106,7 +106,7 @@ pub async fn analyze_user_day(
         }
     }
 
-    let report = report_service::build_report(db, user_id, day, job.id, gemini).await?;
+    let report = report_service::build_report(db, user_id, day, job.id, claude).await?;
     Ok(AnalyzeOutcome { analyzed, skipped, report })
 }
 

@@ -25,7 +25,7 @@ fn app_with(pool: PgPool) -> Router {
         JwtKeys::new(SECRET, 900),
         StorageClient::new(S3Config::from_env()),
         LinearService::from_env(),
-        server::gemini_provider::GeminiProvider::from_env(),
+        server::claude_provider::ClaudeProvider::from_env(),
         2_592_000,
     ))
 }

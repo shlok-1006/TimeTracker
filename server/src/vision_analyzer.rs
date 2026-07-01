@@ -1,7 +1,7 @@
-//! Vision AI screenshot analyzer (STEP 10).
+//! Vision AI screenshot analyzer.
 //!
 //! Compares a sampled screenshot against an employee's assigned Linear tickets
-//! using Gemini 2.5 Flash, and produces a strictly-validated verdict.
+//! using Claude Haiku, and produces a strictly-validated verdict.
 //!
 //! Pipeline: build prompt → call provider (JSON mode) → parse + validate →
 //! retry on malformed output (up to `MAX_ATTEMPTS`) → apply confidence threshold.
@@ -9,8 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::claude_provider::ClaudeProvider;
 use crate::error::AppError;
-use crate::gemini_provider::GeminiProvider;
 use crate::ticket_cache::Ticket;
 
 const MAX_ATTEMPTS: usize = 3;
@@ -37,7 +37,7 @@ pub struct AnalysisResult {
 pub enum AnalysisOutcome {
     Analyzed(AnalysisResult),
     /// The screenshot was not captured while working — analysis was aborted and
-    /// Gemini was never called.
+    /// Claude was never called.
     SkippedMeetingScreenshot,
 }
 
@@ -169,9 +169,9 @@ fn finalize(raw: RawOutput, valid_ids: &[String], model: &str) -> AnalysisResult
 ///
 /// Phase 4 protection: if `captured_status` is anything other than `working`
 /// (e.g. a meeting screenshot accidentally passed in), analysis is aborted
-/// immediately with `SkippedMeetingScreenshot` and Gemini is never called.
+/// immediately with `SkippedMeetingScreenshot` and Claude is never called.
 pub async fn analyze_screenshot(
-    gemini: &GeminiProvider,
+    claude: &ClaudeProvider,
     image: &[u8],
     image_mime: &str,
     captured_status: &str,
@@ -181,14 +181,14 @@ pub async fn analyze_screenshot(
     if !is_analyzable(captured_status) {
         tracing::info!(
             status = captured_status,
-            "analyzer: non-working screenshot skipped (Gemini not called)"
+            "analyzer: non-working screenshot skipped (Claude not called)"
         );
         return Ok(AnalysisOutcome::SkippedMeetingScreenshot);
     }
 
-    if !gemini.is_configured() {
+    if !claude.is_configured() {
         return Err(AppError::BadRequest(
-            "Vision AI is not configured (set GEMINI_API_KEY)".into(),
+            "Vision AI is not configured (set ANTHROPIC_API_KEY)".into(),
         ));
     }
 
@@ -197,13 +197,13 @@ pub async fn analyze_screenshot(
     let mut last_err = String::new();
 
     for attempt in 1..=MAX_ATTEMPTS {
-        match gemini.generate_json(&prompt, image, image_mime).await {
+        match claude.generate_json(&prompt, image, image_mime).await {
             Ok(text) => match parse_and_validate(&text) {
                 Ok(raw) => {
                     return Ok(AnalysisOutcome::Analyzed(finalize(
                         raw,
                         &valid_ids,
-                        gemini.model(),
+                        claude.model(),
                     )))
                 }
                 Err(e) => {
@@ -253,11 +253,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn meeting_screenshot_is_skipped_without_calling_gemini() {
-        // Bogus bytes + (possibly unconfigured) provider: if Gemini were ever
+    async fn meeting_screenshot_is_skipped_without_calling_claude() {
+        // Bogus bytes + (possibly unconfigured) provider: if Claude were ever
         // called this would error. Instead the guard returns Skipped first.
-        let gemini = crate::gemini_provider::GeminiProvider::from_env();
-        let out = analyze_screenshot(&gemini, b"not-an-image", "image/jpeg", "meeting", &[])
+        let claude = crate::claude_provider::ClaudeProvider::from_env();
+        let out = analyze_screenshot(&claude, b"not-an-image", "image/jpeg", "meeting", &[])
             .await
             .expect("guard returns Ok(Skipped), never an error");
         assert_eq!(out, AnalysisOutcome::SkippedMeetingScreenshot);
@@ -265,9 +265,9 @@ mod tests {
 
     #[tokio::test]
     async fn break_idle_notworking_are_also_skipped() {
-        let gemini = crate::gemini_provider::GeminiProvider::from_env();
+        let claude = crate::claude_provider::ClaudeProvider::from_env();
         for status in ["break", "idle", "not_working"] {
-            let out = analyze_screenshot(&gemini, b"x", "image/jpeg", status, &[])
+            let out = analyze_screenshot(&claude, b"x", "image/jpeg", status, &[])
                 .await
                 .unwrap();
             assert_eq!(out, AnalysisOutcome::SkippedMeetingScreenshot, "status {status}");
@@ -327,7 +327,7 @@ mod tests {
                 "observed":"blurry","rationale":"maybe"}"#,
         )
         .unwrap();
-        let r = finalize(raw, &ids(), "gemini-2.5-flash");
+        let r = finalize(raw, &ids(), "claude-haiku-4-5-20251001");
         assert_eq!(r.verdict, "inconclusive");
         assert!(r.matched_ticket_id.is_none());
         assert!(r.inconclusive_reason.unwrap().contains("threshold"));

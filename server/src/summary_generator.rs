@@ -5,7 +5,7 @@
 //!
 //! Design:
 //!   * Provider abstraction (`SummaryProvider`) — decouples the generator from
-//!     Gemini so it can be unit-tested with a mock and swapped later.
+//!     Claude so it can be unit-tested with a mock and swapped later.
 //!   * Retry handling — re-prompts on a provider error or malformed output, up
 //!     to `MAX_ATTEMPTS`.
 //!   * Strict JSON validation — the model must return `{ "summary": "<text>" }`.
@@ -13,8 +13,8 @@
 use axum::async_trait;
 use serde::Deserialize;
 
+use crate::claude_provider::ClaudeProvider;
 use crate::error::AppError;
-use crate::gemini_provider::GeminiProvider;
 
 const MAX_ATTEMPTS: usize = 3;
 /// Cap how many rationales go into the prompt (keeps it bounded/cheap).
@@ -30,14 +30,14 @@ pub trait SummaryProvider: Send + Sync {
     async fn complete_json(&self, prompt: &str) -> Result<String, String>;
 }
 
-/// Gemini 2.5 Flash as the concrete provider.
+/// Claude Haiku as the concrete provider.
 #[async_trait]
-impl SummaryProvider for GeminiProvider {
+impl SummaryProvider for ClaudeProvider {
     fn is_configured(&self) -> bool {
-        GeminiProvider::is_configured(self)
+        ClaudeProvider::is_configured(self)
     }
     fn model(&self) -> &str {
-        GeminiProvider::model(self)
+        ClaudeProvider::model(self)
     }
     async fn complete_json(&self, prompt: &str) -> Result<String, String> {
         self.generate_text_json(prompt).await.map_err(|e| e.to_string())
@@ -111,7 +111,7 @@ pub async fn generate_summary(
     }
     if !provider.is_configured() {
         return Err(AppError::BadRequest(
-            "summary AI is not configured (set GEMINI_API_KEY)".into(),
+            "summary AI is not configured (set ANTHROPIC_API_KEY)".into(),
         ));
     }
 

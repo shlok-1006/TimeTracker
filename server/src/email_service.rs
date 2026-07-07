@@ -173,6 +173,65 @@ pub async fn send_low_score_alert(e: LowScoreEmail<'_>) -> anyhow::Result<()> {
     send_plain(e.recipients, &subject, &body).await
 }
 
+/// Details for the welcome email sent to a newly created user.
+pub struct WelcomeEmail<'a> {
+    pub email: &'a str,
+    pub name: &'a str,
+    pub temp_password: &'a str,
+    /// Where to download the desktop app (GitHub release page).
+    pub download_url: &'a str,
+    /// Optional link to a hosted setup/install guide.
+    pub setup_guide_url: Option<&'a str>,
+    /// The server URL the employee enters in the desktop app (may be empty).
+    pub server_url: &'a str,
+}
+
+/// Email a newly created user their sign-in credentials, the desktop download
+/// link, and setup steps. Sent best-effort on account creation.
+pub async fn send_welcome(e: WelcomeEmail<'_>) -> anyhow::Result<()> {
+    // Sanitize the interpolated name (email/password/URLs are system-controlled).
+    use crate::validate::sanitize_line;
+    let name = sanitize_line(e.name, 200);
+
+    let subject = "[TimeTracker] Your account is ready";
+
+    let mut body = format!(
+        "Hi {name},\n\n\
+         An account has been created for you on TimeTracker. Here are your sign-in \
+         details:\n\n\
+         \u{20}\u{20}Email:    {email}\n\
+         \u{20}\u{20}Password: {password}\n\n\
+         For your security, please change this password the first time you sign in — \
+         use the \"Change password\" option on the login screen.\n\n\
+         1. Download and install the desktop app:\n\
+         \u{20}\u{20}{download}\n",
+        name = name,
+        email = e.email,
+        password = e.temp_password,
+        download = e.download_url,
+    );
+
+    if !e.server_url.is_empty() {
+        body.push_str(&format!(
+            "2. If the app asks for a Server URL, enter:\n\u{20}\u{20}{}\n",
+            e.server_url
+        ));
+    }
+
+    body.push_str(
+        "3. Sign in with the email and password above, then change your password.\n\
+         4. Click Start to begin tracking your work time.\n\n",
+    );
+
+    if let Some(guide) = e.setup_guide_url {
+        body.push_str(&format!("Full setup guide:\n\u{20}\u{20}{guide}\n\n", guide = guide));
+    }
+
+    body.push_str("Welcome aboard!\n\n(TimeTracker)\n");
+
+    send_plain(&[e.email.to_string()], subject, &body).await
+}
+
 /// Send a plaintext message to one or more recipients. Falls back to logging
 /// when SMTP isn't configured (dev), mirroring `send_approval_request`.
 pub async fn send_plain(recipients: &[String], subject: &str, body: &str) -> anyhow::Result<()> {

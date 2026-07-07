@@ -278,6 +278,28 @@ async fn create_user(
     .await?;
 
     audit::log(&state.db, hr.id, "user.create", "user", Some(user.id)).await;
+
+    // Best-effort: email the new user their credentials + download link + setup
+    // steps. A mail failure must never block account creation, so we only log it.
+    // Links are configurable via env (the server loads the whole .env).
+    let download_url = std::env::var("DESKTOP_DOWNLOAD_URL").unwrap_or_else(|_| {
+        "https://github.com/shlok-1006/TimeTracker/releases/latest".to_string()
+    });
+    let setup_guide_url = std::env::var("SETUP_GUIDE_URL").ok().filter(|s| !s.is_empty());
+    let server_url = std::env::var("DESKTOP_SERVER_URL").unwrap_or_default();
+    if let Err(e) = crate::email_service::send_welcome(crate::email_service::WelcomeEmail {
+        email: &user.email,
+        name: &user.name,
+        temp_password: &body.password,
+        download_url: &download_url,
+        setup_guide_url: setup_guide_url.as_deref(),
+        server_url: &server_url,
+    })
+    .await
+    {
+        tracing::warn!(email = %user.email, "failed to send welcome email: {e}");
+    }
+
     Ok(Json(json!(user)))
 }
 

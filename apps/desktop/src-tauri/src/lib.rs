@@ -64,6 +64,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             auth::login,
+            auth::change_password,
             auth::restore_session,
             auth::logout,
             timer::start_tracking,

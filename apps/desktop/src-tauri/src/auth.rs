@@ -62,6 +62,13 @@ struct RefreshBody<'a> {
     refresh_token: &'a str,
 }
 
+#[derive(Serialize)]
+struct ChangePasswordBody<'a> {
+    email: &'a str,
+    current_password: &'a str,
+    new_password: &'a str,
+}
+
 #[derive(Deserialize)]
 struct ApiUser {
     id: String,
@@ -111,6 +118,59 @@ pub async fn login(email: String, password: String) -> Result<EmployeeSession, S
     }
     if !resp.status().is_success() {
         return Err(format!("login failed (status {})", resp.status()));
+    }
+
+    let body: ApiLoginResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("unexpected server response: {e}"))?;
+
+    if body.user.role != "employee" {
+        return Err("This application is for employees only.".to_string());
+    }
+
+    store_tokens(&body.access_token, &body.refresh_token)?;
+    Ok(EmployeeSession {
+        id: body.user.id,
+        name: body.user.name,
+        email: body.user.email,
+        role: body.user.role,
+    })
+}
+
+/// Change the password (verifying the current one) and log in with the new one.
+/// Employees only; stores both tokens on success. Used from the login screen.
+#[tauri::command]
+pub async fn change_password(
+    email: String,
+    current_password: String,
+    new_password: String,
+) -> Result<EmployeeSession, String> {
+    let resp = reqwest::Client::new()
+        .post(format!("{}/auth/change-password", api_base()))
+        .json(&ChangePasswordBody {
+            email: &email,
+            current_password: &current_password,
+            new_password: &new_password,
+        })
+        .send()
+        .await
+        .map_err(|e| format!("could not reach the server: {e}"))?;
+
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("Current email or password is incorrect.".to_string());
+    }
+    if resp.status() == reqwest::StatusCode::BAD_REQUEST {
+        // Surface the server's validation message (e.g. "at least 8 characters").
+        let body = resp.text().await.unwrap_or_default();
+        let detail = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+            .unwrap_or_else(|| "Invalid new password.".to_string());
+        return Err(detail);
+    }
+    if !resp.status().is_success() {
+        return Err(format!("password change failed (status {})", resp.status()));
     }
 
     let body: ApiLoginResponse = resp

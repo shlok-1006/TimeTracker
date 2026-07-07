@@ -79,6 +79,16 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub email: String,
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// Minimum length for a user-chosen password.
+const MIN_PASSWORD_LEN: usize = 8;
+
 #[derive(Debug, Serialize)]
 pub struct AuthenticatedUser {
     pub id: Uuid,
@@ -144,6 +154,84 @@ pub async fn login(state: &AppState, req: LoginRequest) -> Result<LoginResponse,
     let access_token = state.jwt.issue(user.id, user.role, user.team_id)?;
     let refresh_token = issue_refresh_token(state, user.id).await?;
     audit::log(&state.db, user.id, "auth.login", "user", Some(user.id)).await;
+
+    Ok(LoginResponse {
+        access_token,
+        refresh_token,
+        token_type: "Bearer",
+        expires_in: state.jwt.access_ttl_seconds(),
+        user: AuthenticatedUser {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            team: user.team_id,
+        },
+    })
+}
+
+/// Verify the current password, set a new one, and return a fresh session.
+///
+/// Public endpoint (no access token) so a user can rotate a temporary password
+/// straight from the login screen. Authenticates exactly like `login` — the same
+/// `401` for a bad email or password, with timing equalization against a dummy
+/// hash to prevent account enumeration (SEC-23). On success it updates the hash,
+/// revokes ALL existing refresh tokens for the user (SEC-18, so any leaked temp
+/// credential is fully retired), and issues a new token pair — the caller ends
+/// up logged in with the new password.
+pub async fn change_password(
+    state: &AppState,
+    req: ChangePasswordRequest,
+) -> Result<LoginResponse, AppError> {
+    if req.new_password.chars().count() < MIN_PASSWORD_LEN {
+        return Err(AppError::BadRequest(format!(
+            "new password must be at least {MIN_PASSWORD_LEN} characters"
+        )));
+    }
+    if req.new_password == req.current_password {
+        return Err(AppError::BadRequest(
+            "new password must be different from the current password".to_string(),
+        ));
+    }
+
+    let user = match users::find_by_email(&state.db, &req.email).await? {
+        Some(u) => u,
+        None => {
+            // SEC-23: equalize timing for an unknown email (same as login).
+            let _ = verify_password(&req.current_password, dummy_password_hash());
+            tracing::warn!("change-password failed: no account for the supplied email");
+            return Err(AppError::Unauthorized);
+        }
+    };
+
+    if !verify_password(&req.current_password, &user.password_hash) {
+        audit::log(
+            &state.db,
+            user.id,
+            "auth.change_password_failed",
+            "user",
+            Some(user.id),
+        )
+        .await;
+        return Err(AppError::Unauthorized);
+    }
+
+    let new_hash = hash_password(&req.new_password)?;
+    users::set_password(&state.db, user.id, &new_hash).await?;
+
+    // Retire every existing session (SEC-18), then mint a fresh pair.
+    refresh_tokens::revoke_all_for_user(&state.db, user.id).await?;
+    audit::log(
+        &state.db,
+        user.id,
+        "auth.password_changed",
+        "user",
+        Some(user.id),
+    )
+    .await;
+
+    let access_token = state.jwt.issue(user.id, user.role, user.team_id)?;
+    let refresh_token = issue_refresh_token(state, user.id).await?;
 
     Ok(LoginResponse {
         access_token,

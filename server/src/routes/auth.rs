@@ -3,7 +3,9 @@
 use axum::{extract::State, routing::post, Json, Router};
 use serde_json::{json, Value};
 
-use crate::auth::{self, LoginRequest, LoginResponse, RefreshRequest, TokenPair};
+use crate::auth::{
+    self, ChangePasswordRequest, LoginRequest, LoginResponse, RefreshRequest, TokenPair,
+};
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -13,6 +15,15 @@ async fn login(
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
     Ok(Json(auth::login(&state, req).await?))
+}
+
+/// `POST /auth/change-password` — verify the current password, set a new one,
+/// and return a fresh session. Used from the login screen to rotate a password.
+async fn change_password(
+    State(state): State<AppState>,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Result<Json<LoginResponse>, AppError> {
+    Ok(Json(auth::change_password(&state, req).await?))
 }
 
 /// `POST /auth/refresh` — rotate a refresh token for a fresh token pair.
@@ -35,6 +46,7 @@ async fn logout(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/login", post(login))
+        .route("/auth/change-password", post(change_password))
         .route("/auth/refresh", post(refresh))
         .route("/auth/logout", post(logout))
 }

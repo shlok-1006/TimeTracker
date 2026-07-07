@@ -1,9 +1,9 @@
 //! Screenshot capture + upload (STEP 4) with token-refreshing API calls.
 //!
-//! Captures the primary monitor while **Working or in a Meeting** (never on
-//! break, idle, or when not tracking). Each upload is tagged with the
-//! capture-time status (Feature 2): meeting screenshots are stored and
-//! viewable but excluded from AI sampling/analysis. Flow per Rule 5:
+//! Captures the primary monitor **only while Working** (never during a meeting,
+//! break, idle, or when not tracking) — meeting time is excluded so it can't
+//! skew the report. Each upload is tagged with the capture-time status. Flow
+//! per Rule 5:
 //!   1. POST /uploads/presign  -> presigned PUT URL + storage key
 //!   2. PUT the JPEG bytes directly to storage (MinIO/R2)
 //!   3. POST /screenshots      -> store metadata only
@@ -66,10 +66,11 @@ fn next_delay() -> Duration {
     Duration::from_secs(pick_delay_secs(min, max, rand::random::<u64>()))
 }
 
-/// Capture is allowed while actively working or in a meeting. Meeting shots
-/// are tagged `meeting` and excluded from AI analysis server-side (Feature 2).
+/// Capture is allowed **only while actively working**. Meeting time is
+/// explicitly excluded — no screenshots are taken during a meeting so they
+/// can't skew the report — as are idle, break, and not-tracking.
 pub fn should_capture(status: &str) -> bool {
-    status == "working" || status == "meeting"
+    status == "working"
 }
 
 /// Encode an RGBA frame as JPEG bytes.
@@ -184,9 +185,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn captures_while_working_or_meeting() {
+    fn captures_only_while_working() {
         assert!(should_capture("working"));
-        assert!(should_capture("meeting"));
+        assert!(!should_capture("meeting")); // meetings must not be captured
         assert!(!should_capture("idle"));
         assert!(!should_capture("break"));
         assert!(!should_capture("not_working"));

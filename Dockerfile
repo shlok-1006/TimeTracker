@@ -39,7 +39,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 ############################
 FROM debian:bookworm-slim AS runtime
 
-# TLS roots for outbound HTTPS (Linear, Gemini, Cloudflare R2).
+# TLS roots for outbound HTTPS (Linear, Anthropic, Cloudflare R2 / GCS).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -55,5 +55,5 @@ EXPOSE 8090
 
 # Bind the port the platform injects (Render/Heroku set $PORT), falling back to
 # SERVER_PORT, then 8090. All other config comes from the environment at runtime
-# (DATABASE_URL, JWT secrets, S3/R2, LINEAR_API_KEY, GEMINI_API_KEY, …).
+# (DATABASE_URL, JWT secrets, S3/R2, LINEAR_API_KEY, ANTHROPIC_API_KEY, …).
 CMD ["/bin/sh", "-c", "exec env SERVER_PORT=\"${PORT:-${SERVER_PORT:-8090}}\" /usr/local/bin/server"]

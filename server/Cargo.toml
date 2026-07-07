@@ -41,5 +41,5 @@ hex = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Email (approval notifications). rustls — no OpenSSL.
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
-# Base64 for inlining screenshot bytes into Gemini vision requests (STEP 10).
+# Base64 for inlining screenshot bytes into Claude vision requests (STEP 10).
 base64 = "0.22"

@@ -56,8 +56,9 @@ export default function LoginPage() {
         onSubmit={onSubmit}
         className="flex w-full max-w-sm flex-col gap-5 rounded-xl border bg-card p-8 text-card-foreground"
       >
-        <header>
-          <h1 className="text-2xl font-bold tracking-tight">TimeTracker Admin</h1>
+        <header className="flex flex-col gap-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/ruh-logo.svg" alt="RUH" className="h-8 w-auto self-start dark:brightness-0 dark:invert" />
           <p className="text-sm text-muted-foreground">HR &amp; project manager sign in</p>
         </header>
         <label className="flex flex-col gap-1 text-sm">

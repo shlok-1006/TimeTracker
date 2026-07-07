@@ -90,8 +90,9 @@ function AdminShell({ children }: { children: React.ReactNode }) {
       >
         <div className="flex items-center justify-between border-b px-5 py-5">
           <div>
-            <h1 className="text-lg font-bold tracking-tight">TimeTracker</h1>
-            <p className="text-xs text-muted-foreground">Admin</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/ruh-logo.svg" alt="RUH" className="h-7 w-auto dark:brightness-0 dark:invert" />
+            <p className="mt-2 text-xs text-muted-foreground">Admin</p>
           </div>
           <button
             aria-label="Close menu"
@@ -147,7 +148,8 @@ function AdminShell({ children }: { children: React.ReactNode }) {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <span className="text-base font-bold tracking-tight">TimeTracker</span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/ruh-logo.svg" alt="RUH" className="h-6 w-auto dark:brightness-0 dark:invert" />
           <span className="text-xs text-muted-foreground">Admin</span>
         </header>
 

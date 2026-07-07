@@ -9,7 +9,11 @@
 use chrono::{Duration, TimeZone, Utc};
 
 use crate::analysis_service;
-use crate::db::screenshots;
+use crate::db::analysis_reports::{self, AnalysisReport};
+use crate::db::{screenshots, users};
+use crate::email_service;
+use crate::report_service;
+use crate::role::UserRole;
 use crate::state::AppState;
 
 /// Hour of day (UTC) to run the nightly batch.
@@ -62,15 +66,97 @@ async fn run_once(state: &AppState) {
         )
         .await
         {
-            Ok(o) => tracing::info!(
-                %user_id,
-                analyzed = o.analyzed,
-                skipped = o.skipped,
-                score = o.report.alignment_score,
-                "nightly report built"
-            ),
+            Ok(o) => {
+                tracing::info!(
+                    %user_id,
+                    analyzed = o.analyzed,
+                    skipped = o.skipped,
+                    score = o.report.alignment_score,
+                    "nightly report built"
+                );
+                maybe_alert_low_score(state, &o.report).await;
+            }
             Err(e) => tracing::warn!(%user_id, "nightly analysis failed: {e}"),
         }
     }
     tracing::info!(day = %yesterday, "nightly analysis: done");
+}
+
+/// If a freshly built daily report is below the low-score threshold (and has
+/// real scored signal), email HR — once per (employee, day). Best-effort: any
+/// failure is logged and never aborts the nightly batch.
+async fn maybe_alert_low_score(state: &AppState, report: &AnalysisReport) {
+    let threshold = report_service::low_score_threshold();
+    if !report_service::is_low_score(report, threshold) {
+        return;
+    }
+
+    // Idempotent: skip if HR was already alerted for this employee/day.
+    match analysis_reports::low_score_notified(&state.db, report.user_id, report.day).await {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            tracing::warn!(user_id = %report.user_id, "low-score notify check failed: {e}");
+            return;
+        }
+    }
+
+    let employee = match users::find_by_id(&state.db, report.user_id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(user_id = %report.user_id, "low-score alert: user lookup failed: {e}");
+            return;
+        }
+    };
+
+    // Recipients: all HR + the employee's project manager (CC'd).
+    let mut recipients: Vec<String> = match users::contacts_with_role(&state.db, UserRole::Hr).await
+    {
+        Ok(hr) => hr.into_iter().map(|(_, email)| email).collect(),
+        Err(e) => {
+            tracing::warn!("low-score alert: could not load HR recipients: {e}");
+            return;
+        }
+    };
+    if let Some(mid) = employee.manager_id {
+        match users::find_by_id(&state.db, mid).await {
+            Ok(Some(pm)) => recipients.push(pm.email),
+            Ok(None) => {}
+            Err(e) => tracing::warn!(user_id = %report.user_id, "low-score alert: PM lookup failed: {e}"),
+        }
+    }
+    recipients.sort();
+    recipients.dedup();
+    if recipients.is_empty() {
+        tracing::warn!(user_id = %report.user_id, "low daily score but no HR/PM recipients configured");
+        return;
+    }
+
+    let email = email_service::LowScoreEmail {
+        recipients: &recipients,
+        employee_name: &employee.name,
+        employee_email: &employee.email,
+        day: report.day,
+        score: report.alignment_score,
+        threshold,
+        total_analyzed: report.total_analyzed,
+        summary: &report.summary_text,
+    };
+    match email_service::send_low_score_alert(email).await {
+        Ok(()) => {
+            if let Err(e) =
+                analysis_reports::mark_low_score_notified(&state.db, report.user_id, report.day).await
+            {
+                tracing::warn!(user_id = %report.user_id, "low-score notify stamp failed: {e}");
+            }
+            tracing::info!(
+                user_id = %report.user_id,
+                day = %report.day,
+                score = report.alignment_score,
+                "HR alerted: low daily score"
+            );
+        }
+        Err(e) => tracing::warn!(user_id = %report.user_id, "low-score alert email failed: {e}"),
+    }
 }

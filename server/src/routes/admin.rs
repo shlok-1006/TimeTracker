@@ -16,14 +16,17 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::auth;
-use crate::db::{analysis_results, audit, intervals, presence, refresh_tokens, screenshots, users};
+use crate::db::{
+    alumni, analysis_results, audit, intervals, presence, refresh_tokens, screenshots, users,
+};
 use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
 use crate::role::UserRole;
 use crate::state::AppState;
 use crate::{analysis_service, sampler};
 
-const VIEW_URL_EXPIRES_SECS: u64 = 900;
+/// Short-lived presigned view-URL TTL (SEC-15).
+const VIEW_URL_EXPIRES_SECS: u64 = 120;
 
 /// Which employees the caller may see in the team list (`None` = all).
 pub(crate) fn team_scope(user: &AuthUser) -> Option<Uuid> {
@@ -287,9 +290,23 @@ async fn delete_user(
     if id == hr.id {
         return Err(AppError::BadRequest("you cannot delete your own account".into()));
     }
+    // Capture the identity BEFORE the cascade delete, so the Alumni log retains
+    // the removed employee even though their user row and data are gone.
+    let removed = users::find_by_id(&state.db, id).await?.ok_or(AppError::NotFound)?;
     if !users::delete(&state.db, id).await? {
         return Err(AppError::NotFound);
     }
+    alumni::record(
+        &state.db,
+        removed.id,
+        &removed.name,
+        &removed.email,
+        removed.role.as_str(),
+        removed.team_id,
+        removed.created_at,
+        hr.id,
+    )
+    .await?;
     audit::log(&state.db, hr.id, "user.delete", "user", Some(id)).await;
     Ok(Json(json!({ "deleted": true })))
 }
@@ -299,11 +316,6 @@ struct ResetPassword {
     /// Optional explicit password; if omitted a temporary one is generated.
     #[serde(default)]
     password: Option<String>,
-}
-
-/// A readable temporary password (upper/lower/digit/symbol, > 8 chars).
-fn temp_password() -> String {
-    format!("Tt-{}!", &Uuid::new_v4().simple().to_string()[..8])
 }
 
 /// `POST /admin/users/:id/reset-password` (HR only). Sets a new password,
@@ -318,7 +330,7 @@ async fn reset_password(
     let password = match body.password {
         Some(p) if p.len() >= 8 => p,
         Some(_) => return Err(AppError::BadRequest("password must be at least 8 characters".into())),
-        None => temp_password(),
+        None => auth::generate_temp_password(),
     };
 
     let hash = auth::hash_password(&password).map_err(AppError::Internal)?;
@@ -332,9 +344,18 @@ async fn reset_password(
     Ok(Json(json!({ "password": password })))
 }
 
+/// `GET /admin/alumni` (HR only) — former employees, most recently removed first.
+async fn list_alumni(
+    State(state): State<AppState>,
+    RequireHr(_hr): RequireHr,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!(alumni::list(&state.db).await?)))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/team", get(team))
+        .route("/admin/alumni", get(list_alumni))
         .route("/admin/users", get(list_users).post(create_user))
         .route("/admin/users/:id", delete(delete_user))
         .route("/admin/users/:id/reset-password", axum::routing::post(reset_password))

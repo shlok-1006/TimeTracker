@@ -27,8 +27,8 @@ export default function TeamDetailPage() {
   }
 
   return (
-    <main className="container mx-auto flex max-w-3xl flex-col gap-6 py-12">
-      <header className="flex items-center justify-between">
+    <main className="container mx-auto flex max-w-3xl flex-col gap-6 py-8 sm:py-12">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
             {summary.data?.team.name ?? "Team summary"}

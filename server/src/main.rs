@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("database connected and migrations applied");
 
     let jwt = JwtKeys::new(&config.jwt_access_secret, config.jwt_access_ttl_seconds);
-    let storage = StorageClient::new(S3Config::from_env());
+    let storage = StorageClient::new(S3Config::from_env()?);
     let linear = server::linear_service::LinearService::from_env();
     tracing::info!(linear_configured = linear.is_configured(), "linear integration");
     let claude = server::claude_provider::ClaudeProvider::from_env();
@@ -49,6 +49,9 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(server::analysis_scheduler::run(state.clone()));
     // Nightly attendance: rolls up the previous day's attendance for every employee.
     tokio::spawn(server::attendance_scheduler::run(state.clone()));
+    // Weekly hours compliance: every Monday morning, warn HR + PM about anyone
+    // who worked fewer than working_days × 8h in the week that just ended.
+    tokio::spawn(server::weekly_hours_scheduler::run(state.clone()));
 
     let app = server::build_router(state);
 
@@ -57,14 +60,23 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("failed to bind {}", config.socket_addr))?;
 
     tracing::info!(addr = %config.socket_addr, "listening");
-    axum::serve(listener, app).await.context("server error")?;
+    // `with_connect_info` exposes the peer address so the auth rate limiter can
+    // key on client IP (SEC-08).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .context("server error")?;
 
     Ok(())
 }
 
 fn init_tracing() {
+    // RA-17: default to info (not server=debug) so a bare run without RUST_LOG
+    // doesn't log at debug in production.
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,server=debug,sqlx=warn"));
+        .unwrap_or_else(|_| EnvFilter::new("info,server=info,sqlx=warn"));
 
     tracing_subscriber::registry()
         .with(filter)

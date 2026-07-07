@@ -33,14 +33,12 @@ use crate::auth;
 use crate::role::UserRole;
 use crate::state::AppState;
 
-/// Presigned URL lifetimes for candidate documents.
+/// Presigned URL lifetimes for candidate documents. View URLs are short-lived
+/// bearer capabilities over sensitive docs, so kept brief (SEC-15); the upload
+/// (PUT) window stays longer to allow the client time to transfer.
 const UPLOAD_URL_EXPIRES_SECS: u64 = 900;
-const VIEW_URL_EXPIRES_SECS: u64 = 900;
+const VIEW_URL_EXPIRES_SECS: u64 = 120;
 
-/// A readable temporary password handed to HR once on conversion.
-fn temp_password() -> String {
-    format!("Tt-{}!", &Uuid::new_v4().simple().to_string()[..8])
-}
 
 /// Storage key prefix for a candidate's documents.
 fn doc_prefix(candidate_id: Uuid) -> String {
@@ -80,14 +78,10 @@ async fn create_candidate(
     RequireHr(hr): RequireHr,
     Json(body): Json<CreateCandidate>,
 ) -> Result<Json<Value>, AppError> {
-    let name = body.name.trim();
-    let email = body.email.trim();
-    if name.is_empty() {
-        return Err(AppError::BadRequest("name is required".into()));
-    }
-    if !email.contains('@') {
-        return Err(AppError::BadRequest("invalid email".into()));
-    }
+    // SEC-27: length caps, control-char rejection, and a real email check.
+    let name = crate::validate::text(&body.name, "name", 200, true)?;
+    let email = crate::validate::email(&body.email)?;
+    let position = crate::validate::text(&body.position, "position", 200, false)?;
     // Default to the first pipeline stage; validate an explicit one.
     let stage_id = match body.stage_id {
         Some(s) => {
@@ -100,7 +94,7 @@ async fn create_candidate(
     };
 
     let candidate =
-        onboarding::create(&state.db, name, email, body.position.trim(), stage_id, hr.id).await?;
+        onboarding::create(&state.db, &name, &email, &position, stage_id, hr.id).await?;
     audit::log(&state.db, hr.id, "candidate.create", "candidate", Some(candidate.id)).await;
     Ok(Json(json!(candidate)))
 }
@@ -122,7 +116,8 @@ async fn get_candidate(
             json!({
                 "id": d.id,
                 "doc_type": d.doc_type,
-                "storage_key": d.storage_key,
+                // RA-14: don't expose the internal storage key (Rule 5); the
+                // presigned URL is all the client needs.
                 "created_at": d.created_at,
                 "url": state.storage.presign_get(&d.storage_key, VIEW_URL_EXPIRES_SECS, now),
             })
@@ -163,20 +158,29 @@ async fn update_candidate(
         return Err(AppError::NotFound);
     }
 
-    let name = body.name.as_deref().map(str::trim);
-    if matches!(name, Some("")) {
-        return Err(AppError::BadRequest("name cannot be empty".into()));
-    }
-    let email = body.email.as_deref().map(str::trim);
-    if let Some(e) = email {
-        if !e.contains('@') {
-            return Err(AppError::BadRequest("invalid email".into()));
-        }
-    }
-    let position = body.position.as_deref().map(str::trim);
+    // SEC-27: validate each provided field (caps, control chars, email shape).
+    let name = match body.name.as_deref() {
+        Some(v) => Some(crate::validate::text(v, "name", 200, true)?),
+        None => None,
+    };
+    let email = match body.email.as_deref() {
+        Some(v) => Some(crate::validate::email(v)?),
+        None => None,
+    };
+    let position = match body.position.as_deref() {
+        Some(v) => Some(crate::validate::text(v, "position", 200, false)?),
+        None => None,
+    };
 
     if name.is_some() || email.is_some() || position.is_some() {
-        onboarding::update(&state.db, id, name, email, position).await?;
+        onboarding::update(
+            &state.db,
+            id,
+            name.as_deref(),
+            email.as_deref(),
+            position.as_deref(),
+        )
+        .await?;
     }
     if let Some(stage_id) = body.stage_id {
         if !onboarding::stage_exists(&state.db, stage_id).await? {
@@ -223,14 +227,11 @@ async fn add_task(
     Path(id): Path<Uuid>,
     Json(body): Json<CreateCandidateTask>,
 ) -> Result<Json<Value>, AppError> {
-    let title = body.title.trim();
-    if title.is_empty() {
-        return Err(AppError::BadRequest("title is required".into()));
-    }
+    let title = crate::validate::text(&body.title, "title", 500, true)?;
     if onboarding::get(&state.db, id).await?.is_none() {
         return Err(AppError::NotFound);
     }
-    let task = onboarding::create_task(&state.db, id, title).await?;
+    let task = onboarding::create_task(&state.db, id, &title).await?;
     audit::log(&state.db, hr.id, "candidate.task.create", "candidate_task", Some(task.id)).await;
     Ok(Json(json!(task)))
 }
@@ -287,14 +288,18 @@ async fn presign_document(
     if onboarding::get(&state.db, id).await?.is_none() {
         return Err(AppError::NotFound);
     }
+    // RA-19: validate doc_type like the other onboarding fields.
+    let doc_type = crate::validate::text(&body.doc_type, "doc_type", 100, false)?;
     let suffix = sanitize_filename(body.filename.as_deref().unwrap_or(""));
     let storage_key = format!("{}{}-{}", doc_prefix(id), Uuid::new_v4(), suffix);
     let url = state.storage.presign_put(&storage_key, UPLOAD_URL_EXPIRES_SECS, Utc::now());
     Ok(Json(json!({
         "url": url,
         "method": "PUT",
+        // storage_key is returned here because the client must echo it back to
+        // POST /documents after uploading (round-trip), unlike read responses.
         "storage_key": storage_key,
-        "doc_type": body.doc_type,
+        "doc_type": doc_type,
         "expires_in": UPLOAD_URL_EXPIRES_SECS,
     })))
 }
@@ -316,18 +321,27 @@ async fn save_document(
     if onboarding::get(&state.db, id).await?.is_none() {
         return Err(AppError::NotFound);
     }
-    // The key must be within this candidate's namespace (defends against
-    // attaching arbitrary objects).
-    if !body.storage_key.starts_with(&doc_prefix(id)) {
-        return Err(AppError::BadRequest("storage_key outside candidate namespace".into()));
+    // SEC-11: the key must be exactly `candidates/<id>/<single-segment>` — a
+    // prefix check alone allows `candidates/<id>/../<other>/...` traversal, so
+    // require the remainder to be a single path segment (no further `/`).
+    let within_namespace = body
+        .storage_key
+        .strip_prefix(&doc_prefix(id))
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
+    if !within_namespace {
+        return Err(AppError::BadRequest(
+            "storage_key is not a valid key within the candidate namespace".into(),
+        ));
     }
-    let doc = onboarding::add_document(&state.db, id, body.doc_type.trim(), &body.storage_key).await?;
+    // RA-19: validate doc_type.
+    let doc_type = crate::validate::text(&body.doc_type, "doc_type", 100, false)?;
+    let doc = onboarding::add_document(&state.db, id, &doc_type, &body.storage_key).await?;
     audit::log(&state.db, hr.id, "candidate.document.add", "candidate_document", Some(doc.id)).await;
     let now = Utc::now();
     Ok(Json(json!({
         "id": doc.id,
         "doc_type": doc.doc_type,
-        "storage_key": doc.storage_key,
+        // RA-14: internal storage key omitted (Rule 5).
         "created_at": doc.created_at,
         "url": state.storage.presign_get(&doc.storage_key, VIEW_URL_EXPIRES_SECS, now),
     })))
@@ -347,7 +361,7 @@ async fn convert_candidate(
         return Err(AppError::BadRequest("candidate is already converted".into()));
     }
 
-    let password = temp_password();
+    let password = auth::generate_temp_password();
     let hash = auth::hash_password(&password).map_err(AppError::Internal)?;
     // `users::create` maps a duplicate email to a clean BadRequest.
     let user = users::create(

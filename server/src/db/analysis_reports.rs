@@ -123,6 +123,39 @@ pub async fn get(
     }))
 }
 
+/// Whether HR has already been alerted about this `(user, day)` report's low
+/// score (so the nightly job never re-notifies on a re-run/restart).
+pub async fn low_score_notified(
+    pool: &PgPool,
+    user_id: Uuid,
+    day: NaiveDate,
+) -> Result<bool, AppError> {
+    let row = sqlx::query!(
+        "SELECT low_score_notified_at FROM analysis_reports WHERE user_id = $1 AND day = $2",
+        user_id,
+        day
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|r| r.low_score_notified_at).is_some())
+}
+
+/// Stamp `low_score_notified_at = now()` after HR has been emailed.
+pub async fn mark_low_score_notified(
+    pool: &PgPool,
+    user_id: Uuid,
+    day: NaiveDate,
+) -> Result<(), AppError> {
+    sqlx::query!(
+        "UPDATE analysis_reports SET low_score_notified_at = now() WHERE user_id = $1 AND day = $2",
+        user_id,
+        day
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// A report joined with the employee's identity, for HR/PM roster views.
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportRow {

@@ -72,7 +72,7 @@ export default function LeavePage() {
   }
 
   return (
-    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-12">
+    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-8 sm:py-12">
       <header>
         <h1 className="text-2xl font-bold tracking-tight">Leave</h1>
         <p className="text-muted-foreground">Balances, requests, and history.</p>

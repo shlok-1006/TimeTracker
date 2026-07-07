@@ -20,6 +20,16 @@ fn public_base() -> String {
     std::env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://localhost:8090".to_string())
 }
 
+/// Per-user throttle for ticket-access requests (RA-24): each request emails a
+/// ticket owner, so cap it to curb email spam and slow ticket enumeration.
+/// `trust_proxy=false` because the key is the user id, not an IP.
+fn ticket_request_limiter() -> &'static crate::rate_limit::RateLimiter {
+    static L: std::sync::OnceLock<crate::rate_limit::RateLimiter> = std::sync::OnceLock::new();
+    L.get_or_init(|| {
+        crate::rate_limit::RateLimiter::new(5, std::time::Duration::from_secs(3600), false)
+    })
+}
+
 /// `POST /me/linear/link` — link the caller's account to Linear by email match.
 async fn link(
     State(state): State<AppState>,
@@ -44,12 +54,20 @@ async fn my_tickets(
     Ok(Json(json!({ "tickets": tickets })))
 }
 
-/// `GET /me/tickets/:id/context` — full context for one ticket.
+/// `GET /me/tickets/:id/context` — full context for one ticket. The caller may
+/// only read a ticket assigned to them or one they have an approved access
+/// request for (SEC-12); otherwise 404 (don't reveal the ticket exists).
 async fn ticket_context(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    let assigned = state.linear.fetch_assigned_tickets(&state.db, user.id).await?;
+    let authorized = assigned.iter().any(|t| t.id == id)
+        || ticket_requests::has_approved(&state.db, user.id, &id).await?;
+    if !authorized {
+        return Err(AppError::NotFound);
+    }
     match state.linear.get_ticket_context(&id).await? {
         Some(t) => Ok(Json(json!(t))),
         None => Err(AppError::NotFound),
@@ -68,6 +86,16 @@ async fn request_ticket(
     user: AuthUser,
     Json(body): Json<TicketRequestBody>,
 ) -> Result<Json<Value>, AppError> {
+    // RA-24: throttle per user before doing any work / sending email.
+    if ticket_request_limiter()
+        .check(&user.id.to_string(), std::time::Instant::now())
+        .is_err()
+    {
+        return Err(AppError::BadRequest(
+            "too many ticket requests — please wait a while before requesting again".into(),
+        ));
+    }
+
     let me = users::find_by_id(&state.db, user.id)
         .await?
         .ok_or(AppError::Unauthorized)?;

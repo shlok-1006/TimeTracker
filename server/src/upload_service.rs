@@ -29,6 +29,30 @@ pub fn screenshot_key(user_id: Uuid, now: DateTime<Utc>) -> String {
     )
 }
 
+/// Validate a client-submitted screenshot key against the exact shape this
+/// service mints: `<user_id>/<yyyymmdd>/<uuid>.jpg`. This rejects path traversal
+/// (`..`, `//`, leading `/`) and any key outside the caller's namespace, because
+/// none of those can satisfy the strict 3-segment structure (SEC-11).
+pub fn is_valid_screenshot_key(key: &str, user_id: Uuid) -> bool {
+    let parts: Vec<&str> = key.split('/').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    // Segment 0: exactly the caller's own user id.
+    if parts[0] != user_id.to_string() {
+        return false;
+    }
+    // Segment 1: an 8-digit yyyymmdd date.
+    if parts[1].len() != 8 || !parts[1].bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    // Segment 2: `<uuid>.jpg`.
+    match parts[2].strip_suffix(".jpg") {
+        Some(stem) => Uuid::parse_str(stem).is_ok(),
+        None => false,
+    }
+}
+
 /// Generate a presigned PUT for a new screenshot.
 pub fn presign_screenshot(
     storage: &StorageClient,
@@ -55,5 +79,29 @@ mod tests {
         let key = screenshot_key(user, Utc::now());
         assert!(key.starts_with(&format!("{user}/")));
         assert!(key.ends_with(".jpg"));
+    }
+
+    #[test]
+    fn minted_key_validates() {
+        let user = Uuid::new_v4();
+        let key = screenshot_key(user, Utc::now());
+        assert!(is_valid_screenshot_key(&key, user));
+    }
+
+    #[test]
+    fn rejects_traversal_and_cross_user() {
+        let user = Uuid::new_v4();
+        let victim = Uuid::new_v4();
+        let uuid = Uuid::new_v4();
+        // Traversal that satisfies a naive `starts_with("<user>/")` check.
+        let sneaky = format!("{user}/../{victim}/20260101/{uuid}.jpg");
+        assert!(!is_valid_screenshot_key(&sneaky, user));
+        // Leading slash, double slash, wrong owner, bad date, non-jpg, non-uuid.
+        assert!(!is_valid_screenshot_key(&format!("/{user}/20260101/{uuid}.jpg"), user));
+        assert!(!is_valid_screenshot_key(&format!("{user}//{uuid}.jpg"), user));
+        assert!(!is_valid_screenshot_key(&format!("{victim}/20260101/{uuid}.jpg"), user));
+        assert!(!is_valid_screenshot_key(&format!("{user}/2026/{uuid}.jpg"), user));
+        assert!(!is_valid_screenshot_key(&format!("{user}/20260101/{uuid}.png"), user));
+        assert!(!is_valid_screenshot_key(&format!("{user}/20260101/not-a-uuid.jpg"), user));
     }
 }

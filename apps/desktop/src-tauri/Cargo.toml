@@ -30,6 +30,9 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+# Randomized screenshot cadence: pick each next-capture delay from a window so
+# the interval is unpredictable (anti-gaming) rather than a fixed 5 minutes.
+rand = "0.8"
 # OS-native idle timer for idle detection (Rule: idle.rs). Uses CoreGraphics on
 # macOS (no Input-Monitoring permission needed) and GetLastInputInfo on Windows.
 user-idle = "0.6"

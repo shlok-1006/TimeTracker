@@ -52,14 +52,14 @@ async fn team_summary_metrics() {
     insert_batch(&pool, e1.id, &[dto(0, 3600, "active", team.id), dto(60, 1800, "meeting", team.id)]).await.unwrap();
     insert_batch(&pool, e2.id, &[dto(120, 1800, "active", team.id), dto(180, 600, "idle", team.id)]).await.unwrap();
 
-    let b = teams::status_breakdown(&pool, team.id).await.unwrap();
+    let b = teams::status_breakdown(&pool, team.id, None).await.unwrap();
     assert_eq!(b.total, 7200, "total worked = active+meeting");
     assert_eq!(b.active, 5400);
     assert_eq!(b.meeting, 1800);
     assert_eq!(b.idle, 600);
     assert_eq!(b.break_, 0);
 
-    let members = teams::member_totals(&pool, team.id).await.unwrap();
+    let members = teams::member_totals(&pool, team.id, None).await.unwrap();
     assert_eq!(members.len(), 2);
     assert_eq!(members[0].user_id, e1.id, "highest worked first");
     assert_eq!(members[0].worked_seconds, 5400);
@@ -68,7 +68,7 @@ async fn team_summary_metrics() {
     assert_eq!(active_users, 2);
 
     // teams index includes member counts.
-    let listed = teams::list_with_counts(&pool).await.unwrap();
+    let listed = teams::list_with_counts(&pool, None).await.unwrap();
     let row = listed.iter().find(|t| t.id == team.id).unwrap();
     assert_eq!(row.member_count, 2);
 
@@ -87,7 +87,7 @@ fn lazy_app() -> axum::Router {
     server::build_router(AppState::new(
         pool,
         JwtKeys::new(SECRET, 900),
-        StorageClient::new(S3Config::from_env()),
+        StorageClient::new(S3Config::insecure_local()),
         LinearService::from_env(),
         server::claude_provider::ClaudeProvider::from_env(),
         2_592_000,

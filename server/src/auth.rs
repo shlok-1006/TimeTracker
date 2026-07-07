@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::db::{refresh_tokens, users};
+use crate::db::{audit, refresh_tokens, users};
 use crate::error::AppError;
 use crate::role::UserRole;
 use crate::state::AppState;
@@ -27,6 +27,20 @@ fn hash_refresh_token(token: &str) -> String {
     hex::encode(h.finalize())
 }
 
+/// Generate a strong random temporary password (SEC-33): 20 characters from a
+/// CSPRNG over a mixed alphabet (ambiguous chars removed). Replaces the old
+/// 32-bit `Tt-<8 hex>!` format; HR hands it over once and the user resets it.
+pub fn generate_temp_password() -> String {
+    const CHARSET: &[u8] =
+        b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*?";
+    const LEN: usize = 20;
+    let mut buf = [0u8; LEN];
+    OsRng.fill_bytes(&mut buf);
+    buf.iter()
+        .map(|b| CHARSET[(*b as usize) % CHARSET.len()] as char)
+        .collect()
+}
+
 /// Hash a plaintext password with Argon2id (default params) and a random salt.
 /// Returns the PHC-encoded string suitable for storage.
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
@@ -36,6 +50,16 @@ pub fn hash_password(password: &str) -> anyhow::Result<String> {
         .map_err(|e| anyhow::anyhow!("failed to hash password: {e}"))?
         .to_string();
     Ok(hash)
+}
+
+/// A fixed valid Argon2 hash, computed once, used to equalize login timing when
+/// the email doesn't exist — otherwise a missing account returns measurably
+/// faster than a wrong password, enabling account enumeration (SEC-23).
+fn dummy_password_hash() -> &'static str {
+    static H: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    H.get_or_init(|| {
+        hash_password("timing-equalizer-not-a-real-password").expect("hash dummy password")
+    })
 }
 
 /// Verify a plaintext password against a stored PHC hash. Constant-time within
@@ -100,16 +124,26 @@ async fn issue_refresh_token(state: &AppState, user_id: Uuid) -> Result<String, 
 /// same message — we never reveal which part was wrong. Role enforcement is the
 /// responsibility of the guards on protected endpoints and of each client.
 pub async fn login(state: &AppState, req: LoginRequest) -> Result<LoginResponse, AppError> {
-    let user = users::find_by_email(&state.db, &req.email)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
+    let user = match users::find_by_email(&state.db, &req.email).await? {
+        Some(u) => u,
+        None => {
+            // SEC-23: verify against a dummy hash so an unknown email takes the
+            // same time as a wrong password (no enumeration by timing).
+            let _ = verify_password(&req.password, dummy_password_hash());
+            tracing::warn!("login failed: no account for the supplied email");
+            return Err(AppError::Unauthorized);
+        }
+    };
 
     if !verify_password(&req.password, &user.password_hash) {
+        // SEC-22: record the failed attempt against the known account.
+        audit::log(&state.db, user.id, "auth.login_failed", "user", Some(user.id)).await;
         return Err(AppError::Unauthorized);
     }
 
     let access_token = state.jwt.issue(user.id, user.role, user.team_id)?;
     let refresh_token = issue_refresh_token(state, user.id).await?;
+    audit::log(&state.db, user.id, "auth.login", "user", Some(user.id)).await;
 
     Ok(LoginResponse {
         access_token,
@@ -130,12 +164,30 @@ pub async fn login(state: &AppState, req: LoginRequest) -> Result<LoginResponse,
 /// (rotation: the presented token is revoked immediately).
 pub async fn refresh(state: &AppState, req: RefreshRequest) -> Result<TokenPair, AppError> {
     let hash = hash_refresh_token(&req.refresh_token);
-    let (id, user_id) = refresh_tokens::find_valid(&state.db, &hash)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
 
-    // Rotate: revoke the used token before issuing a new pair.
-    refresh_tokens::revoke(&state.db, id).await?;
+    // SEC-17: atomically consume the token (revoke-if-valid in one statement) so
+    // two concurrent refreshes can't both succeed on the same token.
+    let user_id = match refresh_tokens::consume(&state.db, &hash).await? {
+        Some((_id, user_id)) => user_id,
+        None => {
+            // The token wasn't valid. If the hash is nonetheless *known*, this is
+            // a replay of an already-consumed token — the classic stolen-token
+            // signal. Revoke the whole family and flag it (SEC-17).
+            if let Some(compromised) = refresh_tokens::user_for_hash(&state.db, &hash).await? {
+                refresh_tokens::revoke_all_for_user(&state.db, compromised).await?;
+                audit::log(
+                    &state.db,
+                    compromised,
+                    "auth.refresh_reuse_detected",
+                    "user",
+                    Some(compromised),
+                )
+                .await;
+                tracing::warn!(user_id = %compromised, "refresh token reuse detected — revoked all sessions");
+            }
+            return Err(AppError::Unauthorized);
+        }
+    };
 
     let user = users::find_by_id(&state.db, user_id)
         .await?
@@ -152,9 +204,19 @@ pub async fn refresh(state: &AppState, req: RefreshRequest) -> Result<TokenPair,
     })
 }
 
-/// Revoke a refresh token (logout). Idempotent.
+/// Revoke a refresh token (logout). Idempotent. Audits the logout (SEC-22).
+///
+/// Revocation model (SEC-18): access tokens are stateless and can't be revoked
+/// mid-flight, so logout revokes the refresh token — no new access token can be
+/// minted, and the outstanding one expires within the short, capped access TTL
+/// (see `config`). Password reset additionally revokes ALL of a user's refresh
+/// tokens (`revoke_all_for_user`).
 pub async fn logout(state: &AppState, req: RefreshRequest) -> Result<(), AppError> {
-    refresh_tokens::revoke_by_hash(&state.db, &hash_refresh_token(&req.refresh_token)).await?;
+    if let Some(user_id) =
+        refresh_tokens::revoke_by_hash(&state.db, &hash_refresh_token(&req.refresh_token)).await?
+    {
+        audit::log(&state.db, user_id, "auth.logout", "user", Some(user_id)).await;
+    }
     Ok(())
 }
 

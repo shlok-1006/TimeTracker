@@ -189,6 +189,22 @@ pub async fn employee_ids(pool: &PgPool) -> Result<Vec<Uuid>, AppError> {
     Ok(rows.into_iter().map(|r| r.id).collect())
 }
 
+/// `(name, email)` of every user with the given role — used to fan out
+/// notifications (e.g. all HR recipients for the weekly hours warning).
+pub async fn contacts_with_role(
+    pool: &PgPool,
+    role: UserRole,
+) -> Result<Vec<(String, String)>, AppError> {
+    let role_str = role.as_str();
+    let rows = sqlx::query!(
+        r#"SELECT name, email FROM users WHERE role = $1::text::user_role ORDER BY name"#,
+        role_str
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.name, r.email)).collect())
+}
+
 /// Create a new user. Returns `BadRequest` if the email already exists.
 pub async fn create(
     pool: &PgPool,

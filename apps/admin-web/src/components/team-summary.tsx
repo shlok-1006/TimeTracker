@@ -117,6 +117,7 @@ export function TeamSummaryView({ summary }: { summary: TeamSummary }) {
 
       <div className="rounded-lg border p-4">
         <h3 className="mb-3 text-sm font-semibold">Members</h3>
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left text-muted-foreground">
@@ -136,6 +137,7 @@ export function TeamSummaryView({ summary }: { summary: TeamSummary }) {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );

@@ -24,7 +24,7 @@ async fn health_returns_ok() {
     let app = server::build_router(AppState::new(
         pool,
         JwtKeys::new("test-secret", 900),
-        StorageClient::new(S3Config::from_env()),
+        StorageClient::new(S3Config::insecure_local()),
         LinearService::from_env(),
         server::claude_provider::ClaudeProvider::from_env(),
         2_592_000,

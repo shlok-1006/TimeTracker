@@ -18,6 +18,7 @@ pub mod leave_service;
 pub mod linear_service;
 pub mod middleware;
 pub mod presence;
+pub mod rate_limit;
 pub mod report_service;
 pub mod role;
 pub mod routes;
@@ -27,7 +28,10 @@ pub mod storage;
 pub mod summary_generator;
 pub mod ticket_cache;
 pub mod upload_service;
+pub mod validate;
 pub mod vision_analyzer;
+pub mod weekly_hours_scheduler;
+pub mod weekly_hours_service;
 
 pub use routes::build as build_router;
 pub use state::AppState;

@@ -18,6 +18,29 @@ use crate::db::analysis_results;
 use crate::error::AppError;
 use crate::summary_generator::{self, SummaryProvider};
 
+/// Alignment score (0–100) below which HR is alerted about a daily report.
+/// Overridable via `TIMETRACKER_LOW_SCORE_THRESHOLD`.
+pub const DEFAULT_LOW_SCORE_THRESHOLD: f64 = 35.0;
+
+/// The configured low-score alert threshold (0–100), env-overridable.
+pub fn low_score_threshold() -> f64 {
+    std::env::var("TIMETRACKER_LOW_SCORE_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .unwrap_or(DEFAULT_LOW_SCORE_THRESHOLD)
+}
+
+/// Whether a report should trigger a low-score alert: it has at least one
+/// *scored* verdict (aligned / partially / not aligned) and the alignment score
+/// is below `threshold`. Reports with no scored verdicts (no screenshots scored,
+/// or all inconclusive) score 0 but reflect *no signal*, so they are NOT
+/// flagged — that avoids false alarms for days with nothing to measure.
+pub fn is_low_score(report: &AnalysisReport, threshold: f64) -> bool {
+    let scored = report.aligned_count + report.partially_count + report.not_aligned_count;
+    scored > 0 && report.alignment_score < threshold
+}
+
 /// Verdict counts + alignment score for a set of verdicts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReportAggregate {
@@ -231,5 +254,56 @@ mod tests {
         assert!(s.contains("2 screenshot"));
         assert!(s.contains("50%"));
         assert_eq!(summarize(&aggregate(&[])), "No screenshots were analysed for this day.");
+    }
+
+    /// Build an `AnalysisReport` from an aggregate for predicate tests.
+    fn report_from(verdicts: &[&str]) -> AnalysisReport {
+        let a = aggregate(&v(verdicts));
+        AnalysisReport {
+            id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            day: chrono::NaiveDate::from_ymd_opt(2026, 7, 2).unwrap(),
+            job_id: Uuid::nil(),
+            total_analyzed: a.total_analyzed,
+            aligned_count: a.aligned_count,
+            partially_count: a.partially_count,
+            not_aligned_count: a.not_aligned_count,
+            inconclusive_count: a.inconclusive_count,
+            alignment_score: a.alignment_score,
+            summary_text: String::new(),
+            model: String::new(),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn low_score_flags_below_threshold_with_real_signal() {
+        // Two not_aligned + one aligned → 33.3% < 35% and has scored verdicts.
+        let r = report_from(&["not_aligned", "not_aligned", "aligned"]);
+        assert!(is_low_score(&r, 35.0));
+    }
+
+    #[test]
+    fn at_or_above_threshold_is_not_flagged() {
+        // 50% is above 35%.
+        assert!(!is_low_score(&report_from(&["aligned", "not_aligned"]), 35.0));
+        // Exactly at the threshold is not "below".
+        let mut r = report_from(&["aligned", "not_aligned"]);
+        r.alignment_score = 35.0;
+        assert!(!is_low_score(&r, 35.0));
+    }
+
+    #[test]
+    fn no_scored_verdicts_is_never_flagged() {
+        // All inconclusive → score 0 but no signal → not an alert.
+        assert!(!is_low_score(&report_from(&["inconclusive", "inconclusive"]), 35.0));
+        // Empty day → not an alert.
+        assert!(!is_low_score(&report_from(&[]), 35.0));
+    }
+
+    #[test]
+    fn zero_percent_with_real_signal_is_flagged() {
+        // All not_aligned → genuine 0% low score.
+        assert!(is_low_score(&report_from(&["not_aligned", "not_aligned"]), 35.0));
     }
 }

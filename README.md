@@ -181,16 +181,17 @@ Roles (`user_role` enum): `employee`, `project_manager`, `hr`.
   `project_manager` only**; token kept in a Zustand store.
 
 ### Seed data
-Canonical seed (idempotent):
+Canonical seed (idempotent, **dev only** — requires `ALLOW_SEED=true`, SEC-32):
 ```bash
+ALLOW_SEED=true \
+SEED_HR_PASSWORD='<choose-a-strong-password>' \
+SEED_EMPLOYEE_PASSWORD='<choose-a-strong-password>' \
 cargo run -p server --bin seed
 ```
-Creates:
-
-| Role     | Email                        | Password        |
-| -------- | ---------------------------- | --------------- |
-| HR       | `hr@timetracker.local`       | `ChangeMe!HR1`  |
-| Employee | `employee@timetracker.local` | `ChangeMe!Emp1` |
+Creates an HR user (`hr@timetracker.local`) and an Employee
+(`employee@timetracker.local`). Passwords come from `SEED_HR_PASSWORD` /
+`SEED_EMPLOYEE_PASSWORD`; set strong values and never run this against a real
+deployment.
 
 ### Build/run notes
 - The server uses **compile-time checked queries** (Rule 7), so **Postgres must
@@ -315,9 +316,14 @@ PUT URLs, the desktop uploads directly to storage, then posts metadata only.
 
 ### Desktop (`apps/desktop/src-tauri/src/screenshot.rs`)
 - Captures the primary monitor with **`xcap`**, encodes JPEG (`image`).
-- Runs on a configurable interval (`TIMETRACKER_SCREENSHOT_INTERVAL_SECS`,
-  default 300s) and **only while `working`** — never on break, idle, meeting, or
-  when not tracking.
+- Runs on a **randomized cadence** (anti-gaming): each next capture is scheduled
+  at a uniformly random point in the window `[min, max]` seconds after the last
+  one, so the interval never settles on a predictable fixed clock. `max` =
+  `TIMETRACKER_SCREENSHOT_INTERVAL_SECS` (default 450s), `min` =
+  `TIMETRACKER_SCREENSHOT_MIN_INTERVAL_SECS` (default 150s). With the defaults
+  the next shot lands 2.5–7.5 min after the previous (avg ≈ 5 min, matching the
+  old fixed interval but unpredictable). Captures **only while `working` or in a
+  `meeting`** — never on break, idle, or when not tracking.
 - Flow: `POST /uploads/presign` → `PUT` bytes to storage → `POST /screenshots`.
 
 ### Server
@@ -342,10 +348,11 @@ server; if MinIO binds `:9000`, login returns `400 Bad Request`.
 # download minio.exe to C:\minio\, then:
 .\scripts\start-minio.ps1
 # or manually:
-$env:MINIO_ROOT_USER='minioadmin'; $env:MINIO_ROOT_PASSWORD='minioadmin'
+# Local dev only — choose your own credentials, don't reuse defaults:
+$env:MINIO_ROOT_USER='<dev-access-key>'; $env:MINIO_ROOT_PASSWORD='<dev-secret-key>'
 .\minio.exe server C:\minio\data --address ":9100" --console-address ":9001"
 # create the bucket (mc.exe) or via the console at http://localhost:9001
-mc alias set local http://localhost:9100 minioadmin minioadmin
+mc alias set local http://localhost:9100 $env:MINIO_ROOT_USER $env:MINIO_ROOT_PASSWORD
 mc mb local/screenshots
 ```
 For production, point the `S3_*` vars at a Cloudflare R2 bucket (set

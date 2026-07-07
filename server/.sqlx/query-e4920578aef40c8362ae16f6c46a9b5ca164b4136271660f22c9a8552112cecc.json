@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.id, t.name, t.description, t.created_at,\n                  CAST(COUNT(ut.user_id) AS BIGINT) AS \"member_count!\"\n           FROM teams t\n           LEFT JOIN user_teams ut ON ut.team_id = t.id\n           GROUP BY t.id, t.name, t.description, t.created_at\n           ORDER BY t.name",
+  "query": "SELECT t.id, t.name, t.description, t.created_at,\n                  CAST(COUNT(u.id) FILTER (WHERE $1::uuid IS NULL OR u.manager_id = $1) AS BIGINT) AS \"member_count!\"\n           FROM teams t\n           LEFT JOIN user_teams ut ON ut.team_id = t.id\n           LEFT JOIN users u ON u.id = ut.user_id\n           GROUP BY t.id, t.name, t.description, t.created_at\n           HAVING $1::uuid IS NULL\n               OR COUNT(u.id) FILTER (WHERE u.manager_id = $1) > 0\n           ORDER BY t.name",
   "describe": {
     "columns": [
       {
@@ -30,7 +30,9 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Uuid"
+      ]
     },
     "nullable": [
       false,
@@ -40,5 +42,5 @@
       null
     ]
   },
-  "hash": "4a9f5eefe2972181806d194545b83ddf3e5e773c10b597208f958360a554ab05"
+  "hash": "e4920578aef40c8362ae16f6c46a9b5ca164b4136271660f22c9a8552112cecc"
 }

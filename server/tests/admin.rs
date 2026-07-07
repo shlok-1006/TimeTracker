@@ -22,7 +22,7 @@ fn app() -> axum::Router {
     server::build_router(AppState::new(
         pool,
         JwtKeys::new(SECRET, 900),
-        StorageClient::new(S3Config::from_env()),
+        StorageClient::new(S3Config::insecure_local()),
         LinearService::from_env(),
         server::claude_provider::ClaudeProvider::from_env(),
         2_592_000,

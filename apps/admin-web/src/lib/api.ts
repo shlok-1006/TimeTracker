@@ -649,6 +649,25 @@ export async function deleteUser(id: string): Promise<void> {
   await authedJson("DELETE", `/admin/users/${id}`);
 }
 
+/** A former employee, retained after removal (Alumni section). */
+const alumnusSchema = z.object({
+  id: z.string(),
+  user_id: z.string().nullable(),
+  name: z.string(),
+  email: z.string(),
+  role: roleSchema,
+  team_id: z.string().nullable(),
+  joined_at: z.string().nullable(),
+  removed_at: z.string(),
+  removed_by: z.string().nullable(),
+});
+export type Alumnus = z.infer<typeof alumnusSchema>;
+
+/** Removed employees, most recently removed first (`GET /admin/alumni`, HR). */
+export async function listAlumni(): Promise<Alumnus[]> {
+  return z.array(alumnusSchema).parse(await authedGetJson("/admin/alumni"));
+}
+
 /** Reset a user's password (HR). Returns the new password to hand over once.
  *  Pass a password to set a specific one, or omit to auto-generate. */
 export async function resetPassword(id: string, password?: string): Promise<string> {

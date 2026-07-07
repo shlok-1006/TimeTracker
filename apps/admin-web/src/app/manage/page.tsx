@@ -82,7 +82,7 @@ export default function ManageUsersPage() {
   }
 
   return (
-    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-12">
+    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-8 sm:py-12">
       <header>
         <h1 className="text-3xl font-bold tracking-tight">Manage users</h1>
       </header>
@@ -163,7 +163,8 @@ export default function ManageUsersPage() {
         {users.isLoading && <p className="text-muted-foreground">Loading…</p>}
         {users.error && <p className="text-red-600">{(users.error as Error).message}</p>}
         {users.data && (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[36rem] text-sm">
             <thead>
               <tr className="border-b text-left text-muted-foreground">
                 <th className="py-2 font-medium">Name</th>
@@ -207,6 +208,7 @@ export default function ManageUsersPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </section>
     </main>

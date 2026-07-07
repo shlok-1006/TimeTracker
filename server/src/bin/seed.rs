@@ -3,9 +3,12 @@
 //! Run with the database up:
 //!   cargo run -p server --bin seed
 //!
-//! Credentials (development only — change for any real deployment):
-//!   HR        -> hr@timetracker.local        / ChangeMe!HR1
-//!   Employee  -> employee@timetracker.local  / ChangeMe!Emp1
+//! DEVELOPMENT ONLY. Refuses to run without `ALLOW_SEED=true` (SEC-32) so it can
+//! never accidentally seed production with known credentials. Passwords may be
+//! overridden via `SEED_HR_PASSWORD` / `SEED_EMPLOYEE_PASSWORD`; the defaults
+//! below are for local dev only.
+//!   HR        -> hr@timetracker.local        / $SEED_HR_PASSWORD
+//!   Employee  -> employee@timetracker.local  / $SEED_EMPLOYEE_PASSWORD
 
 use anyhow::Context;
 
@@ -14,13 +17,24 @@ use server::db;
 use server::role::UserRole;
 
 const HR_EMAIL: &str = "hr@timetracker.local";
-const HR_PASSWORD: &str = "ChangeMe!HR1";
 const EMPLOYEE_EMAIL: &str = "employee@timetracker.local";
-const EMPLOYEE_PASSWORD: &str = "ChangeMe!Emp1";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
+
+    // SEC-32: never seed known credentials unless explicitly allowed.
+    if std::env::var("ALLOW_SEED").ok().as_deref() != Some("true") {
+        anyhow::bail!(
+            "refusing to run the seed binary without ALLOW_SEED=true — this is a \
+             development-only tool and must never be run against production"
+        );
+    }
+
+    let hr_password =
+        std::env::var("SEED_HR_PASSWORD").unwrap_or_else(|_| "ChangeMe!HR1".to_string());
+    let employee_password =
+        std::env::var("SEED_EMPLOYEE_PASSWORD").unwrap_or_else(|_| "ChangeMe!Emp1".to_string());
 
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let pool = db::connect(&database_url, 5).await?;
@@ -30,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
         &pool,
         "HR Admin",
         HR_EMAIL,
-        &hash_password(HR_PASSWORD)?,
+        &hash_password(&hr_password)?,
         UserRole::Hr,
         None,
     )
@@ -40,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         &pool,
         "Employee One",
         EMPLOYEE_EMAIL,
-        &hash_password(EMPLOYEE_PASSWORD)?,
+        &hash_password(&employee_password)?,
         UserRole::Employee,
         None,
     )

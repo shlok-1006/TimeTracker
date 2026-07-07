@@ -83,8 +83,8 @@ export default function UserDetailPage() {
   }
 
   return (
-    <main className="container mx-auto flex max-w-3xl flex-col gap-6 py-12">
-      <header className="flex items-center justify-between">
+    <main className="container mx-auto flex max-w-3xl flex-col gap-6 py-8 sm:py-12">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold tracking-tight">Employee detail</h1>
         <Link
           href="/dashboard"
@@ -102,7 +102,7 @@ export default function UserDetailPage() {
       )}
 
       <section className="rounded-lg border bg-card p-6 text-card-foreground">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Activity timeline</h2>
           <input
             type="date"
@@ -130,7 +130,7 @@ export default function UserDetailPage() {
       </section>
 
       <section className="rounded-lg border bg-card p-6 text-card-foreground">
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Daily report</h2>
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted-foreground">{date}</span>

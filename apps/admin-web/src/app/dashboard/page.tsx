@@ -28,7 +28,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-12">
+    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-8 sm:py-12">
       <header>
         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-muted-foreground">Team — live status</p>
@@ -51,7 +51,8 @@ export default function DashboardPage() {
         )}
 
         {team.data && team.data.length > 0 && (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[36rem] text-sm">
             <thead>
               <tr className="border-b text-left text-muted-foreground">
                 <th className="py-2 font-medium">Name</th>
@@ -86,6 +87,7 @@ export default function DashboardPage() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </section>
     </main>

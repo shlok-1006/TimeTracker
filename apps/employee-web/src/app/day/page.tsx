@@ -59,8 +59,8 @@ export default function DayPage() {
       : [];
 
   return (
-    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-12">
-      <header className="flex items-center justify-between">
+    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-8 sm:py-12">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">My Day</h1>
           <p className="text-muted-foreground">Your daily alignment report and screenshots.</p>

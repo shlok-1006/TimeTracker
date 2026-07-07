@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT low_score_notified_at FROM analysis_reports WHERE user_id = $1 AND day = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "low_score_notified_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "5b3628dd2bb1a7e42af92f3e22e51a1135d583442850c8faeff8d0b6c4b77acf"
+}

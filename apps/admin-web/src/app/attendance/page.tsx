@@ -42,7 +42,7 @@ export default function AttendancePage() {
   const rows = report.data?.employees ?? [];
 
   return (
-    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-12">
+    <main className="container mx-auto flex max-w-4xl flex-col gap-6 py-8 sm:py-12">
       <header>
         <h1 className="text-2xl font-bold tracking-tight">Attendance</h1>
       </header>
@@ -95,7 +95,7 @@ export default function AttendancePage() {
 
         {rows.length > 0 && (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[36rem] text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="py-2 font-medium">Employee</th>

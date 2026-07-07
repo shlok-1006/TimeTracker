@@ -23,26 +23,45 @@ use uuid::Uuid;
 use crate::db::{audit, teams};
 use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
+use crate::role::UserRole;
 use crate::state::AppState;
 
-/// `GET /admin/teams` — all teams with member counts (HR or project manager).
+/// Scope for team analytics: HR sees every member (`None`); a project manager
+/// is limited to the employees they manage (`Some(pm_id)`) — SEC-09.
+fn team_scope(user: &AuthUser) -> Option<Uuid> {
+    match user.role {
+        UserRole::Hr => None,
+        _ => Some(user.id),
+    }
+}
+
+/// `GET /admin/teams` — teams with member counts. HR sees all teams; a project
+/// manager sees only teams containing their managed employees (SEC-09).
 async fn admin_list_teams(
     State(state): State<AppState>,
-    RequireAdmin(_user): RequireAdmin,
+    RequireAdmin(user): RequireAdmin,
 ) -> Result<Json<Value>, AppError> {
-    Ok(Json(json!(teams::list_with_counts(&state.db).await?)))
+    Ok(Json(json!(
+        teams::list_with_counts(&state.db, team_scope(&user)).await?
+    )))
 }
 
 /// `GET /admin/teams/:id/summary` — team rollup: total hours, active users,
-/// status breakdown, and per-member totals (HR or project manager).
+/// status breakdown, and per-member totals. Scoped to a PM's managed employees;
+/// a PM who manages nobody on the team gets a 404 (SEC-09).
 async fn team_summary(
     State(state): State<AppState>,
-    RequireAdmin(_user): RequireAdmin,
+    RequireAdmin(user): RequireAdmin,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
+    let scope = team_scope(&user);
     let team = teams::get(&state.db, id).await?.ok_or(AppError::NotFound)?;
-    let breakdown = teams::status_breakdown(&state.db, id).await?;
-    let members = teams::member_totals(&state.db, id).await?;
+    let members = teams::member_totals(&state.db, id, scope).await?;
+    // A project manager may only view a team they actually manage someone on.
+    if scope.is_some() && members.is_empty() {
+        return Err(AppError::NotFound);
+    }
+    let breakdown = teams::status_breakdown(&state.db, id, scope).await?;
     let active_users = members.iter().filter(|m| m.worked_seconds > 0).count();
 
     Ok(Json(json!({
@@ -79,6 +98,12 @@ async fn my_team_options(
 }
 
 /// `POST /me/teams/:id/join` — the employee joins a team themselves (idempotent).
+///
+/// SEC-24: self-service team selection is intentional (see `my_team_options`).
+/// The prior concern — activity leaking to an unrelated project manager — is
+/// closed by SEC-09: PM analytics are scoped to their managed employees, so
+/// joining an arbitrary team never exposes the actor to a PM who doesn't manage
+/// them. Self-join is idempotent and only ever affects the caller's own record.
 async fn join_team(
     State(state): State<AppState>,
     user: AuthUser,

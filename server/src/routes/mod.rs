@@ -20,9 +20,10 @@ pub mod teams;
 pub mod ticket_requests;
 pub mod uploads;
 
+use axum::http::{header, HeaderValue, Method};
 use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::middleware::{auth_middleware, AuthUser, RequireAdmin, RequireEmployee, RequireHr};
@@ -53,17 +54,50 @@ async fn hr_ping(_guard: RequireHr) -> Json<Value> {
 }
 
 /// Build the full application router with shared middleware.
+///
+/// CORS is restricted to the exact origins in `CORS_ALLOWED_ORIGINS` — no
+/// wildcard (SEC-02). Methods and headers are restricted to what the SPA uses.
 pub fn build(state: AppState) -> Router {
-    // Permissive CORS for local development (admin dashboard on :3001).
-    // Tightened to explicit origins in a later step.
+    let allow_origins: Vec<HeaderValue> = crate::config::cors_allowed_origins()
+        .iter()
+        .filter_map(|o| match o.parse::<HeaderValue>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!("ignoring invalid CORS origin: {o}");
+                None
+            }
+        })
+        .collect();
+
+    // RA-10: refuse to boot a deny-all API on a misconfigured allowlist rather
+    // than silently rejecting every cross-origin request.
+    assert!(
+        !allow_origins.is_empty(),
+        "CORS_ALLOWED_ORIGINS produced no valid origins — set it to your dashboard origin(s)"
+    );
+
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(allow_origins)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::PATCH,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+
+    // SEC-08: rate-limit the auth endpoints (login/refresh/logout) per client IP.
+    let auth_limiter = std::sync::Arc::new(crate::rate_limit::RateLimiter::from_env());
+    let auth_routes = auth::router().route_layer(axum::middleware::from_fn_with_state(
+        auth_limiter,
+        crate::rate_limit::rate_limit,
+    ));
 
     let public = Router::new()
         .merge(health::router())
-        .merge(auth::router())
+        .merge(auth_routes)
         .merge(ticket_requests::router());
 
     let protected = Router::new()

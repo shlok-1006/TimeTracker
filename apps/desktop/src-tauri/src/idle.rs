@@ -12,8 +12,8 @@ use std::time::Duration;
 use user_idle::UserIdle;
 
 /// Default idle threshold if `TIMETRACKER_IDLE_THRESHOLD_SECS` is unset.
-/// 3 minutes of no mouse/keyboard input => idle.
-const DEFAULT_THRESHOLD_SECS: u64 = 180;
+/// 5 minutes of no mouse/keyboard input => idle.
+const DEFAULT_THRESHOLD_SECS: u64 = 300;
 
 #[derive(Clone)]
 pub struct IdleHandle {

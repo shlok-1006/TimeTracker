@@ -42,3 +42,7 @@ apps/desktop/src-tauri/target
 
 # MinIO / docker volumes
 /.data
+
+# Claude Code machine-local settings (may contain local creds — SEC-30).
+# Untrack once with: git rm --cached .claude/settings.local.json
+.claude/settings.local.json

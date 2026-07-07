@@ -4,6 +4,7 @@
 //! Repositories (users, hours, screenshots, …) are added in later steps under
 //! this module.
 
+pub mod alumni;
 pub mod analysis_reports;
 pub mod analysis_results;
 pub mod attendance;
@@ -19,6 +20,7 @@ pub mod screenshots;
 pub mod teams;
 pub mod ticket_requests;
 pub mod users;
+pub mod weekly_hours;
 
 use std::time::Duration;
 

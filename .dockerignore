@@ -27,3 +27,10 @@ docker-compose.yml
 .env
 **/.env
 **/.env.local
+# SSH keys / private keys must never enter the build context (RA-03/SEC-10)
+key
+key.pub
+*.pem
+id_rsa
+id_ed25519
+*.key

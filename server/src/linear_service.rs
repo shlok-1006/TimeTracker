@@ -70,7 +70,7 @@ impl LinearService {
             .json(&json!({ "query": query, "variables": variables }))
             .send()
             .await
-            .map_err(|e| LinearError::Http(e.to_string()))?;
+            .map_err(|e| LinearError::Http(e.without_url().to_string()))?;
 
         if resp.status().as_u16() == 429 {
             return Err(LinearError::RateLimited);
@@ -78,7 +78,10 @@ impl LinearService {
         if !resp.status().is_success() {
             return Err(LinearError::Api(format!("HTTP {}", resp.status())));
         }
-        let body: Value = resp.json().await.map_err(|e| LinearError::Http(e.to_string()))?;
+        let body: Value = resp
+            .json()
+            .await
+            .map_err(|e| LinearError::Http(e.without_url().to_string()))?;
         if let Some(errors) = body.get("errors") {
             return Err(LinearError::Api(errors.to_string()));
         }

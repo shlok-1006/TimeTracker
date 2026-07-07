@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO weekly_hours_reports\n            (user_id, week_start, week_end, working_days,\n             required_seconds, worked_seconds, shortfall_seconds, compliant)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n        ON CONFLICT (user_id, week_start) DO UPDATE SET\n            week_end          = EXCLUDED.week_end,\n            working_days      = EXCLUDED.working_days,\n            required_seconds  = EXCLUDED.required_seconds,\n            worked_seconds    = EXCLUDED.worked_seconds,\n            shortfall_seconds = EXCLUDED.shortfall_seconds,\n            compliant         = EXCLUDED.compliant,\n            updated_at        = now()\n        RETURNING id, notified_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "notified_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date",
+        "Int4",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "c9544bef15338b3cd79faca011cd1af52b04a1027ef595e2ad76eec5f510b948"
+}

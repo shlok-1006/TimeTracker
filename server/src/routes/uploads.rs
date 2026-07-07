@@ -18,8 +18,9 @@ use crate::state::AppState;
 use crate::storage::StorageClient;
 use crate::upload_service;
 
-/// Lifetime of presigned view (GET) URLs.
-const VIEW_URL_EXPIRES_SECS: u64 = 900;
+/// Lifetime of presigned view (GET) URLs — short-lived bearer capabilities, so
+/// kept brief (SEC-15). The longer PUT-upload TTL lives in `upload_service`.
+const VIEW_URL_EXPIRES_SECS: u64 = 120;
 
 #[derive(Deserialize)]
 pub(crate) struct DayQuery {
@@ -81,9 +82,11 @@ async fn save_screenshot(
     user: AuthUser,
     Json(body): Json<SaveScreenshot>,
 ) -> Result<Json<Value>, AppError> {
-    if !body.storage_key.starts_with(&format!("{}/", user.id)) {
+    // SEC-11: enforce the exact `<user_id>/<yyyymmdd>/<uuid>.jpg` shape — a
+    // prefix check alone allows `<user>/../<victim>/...` traversal.
+    if !upload_service::is_valid_screenshot_key(&body.storage_key, user.id) {
         return Err(AppError::BadRequest(
-            "storage_key outside user namespace".into(),
+            "storage_key is not a valid key within your namespace".into(),
         ));
     }
     if !screenshots::is_valid_captured_status(&body.captured_status) {

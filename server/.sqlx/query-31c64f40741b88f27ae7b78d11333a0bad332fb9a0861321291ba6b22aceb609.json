@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n              SELECT 1 FROM ticket_requests\n              WHERE user_id = $1 AND ticket_id = $2 AND status = 'approved'\n           ) AS \"approved!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "approved!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "31c64f40741b88f27ae7b78d11333a0bad332fb9a0861321291ba6b22aceb609"
+}

@@ -217,15 +217,24 @@ pub struct MemberTotal {
     pub worked_seconds: i64,
 }
 
-/// All teams with their member counts.
-pub async fn list_with_counts(pool: &PgPool) -> Result<Vec<TeamWithCount>, AppError> {
+/// All teams with member counts. `manager_id = Some(pm)` scopes counts to that
+/// PM's managed employees and hides teams none of them belong to; `None` (HR)
+/// returns every team with its full member count (SEC-09).
+pub async fn list_with_counts(
+    pool: &PgPool,
+    manager_id: Option<Uuid>,
+) -> Result<Vec<TeamWithCount>, AppError> {
     let rows = sqlx::query!(
         r#"SELECT t.id, t.name, t.description, t.created_at,
-                  CAST(COUNT(ut.user_id) AS BIGINT) AS "member_count!"
+                  CAST(COUNT(u.id) FILTER (WHERE $1::uuid IS NULL OR u.manager_id = $1) AS BIGINT) AS "member_count!"
            FROM teams t
            LEFT JOIN user_teams ut ON ut.team_id = t.id
+           LEFT JOIN users u ON u.id = ut.user_id
            GROUP BY t.id, t.name, t.description, t.created_at
-           ORDER BY t.name"#
+           HAVING $1::uuid IS NULL
+               OR COUNT(u.id) FILTER (WHERE u.manager_id = $1) > 0
+           ORDER BY t.name"#,
+        manager_id
     )
     .fetch_all(pool)
     .await?;
@@ -241,17 +250,25 @@ pub async fn list_with_counts(pool: &PgPool) -> Result<Vec<TeamWithCount>, AppEr
         .collect())
 }
 
-/// Team-wide worked-time status breakdown (over `intervals.team_id`).
-pub async fn status_breakdown(pool: &PgPool, team_id: Uuid) -> Result<StatusBreakdown, AppError> {
+/// Team worked-time status breakdown (over `intervals.team_id`). `manager_id =
+/// Some(pm)` limits it to that PM's managed employees; `None` (HR) is team-wide.
+pub async fn status_breakdown(
+    pool: &PgPool,
+    team_id: Uuid,
+    manager_id: Option<Uuid>,
+) -> Result<StatusBreakdown, AppError> {
     let r = sqlx::query!(
         r#"SELECT
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting')),0) AS BIGINT) AS "total!",
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='active'),0) AS BIGINT) AS "active!",
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='idle'),0) AS BIGINT) AS "idle!",
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='meeting'),0) AS BIGINT) AS "meeting!",
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='break'),0) AS BIGINT) AS "brk!"
-           FROM intervals WHERE team_id = $1"#,
-        team_id
+             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind IN ('active','meeting')),0) AS BIGINT) AS "total!",
+             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind='active'),0) AS BIGINT) AS "active!",
+             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind='idle'),0) AS BIGINT) AS "idle!",
+             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind='meeting'),0) AS BIGINT) AS "meeting!",
+             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind='break'),0) AS BIGINT) AS "brk!"
+           FROM intervals i
+           JOIN users u ON u.id = i.user_id
+           WHERE i.team_id = $1 AND ($2::uuid IS NULL OR u.manager_id = $2)"#,
+        team_id,
+        manager_id
     )
     .fetch_one(pool)
     .await?;
@@ -264,17 +281,24 @@ pub async fn status_breakdown(pool: &PgPool, team_id: Uuid) -> Result<StatusBrea
     })
 }
 
-/// Per-member worked totals within a team (all members, even those with 0).
-pub async fn member_totals(pool: &PgPool, team_id: Uuid) -> Result<Vec<MemberTotal>, AppError> {
+/// Per-member worked totals within a team. `manager_id = Some(pm)` returns only
+/// that PM's managed employees; `None` (HR) returns every member (SEC-09).
+pub async fn member_totals(
+    pool: &PgPool,
+    team_id: Uuid,
+    manager_id: Option<Uuid>,
+) -> Result<Vec<MemberTotal>, AppError> {
     let rows = sqlx::query!(
         r#"SELECT u.id, u.name, u.email,
                   CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind IN ('active','meeting')),0) AS BIGINT) AS "worked!"
            FROM users u
            JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = $1
            LEFT JOIN intervals i ON i.user_id = u.id AND i.team_id = $1
+           WHERE $2::uuid IS NULL OR u.manager_id = $2
            GROUP BY u.id, u.name, u.email
            ORDER BY 4 DESC, u.name"#,
-        team_id
+        team_id,
+        manager_id
     )
     .fetch_all(pool)
     .await?;

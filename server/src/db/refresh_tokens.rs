@@ -39,6 +39,36 @@ pub async fn find_valid(pool: &PgPool, token_hash: &str) -> Result<Option<(Uuid,
     Ok(row.map(|r| (r.id, r.user_id)))
 }
 
+/// Atomically consume a valid token: revoke it and return `(id, user_id)` in a
+/// single statement, so two concurrent refreshes can't both succeed on the same
+/// token (SEC-17). Returns `None` if the token is missing, revoked, or expired.
+pub async fn consume(pool: &PgPool, token_hash: &str) -> Result<Option<(Uuid, Uuid)>, AppError> {
+    let row = sqlx::query!(
+        r#"
+        UPDATE refresh_tokens
+        SET revoked_at = now()
+        WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
+        RETURNING id, user_id
+        "#,
+        token_hash
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| (r.id, r.user_id)))
+}
+
+/// The owner of a token hash regardless of its state (revoked/expired/valid).
+/// Used to detect replay of an already-consumed token (SEC-17).
+pub async fn user_for_hash(pool: &PgPool, token_hash: &str) -> Result<Option<Uuid>, AppError> {
+    let row = sqlx::query!(
+        "SELECT user_id FROM refresh_tokens WHERE token_hash = $1",
+        token_hash
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.user_id))
+}
+
 /// Revoke a token by id (used on rotation and logout).
 pub async fn revoke(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
     sqlx::query!(
@@ -62,12 +92,13 @@ pub async fn revoke_all_for_user(pool: &PgPool, user_id: Uuid) -> Result<(), App
 }
 
 /// Revoke a token by its hash (logout when we only have the token string).
-pub async fn revoke_by_hash(pool: &PgPool, token_hash: &str) -> Result<(), AppError> {
-    sqlx::query!(
-        "UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL",
+/// Returns the owning `user_id` if a live token was revoked (for audit logging).
+pub async fn revoke_by_hash(pool: &PgPool, token_hash: &str) -> Result<Option<Uuid>, AppError> {
+    let row = sqlx::query!(
+        "UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL RETURNING user_id",
         token_hash
     )
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(())
+    Ok(row.map(|r| r.user_id))
 }

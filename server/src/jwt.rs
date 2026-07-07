@@ -14,6 +14,11 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::role::UserRole;
 
+/// Issuer/audience the tokens are bound to (SEC-25) — set on issue, required on
+/// verify, so a token minted elsewhere for a different audience is rejected.
+const JWT_ISSUER: &str = "timetracker-api";
+const JWT_AUDIENCE: &str = "timetracker-clients";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Subject — the user id.
@@ -21,6 +26,10 @@ pub struct Claims {
     pub role: UserRole,
     /// Team id, if the user belongs to one.
     pub team: Option<String>,
+    /// Issuer.
+    pub iss: String,
+    /// Audience.
+    pub aud: String,
     /// Expiry as a UNIX timestamp (seconds).
     pub exp: usize,
 }
@@ -58,16 +67,20 @@ impl JwtKeys {
             sub: user_id.to_string(),
             role,
             team: team.map(|t| t.to_string()),
+            iss: JWT_ISSUER.to_string(),
+            aud: JWT_AUDIENCE.to_string(),
             exp: exp as usize,
         };
         encode(&Header::new(Algorithm::HS256), &claims, &self.encoding)
             .map_err(|e| AppError::Internal(anyhow::anyhow!("failed to sign jwt: {e}")))
     }
 
-    /// Verify a token's signature and expiry, returning its claims.
-    /// Any failure maps to `401 Unauthorized` (never leaks the reason).
+    /// Verify a token's signature, expiry, issuer, and audience, returning its
+    /// claims. Any failure maps to `401 Unauthorized` (never leaks the reason).
     pub fn verify(&self, token: &str) -> Result<Claims, AppError> {
-        let validation = Validation::new(Algorithm::HS256);
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_issuer(&[JWT_ISSUER]);
+        validation.set_audience(&[JWT_AUDIENCE]);
         decode::<Claims>(token, &self.decoding, &validation)
             .map(|data| data.claims)
             .map_err(|_| AppError::Unauthorized)

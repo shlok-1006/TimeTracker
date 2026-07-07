@@ -25,17 +25,61 @@ pub struct S3Config {
 }
 
 impl S3Config {
-    pub fn from_env() -> Self {
+    /// Load from env. Object-storage credentials are **required** — the server
+    /// refuses to start without real `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`,
+    /// and rejects the well-known `minioadmin` default (SEC-03). Local MinIO dev
+    /// can opt back into the defaults with `S3_ALLOW_INSECURE_DEFAULTS=true`.
+    pub fn from_env() -> anyhow::Result<Self> {
         fn var(key: &str, default: &str) -> String {
             std::env::var(key).unwrap_or_else(|_| default.to_string())
         }
-        Self {
+
+        let allow_insecure = std::env::var("S3_ALLOW_INSECURE_DEFAULTS")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
+        let access_key = std::env::var("S3_ACCESS_KEY_ID").unwrap_or_default();
+        let secret_key = std::env::var("S3_SECRET_ACCESS_KEY").unwrap_or_default();
+
+        let (access_key, secret_key) = if !access_key.is_empty() && !secret_key.is_empty() {
+            (access_key, secret_key)
+        } else if allow_insecure {
+            ("minioadmin".to_string(), "minioadmin".to_string())
+        } else {
+            anyhow::bail!(
+                "S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set \
+                 (set S3_ALLOW_INSECURE_DEFAULTS=true only for local MinIO dev)"
+            );
+        };
+
+        if !allow_insecure && (access_key == "minioadmin" || secret_key == "minioadmin") {
+            anyhow::bail!(
+                "refusing to start with the default 'minioadmin' S3 credentials — \
+                 set real S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY, or \
+                 S3_ALLOW_INSECURE_DEFAULTS=true for local dev"
+            );
+        }
+
+        Ok(Self {
             endpoint: var("S3_ENDPOINT", "http://localhost:9000"),
             region: var("S3_REGION", "us-east-1"),
             bucket: var("S3_BUCKET", "screenshots"),
-            access_key: var("S3_ACCESS_KEY_ID", "minioadmin"),
-            secret_key: var("S3_SECRET_ACCESS_KEY", "minioadmin"),
+            access_key,
+            secret_key,
             force_path_style: var("S3_FORCE_PATH_STYLE", "true") == "true",
+        })
+    }
+
+    /// Fixed local-MinIO config for tests and local tooling only. Production
+    /// always goes through `from_env`, which enforces real credentials (SEC-03).
+    pub fn insecure_local() -> Self {
+        Self {
+            endpoint: "http://localhost:9100".into(),
+            region: "us-east-1".into(),
+            bucket: "screenshots".into(),
+            access_key: "minioadmin".into(),
+            secret_key: "minioadmin".into(),
+            force_path_style: true,
         }
     }
 }
@@ -64,20 +108,46 @@ impl StorageClient {
         self.presign("GET", key, expires_secs, now)
     }
 
-    /// Download an object's bytes (used server-side for AI analysis). Fetches via
-    /// a short-lived presigned GET so it works against both MinIO and R2.
+    /// Download a screenshot's bytes for AI analysis via a short-lived presigned
+    /// GET. Because the presigned PUT can't bind content-type/size (SigV4 query
+    /// signing), we validate here (SEC-16): reject anything over the size cap or
+    /// that isn't a JPEG, so an attacker-uploaded oversized/non-image blob never
+    /// reaches the vision model. (A bucket-side max-object-size policy should
+    /// also be configured to bound storage-cost abuse at the source.)
     pub async fn fetch_object(&self, key: &str) -> Result<Vec<u8>, String> {
+        const MAX_SCREENSHOT_BYTES: u64 = 15 * 1024 * 1024;
+
         let url = self.presign_get(key, 300, Utc::now());
-        let resp = reqwest::get(&url)
+        let mut resp = reqwest::get(&url)
             .await
             .map_err(|e| format!("storage GET failed: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("storage GET {key} -> HTTP {}", resp.status()));
         }
-        resp.bytes()
+        // Reject early if the advertised length is over the cap.
+        if let Some(len) = resp.content_length() {
+            if len > MAX_SCREENSHOT_BYTES {
+                return Err(format!("object {key} too large: {len} bytes"));
+            }
+        }
+        // Stream with a running cap (RA-16) so a spoofed/absent Content-Length
+        // can't force us to buffer an arbitrarily large body before rejecting.
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
             .await
-            .map(|b| b.to_vec())
-            .map_err(|e| format!("reading object bytes failed: {e}"))
+            .map_err(|e| format!("reading object bytes failed: {e}"))?
+        {
+            if buf.len() as u64 + chunk.len() as u64 > MAX_SCREENSHOT_BYTES {
+                return Err(format!("object {key} too large: exceeds {MAX_SCREENSHOT_BYTES} bytes"));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        // JPEG SOI marker (0xFF 0xD8 0xFF) — the desktop only ever uploads JPEG.
+        if buf.len() < 3 || buf[0] != 0xFF || buf[1] != 0xD8 || buf[2] != 0xFF {
+            return Err(format!("object {key} is not a JPEG image"));
+        }
+        Ok(buf)
     }
 
     fn presign(&self, method: &str, key: &str, expires_secs: u64, now: DateTime<Utc>) -> String {

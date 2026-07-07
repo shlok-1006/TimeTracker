@@ -1,35 +1,55 @@
 # Full TimeTracker stack (dev + single-VM production).
-#   postgres  -> source of truth for synced activity (Rule 4)         :5432
-#   minio     -> S3-compatible object storage for screenshots (Rule 5) :9100 (S3) / :9001 (console)
+#   postgres  -> LOCAL dev database (profile: local)                   :5432
+#   minio     -> LOCAL dev object storage (profile: local)             :9100 (S3) / :9001 (console)
 #   server    -> Axum API server, built from ./Dockerfile              :9000
 #   admin-web -> Next.js admin dashboard, built from ./Dockerfile.admin :3001 (internal)
 #   nginx     -> reverse proxy / web entrypoint                        :80
 #
 # The desktop app is a native Tauri app and is NOT containerized; it talks to the
-# API directly on :9000 and uploads screenshots straight to MinIO on :9100.
+# API directly on :9000 and uploads screenshots straight to object storage.
 #
 # Web entrypoint (browser): http://<VM_HOST>/  -> dashboard, http://<VM_HOST>/api -> API.
 #
-# Usage:
-#   docker compose up -d --build   # build + start the whole stack
-#   docker compose down            # keep volumes
-#   docker compose down -v         # wipe volumes
+# Two run modes:
+#   Local dev (self-contained: local Postgres + MinIO):
+#     docker compose --profile local up -d --build
+#   Production (managed DB + GCS; nothing stateful on the VM):
+#     Set DATABASE_URL (managed Postgres, e.g. Supabase) and S3_* (GCS) in .env,
+#     then: docker compose up -d --build     # starts ONLY server, admin-web, nginx
 #
-# MinIO console: http://localhost:9001  (user: minioadmin / pass: minioadmin)
+#   docker compose down     # stop (keeps volumes)
+#
+# In production the `postgres`/`minio` services are gated behind the `local`
+# profile, so `docker compose up` does NOT start them and the VM holds no
+# database — the source of truth (Rule 4) is the managed DB behind DATABASE_URL.
 
 name: timetracker
+
+# Cap every container's logs so they can never fill the disk (the root cause of
+# the Postgres "No space left on device" outage). Each service keeps at most
+# 3 x 10MB = 30MB of logs, rotated. Applied to all services via *default-logging.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   postgres:
     image: postgres:16-alpine
     container_name: timetracker-postgres
+    # LOCAL DEV ONLY. In production the database is a managed service (Supabase /
+    # Cloud SQL) reached via DATABASE_URL, so this container is not started.
+    profiles: ["local"]
     restart: unless-stopped
+    logging: *default-logging
     environment:
-      POSTGRES_USER: timetracker
-      POSTGRES_PASSWORD: timetracker
-      POSTGRES_DB: timetracker
+      POSTGRES_USER: ${POSTGRES_USER:-timetracker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-timetracker}
+      POSTGRES_DB: ${POSTGRES_DB:-timetracker}
     ports:
-      - "5432:5432"
+      # SEC-04: loopback only — never publish the database to the internet.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -41,14 +61,20 @@ services:
   minio:
     image: minio/minio:RELEASE.2024-09-22T00-33-43Z
     container_name: timetracker-minio
+    # LOCAL DEV ONLY. Production uses GCS/R2 via the S3_* env vars.
+    profiles: ["local"]
     restart: unless-stopped
+    logging: *default-logging
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "9100:9000"   # S3 API on host :9100 (host :9000 is now the API server)
-      - "9001:9001"   # Web console
+      # SEC-04: loopback only. The console must never be public; for self-hosted
+      # direct client uploads, front the S3 API behind the TLS proxy rather than
+      # publishing this port. (Production uses GCS/R2, not this MinIO.)
+      - "127.0.0.1:9100:9000"   # S3 API on host :9100
+      - "127.0.0.1:9001:9001"   # Web console
     volumes:
       - minio_data:/data
 
@@ -58,12 +84,20 @@ services:
   minio-init:
     image: minio/mc:RELEASE.2024-09-16T17-43-14Z
     container_name: timetracker-minio-init
+    # LOCAL DEV ONLY (creates the local MinIO bucket).
+    profiles: ["local"]
+    logging: *default-logging
     depends_on:
       minio:
         condition: service_started
+    # RA-18: reuse the same root creds as the minio service (was hardcoded
+    # 'minioadmin', which broke bucket init whenever the creds were changed).
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     entrypoint: >
       /bin/sh -c "
-      until mc alias set local http://minio:9000 minioadmin minioadmin; do
+      until mc alias set local http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\"; do
         echo 'waiting for minio...'; sleep 2;
       done &&
       mc mb --ignore-existing local/screenshots &&
@@ -80,20 +114,36 @@ services:
       dockerfile: Dockerfile
     container_name: timetracker-server
     restart: unless-stopped
+    logging: *default-logging
+    # Inject the whole .env so vars NOT listed under `environment:` below
+    # (e.g. SMTP_HOST/PORT/USER/PASS/FROM for email) still reach the container.
+    # `required: false` => dev without a .env still works. The explicit
+    # `environment:` keys below take precedence over these.
+    env_file:
+      - path: .env
+        required: false
+    # `required: false` => these are awaited only when started (i.e. the `local`
+    # profile is active). In production they are absent and the server connects
+    # straight to the managed DB / GCS, so it is not blocked by them.
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
       minio-init:
         condition: service_completed_successfully
+        required: false
     environment:
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: "9000"
-      # Internal compose-network hostnames (NOT localhost).
-      DATABASE_URL: postgres://timetracker:timetracker@postgres:5432/timetracker
+      # Managed DB in production: set DATABASE_URL in .env to the Supabase/Cloud SQL
+      # connection string (use the SESSION-mode pooler + ?sslmode=require — the
+      # transaction pooler breaks SQLx prepared statements). Falls back to the
+      # local `postgres` service for `--profile local` dev.
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-timetracker}:${POSTGRES_PASSWORD:-timetracker}@postgres:5432/${POSTGRES_DB:-timetracker}}
       DATABASE_MAX_CONNECTIONS: "10"
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev-access-secret-change-me}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-refresh-secret-change-me}
-      JWT_ACCESS_TTL_SECONDS: "900"
+      # SEC-07: required (>=32 chars). Set in .env: openssl rand -base64 48
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET in .env (openssl rand -base64 48)}
+      JWT_ACCESS_TTL_SECONDS: "300"
       JWT_REFRESH_TTL_SECONDS: "2592000"
       # Presigned-URL host: must be reachable by clients. Locally that's MinIO's
       # published port (localhost:9100); on a VM set S3_ENDPOINT in .env to the
@@ -104,14 +154,19 @@ services:
       S3_BUCKET: ${S3_BUCKET:-screenshots}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      # SEC-03: allows the minioadmin dev default; set false + real keys in prod.
+      S3_ALLOW_INSECURE_DEFAULTS: ${S3_ALLOW_INSECURE_DEFAULTS:-true}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:9000}
       LINEAR_API_KEY: ${LINEAR_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
-      RUST_LOG: info,server=debug,sqlx=warn
+      RUST_LOG: ${RUST_LOG:-info,server=info,sqlx=warn}
     ports:
-      - "9000:9000"
+      # SEC-04/SEC-21: bind to loopback so the API is reachable only via nginx,
+      # not published to the internet. Change to "9000:9000" only for direct
+      # local access without the proxy.
+      - "127.0.0.1:9000:9000"
 
   # Admin dashboard (Next.js). NEXT_PUBLIC_API_BASE_URL is inlined at BUILD time,
   # so it is passed as a build arg (not a runtime env). Default "/api" => the
@@ -124,6 +179,7 @@ services:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
     container_name: timetracker-admin-web
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - server
     expose:
@@ -136,6 +192,7 @@ services:
     image: nginx:1.27-alpine
     container_name: timetracker-nginx
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - admin-web
       - server

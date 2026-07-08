@@ -1,15 +1,27 @@
-//! S3-compatible object storage (MinIO local / Cloudflare R2 production).
+//! Object storage: S3-compatible (MinIO local / Cloudflare R2) **or** Google
+//! Cloud Storage signed with a service-account key.
 //!
 //! The server never stores screenshot bytes (Rule 5). It hands the desktop a
 //! short-lived **presigned PUT URL**; the desktop uploads bytes directly to the
 //! bucket, then notifies the API with metadata only.
 //!
-//! Presigning is AWS Signature V4 query signing — a local HMAC computation, no
-//! network and no AWS SDK (keeps the build free of C toolchains). Verified
-//! against AWS's published test vector in the tests below.
+//! Two signing modes, chosen by config:
+//!   * **S3 SigV4** (default) — local HMAC over `S3_ACCESS_KEY_ID/SECRET`.
+//!     Verified against AWS's published test vector in the tests below.
+//!   * **GCS V4 (`GOOG4-RSA-SHA256`)** — when `GCS_SA_KEY_BASE64`/`_JSON` is set,
+//!     sign with the service account's RSA private key (no HMAC key needed).
+//!
+//! Both are local computations — no network, no cloud SDK.
 
+use std::sync::Arc;
+
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use rsa::pkcs1v15::SigningKey;
+use rsa::pkcs8::DecodePrivateKey;
+use rsa::signature::{SignatureEncoding, Signer};
+use rsa::RsaPrivateKey;
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -22,6 +34,10 @@ pub struct S3Config {
     pub access_key: String,
     pub secret_key: String,
     pub force_path_style: bool,
+    /// When set, presigned URLs are signed with GCS V4 (GOOG4-RSA-SHA256) using
+    /// this service account instead of S3 HMAC SigV4; `access_key`/`secret_key`
+    /// are then unused.
+    pub gcs: Option<GcsSigner>,
 }
 
 impl S3Config {
@@ -34,25 +50,36 @@ impl S3Config {
             std::env::var(key).unwrap_or_else(|_| default.to_string())
         }
 
+        // GCS service-account signing (Option B): if a key is provided we sign
+        // with GCS V4 and the HMAC keys are irrelevant. Defaults switch to GCS.
+        let gcs = load_gcs_signer()?;
+
         let allow_insecure = std::env::var("S3_ALLOW_INSECURE_DEFAULTS")
             .map(|v| v == "true")
             .unwrap_or(false);
 
-        let access_key = std::env::var("S3_ACCESS_KEY_ID").unwrap_or_default();
-        let secret_key = std::env::var("S3_SECRET_ACCESS_KEY").unwrap_or_default();
+        let env_access = std::env::var("S3_ACCESS_KEY_ID").unwrap_or_default();
+        let env_secret = std::env::var("S3_SECRET_ACCESS_KEY").unwrap_or_default();
 
-        let (access_key, secret_key) = if !access_key.is_empty() && !secret_key.is_empty() {
-            (access_key, secret_key)
+        let (access_key, secret_key) = if gcs.is_some() {
+            // Signing uses the RSA key; HMAC creds are unused.
+            (String::new(), String::new())
+        } else if !env_access.is_empty() && !env_secret.is_empty() {
+            (env_access, env_secret)
         } else if allow_insecure {
             ("minioadmin".to_string(), "minioadmin".to_string())
         } else {
             anyhow::bail!(
-                "S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set \
-                 (set S3_ALLOW_INSECURE_DEFAULTS=true only for local MinIO dev)"
+                "no object-storage credentials: set GCS_SA_KEY_BASE64 (GCS), or \
+                 S3_ACCESS_KEY_ID + S3_SECRET_ACCESS_KEY (S3/MinIO/R2), or \
+                 S3_ALLOW_INSECURE_DEFAULTS=true for local MinIO dev"
             );
         };
 
-        if !allow_insecure && (access_key == "minioadmin" || secret_key == "minioadmin") {
+        if gcs.is_none()
+            && !allow_insecure
+            && (access_key == "minioadmin" || secret_key == "minioadmin")
+        {
             anyhow::bail!(
                 "refusing to start with the default 'minioadmin' S3 credentials — \
                  set real S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY, or \
@@ -60,13 +87,21 @@ impl S3Config {
             );
         }
 
+        // GCS uses storage.googleapis.com + region "auto" (Google's V4 scope).
+        let (default_endpoint, default_region) = if gcs.is_some() {
+            ("https://storage.googleapis.com", "auto")
+        } else {
+            ("http://localhost:9000", "us-east-1")
+        };
+
         Ok(Self {
-            endpoint: var("S3_ENDPOINT", "http://localhost:9000"),
-            region: var("S3_REGION", "us-east-1"),
+            endpoint: var("S3_ENDPOINT", default_endpoint),
+            region: var("S3_REGION", default_region),
             bucket: var("S3_BUCKET", "screenshots"),
             access_key,
             secret_key,
             force_path_style: var("S3_FORCE_PATH_STYLE", "true") == "true",
+            gcs,
         })
     }
 
@@ -80,8 +115,72 @@ impl S3Config {
             access_key: "minioadmin".into(),
             secret_key: "minioadmin".into(),
             force_path_style: true,
+            gcs: None,
         }
     }
+}
+
+/// A Google Cloud Storage V4 signer backed by a service-account RSA private key.
+/// Signs presigned-URL string-to-sign values with `GOOG4-RSA-SHA256`.
+#[derive(Clone)]
+pub struct GcsSigner {
+    client_email: String,
+    signing_key: Arc<SigningKey<Sha256>>,
+}
+
+impl std::fmt::Debug for GcsSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print the private key.
+        f.debug_struct("GcsSigner")
+            .field("client_email", &self.client_email)
+            .finish_non_exhaustive()
+    }
+}
+
+impl GcsSigner {
+    /// Build from a GCS service-account JSON (needs `client_email` + PEM
+    /// `private_key`).
+    pub fn from_json(json: &str) -> anyhow::Result<Self> {
+        #[derive(serde::Deserialize)]
+        struct Sa {
+            client_email: String,
+            private_key: String,
+        }
+        let sa: Sa = serde_json::from_str(json).context("parse service-account JSON")?;
+        let key = RsaPrivateKey::from_pkcs8_pem(&sa.private_key)
+            .map_err(|e| anyhow::anyhow!("parse service-account private key: {e}"))?;
+        Ok(Self {
+            client_email: sa.client_email,
+            signing_key: Arc::new(SigningKey::<Sha256>::new(key)),
+        })
+    }
+
+    /// RSA-SHA256 sign the string-to-sign, hex-encoded (GCS V4 signature form).
+    fn sign_hex(&self, string_to_sign: &str) -> String {
+        let sig = self.signing_key.sign(string_to_sign.as_bytes());
+        hex::encode(sig.to_bytes())
+    }
+}
+
+/// Load a GCS signer from `GCS_SA_KEY_BASE64` (preferred) or `GCS_SA_KEY_JSON`.
+/// Returns `None` when neither is set (S3 HMAC path).
+fn load_gcs_signer() -> anyhow::Result<Option<GcsSigner>> {
+    use base64::Engine;
+    if let Ok(b64) = std::env::var("GCS_SA_KEY_BASE64") {
+        if !b64.trim().is_empty() {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.trim())
+                .context("GCS_SA_KEY_BASE64 is not valid base64")?;
+            let json = String::from_utf8(bytes).context("GCS service-account key is not UTF-8")?;
+            return Ok(Some(GcsSigner::from_json(&json)?));
+        }
+    }
+    if let Ok(json) = std::env::var("GCS_SA_KEY_JSON") {
+        if !json.trim().is_empty() {
+            return Ok(Some(GcsSigner::from_json(&json)?));
+        }
+    }
+    Ok(None)
 }
 
 #[derive(Clone)]
@@ -167,17 +266,29 @@ impl StorageClient {
             )
         };
 
-        presigned_url(
-            &self.cfg.access_key,
-            &self.cfg.secret_key,
-            &self.cfg.region,
-            method,
-            scheme,
-            &host,
-            &canonical_uri,
-            expires_secs,
-            now,
-        )
+        match &self.cfg.gcs {
+            Some(signer) => presigned_url_gcs(
+                signer,
+                &self.cfg.region,
+                method,
+                scheme,
+                &host,
+                &canonical_uri,
+                expires_secs,
+                now,
+            ),
+            None => presigned_url(
+                &self.cfg.access_key,
+                &self.cfg.secret_key,
+                &self.cfg.region,
+                method,
+                scheme,
+                &host,
+                &canonical_uri,
+                expires_secs,
+                now,
+            ),
+        }
     }
 }
 
@@ -271,6 +382,55 @@ fn presigned_url(
     format!("{scheme}://{host}{encoded_uri}?{canonical_querystring}&X-Amz-Signature={signature}")
 }
 
+/// GCS V4 query presigner (`GOOG4-RSA-SHA256`). Same canonical-request shape as
+/// SigV4, but the credential scope is `.../auto/storage/goog4_request` and the
+/// signature is an RSA-SHA256 signature (hex) over the string-to-sign, produced
+/// with the service account's private key.
+#[allow(clippy::too_many_arguments)]
+fn presigned_url_gcs(
+    signer: &GcsSigner,
+    region: &str,
+    method: &str,
+    scheme: &str,
+    host: &str,
+    canonical_uri: &str,
+    expires_secs: u64,
+    now: DateTime<Utc>,
+) -> String {
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let date_stamp = now.format("%Y%m%d").to_string();
+    let scope = format!("{date_stamp}/{region}/storage/goog4_request");
+    let credential = format!("{}/{}", signer.client_email, scope);
+
+    // Keys must be in sorted order for the canonical query string.
+    let canonical_querystring = format!(
+        "X-Goog-Algorithm=GOOG4-RSA-SHA256\
+         &X-Goog-Credential={}\
+         &X-Goog-Date={}\
+         &X-Goog-Expires={}\
+         &X-Goog-SignedHeaders=host",
+        uri_encode(&credential, true),
+        amz_date,
+        expires_secs,
+    );
+
+    let encoded_uri = uri_encode(canonical_uri, false);
+    let canonical_headers = format!("host:{host}\n");
+    let payload_hash = "UNSIGNED-PAYLOAD";
+    let canonical_request = format!(
+        "{method}\n{encoded_uri}\n{canonical_querystring}\n{canonical_headers}\nhost\n{payload_hash}"
+    );
+
+    let string_to_sign = format!(
+        "GOOG4-RSA-SHA256\n{amz_date}\n{scope}\n{}",
+        sha256_hex(canonical_request.as_bytes())
+    );
+
+    let signature = signer.sign_hex(&string_to_sign);
+
+    format!("{scheme}://{host}{encoded_uri}?{canonical_querystring}&X-Goog-Signature={signature}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,10 +470,94 @@ mod tests {
             access_key: "minioadmin".into(),
             secret_key: "minioadmin".into(),
             force_path_style: true,
+            gcs: None,
         };
         let url = StorageClient::new(cfg).presign_put("user/abc.jpg", 900, Utc::now());
         assert!(url.starts_with("http://localhost:9000/screenshots/user/abc.jpg?"));
         assert!(url.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256"));
         assert!(url.contains("X-Amz-Signature="));
+    }
+
+    // Throwaway 2048-bit RSA key (PKCS#8) — for tests ONLY, never a real credential.
+    const TEST_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
+        MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC61AOB+SCVZ3+7\n\
+        k/ZHYIOWTZNjPHOjF9gQj9ZtJHIvvBWzkl7bIad5cIFUzQ3nzwF0aVVDR+WurRNw\n\
+        dcFwNWgPJydnGFdq/3KseYDGrVUFDmB8SCnzv6c6PcWMLwGf2g1B58m31hwVCrMu\n\
+        L5ykH+IhRly1DHsuvWyRuTFZZyrIYeOzIexPB2bjbOhGJfzETHn/OQ2Fcyabwm0D\n\
+        lMkdjvg1b3JJ4cqkq/yfGjZPP1JnVGxPDSxlRpzCGOVFi0uKX8fjyfhVT9bJHt/E\n\
+        xBm+bcx0srUa/CBmOndAOXvc99PvtE030vkdH3AuXk+E9Jxvgnl81dvNB5MPUDWf\n\
+        BXrSKd6VAgMBAAECggEAFhRg3r8z0dxjvOYpbLmUC5Ma+FcoXm2+uARbxdXRFeGf\n\
+        WfPSOIkTaxd3/W7ndg4hoKGjNTqdwyVKvxd3lzyEkgfhUP6QNEHAym/on3JUMi8H\n\
+        CaEYrikoCQrMWjsi8MKbHv8W+J45/uWfE/YGB+KJvb98TNxPAZDa8CToF2YJKRmu\n\
+        a5BL0K+cApsk12hcyiB9xs7EF06+ikcfTMnGsFnELeDfp3j9qYbVt0YCra8jSA5J\n\
+        kIwnz1DqHRzyrvV0lHyamX9Tf3160gHYeCX4ci3TL3M83k7hXZmEjtZEw7aw53A+\n\
+        ZoSC1Sjdgy/HW/O+tBtaR4w9c1Dmzwhj8B2pYUvz2QKBgQD4cjq1UNBW8On13PRF\n\
+        GA0QCu2bVhE4twoEdLW5/PGZcABXu/b4Urq9k+GABi0b368AQMH2vtemLRyxdNIX\n\
+        crUo50vcCRO8pI74uhnPxNnYsP58urWbGd1db8D6tu1hEHeO3OebPmQX8Qkg3mAz\n\
+        6VqHAFeBVFnI7h7ItBddkZ8uqQKBgQDAgi7aFT82Jh4wJJ659krnH152fNzyj7ZQ\n\
+        trJ0mkpwwVmrCDC05xvEwRPHB0LqwkM1+Im3csPT7wsACItobtpaskrL8ecp1b4v\n\
+        YJZSdud0oqmKv+vV2y/8uYNiOGUKsckB2zUYY1T7zncI5agxfxsRmauHKjE6HzyD\n\
+        +tmSf8CADQKBgDF6rm6F1bg66p1oj81i6NcVFhUlovBko74XcEnGMmeYgrj2Wk1C\n\
+        TKaM2RAiKsGuXq/yNa7qexBBU8GTvnOlCKdIyTbdJ+0d6MtoZNOYJLqfJU+574kg\n\
+        MZH2O7yyybvXB7iQDiBA4LZT7rl5EDfGdZ0FWGgNYIQ/yCm4lB6ybb1hAoGBAKnP\n\
+        rChvaY0IXsS06Na9LSFnCFqYlgXZQ0c7gXtdxqBjzgcSeHR7EIGklx+PhjWzGrp2\n\
+        /HQ35goC6L8kymRatH4gm93/CpxakSMVnkQr4st92PQti4jfihryQbTYbjjazqa2\n\
+        iMV0ibh9TX8ppg3TQztpRGc8jqPofecl1dpmmpXZAoGAc5z8AXxFma7toBdzrlb0\n\
+        Ee4hIf+urMaA1hiD8jg1fIcINis4U/upv/rRRbgvhf0+GnbKHfIGlCr6B/imQHfO\n\
+        P1Yt5xOnP7Z7z3JnPalLhBUcInBjF4V0obpkyLCxOYzr1kAdZQuOS5Un0Zo27TiV\n\
+        QVgUpdc+37SzHcxF2h7NtXw=\n\
+        -----END PRIVATE KEY-----\n";
+
+    fn test_gcs_config() -> S3Config {
+        let json = format!(
+            r#"{{"client_email":"timetracker-storage@ruh-ai-dev.iam.gserviceaccount.com","private_key":{}}}"#,
+            serde_json::to_string(TEST_PEM).unwrap()
+        );
+        S3Config {
+            endpoint: "https://storage.googleapis.com".into(),
+            region: "auto".into(),
+            bucket: "screenshots".into(),
+            access_key: String::new(),
+            secret_key: String::new(),
+            force_path_style: true,
+            gcs: Some(GcsSigner::from_json(&json).unwrap()),
+        }
+    }
+
+    #[test]
+    fn gcs_signer_parses_service_account_json() {
+        let cfg = test_gcs_config();
+        assert_eq!(
+            cfg.gcs.as_ref().unwrap().client_email,
+            "timetracker-storage@ruh-ai-dev.iam.gserviceaccount.com"
+        );
+    }
+
+    #[test]
+    fn gcs_presign_produces_goog4_signed_url() {
+        let url = StorageClient::new(test_gcs_config()).presign_put("user/abc.jpg", 900, Utc::now());
+        // Path-style GCS host + key.
+        assert!(
+            url.starts_with("https://storage.googleapis.com/screenshots/user/abc.jpg?"),
+            "unexpected url: {url}"
+        );
+        assert!(url.contains("X-Goog-Algorithm=GOOG4-RSA-SHA256"));
+        // Credential carries the SA email (with '/' + '@' percent-encoded).
+        assert!(url.contains("X-Goog-Credential=timetracker-storage%40ruh-ai-dev.iam.gserviceaccount.com%2F"));
+        assert!(url.contains("%2Fauto%2Fstorage%2Fgoog4_request"));
+        assert!(url.contains("X-Goog-SignedHeaders=host"));
+        // A signature is present and looks like hex (RSA-2048 => 512 hex chars).
+        let sig = url.split("X-Goog-Signature=").nth(1).unwrap();
+        assert_eq!(sig.len(), 512, "expected 2048-bit RSA signature hex");
+        assert!(sig.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn gcs_signatures_are_deterministic_for_fixed_inputs() {
+        // PKCS#1 v1.5 is deterministic, so the same inputs must yield the same URL.
+        let now = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 7, 8, 12, 0, 0).unwrap();
+        let a = StorageClient::new(test_gcs_config()).presign_put("k.jpg", 300, now);
+        let b = StorageClient::new(test_gcs_config()).presign_put("k.jpg", 300, now);
+        assert_eq!(a, b);
     }
 }

@@ -43,3 +43,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 # Base64 for inlining screenshot bytes into Claude vision requests (STEP 10).
 base64 = "0.22"
+# RSA (GOOG4-RSA-SHA256) signing of GCS V4 presigned URLs from a service-account
+# key — the "no HMAC key" storage path. `pem` parses the SA private key, `sha2`
+# wires the SHA-256 digest for PKCS#1 v1.5 signing.
+rsa = { version = "0.9", features = ["pem", "sha2"] }

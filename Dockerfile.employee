@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1
+#
+# Production image for the TimeTracker employee dashboard (Next.js 15, pnpm monorepo).
+# Mirrors Dockerfile.admin. Served behind Nginx at /employee (NEXT_BASE_PATH),
+# with same-origin API calls to /api (NEXT_PUBLIC_API_BASE_URL).
+#
+# Uses Dockerfile.employee.dockerignore (in the context root) so the workspace
+# source is included even though the root .dockerignore excludes it.
+
+############################
+# 1. Builder
+############################
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+
+# Manifests first so the dependency layer caches independently of source changes.
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY packages/shared/package.json packages/shared/
+COPY apps/employee-web/package.json apps/employee-web/
+COPY apps/desktop/package.json apps/desktop/
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --filter employee-web...
+
+# Source for the dashboard + the shared package it transpiles.
+COPY packages/shared packages/shared
+COPY apps/employee-web apps/employee-web
+
+# Same-origin API calls (browser hits "/api/...", Nginx forwards to the server).
+ARG NEXT_PUBLIC_API_BASE_URL=/api
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+# Sub-path this app is mounted at behind Nginx.
+ARG NEXT_BASE_PATH=/employee
+ENV NEXT_BASE_PATH=$NEXT_BASE_PATH
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN pnpm --filter employee-web build
+
+############################
+# 2. Runtime
+############################
+FROM node:20-bookworm-slim AS runner
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Bring the built app + its pnpm node_modules symlink farm across intact.
+COPY --from=builder /app /app
+
+EXPOSE 3002
+# `next start` serves the production build on :3002 (see employee-web package.json).
+CMD ["pnpm", "--filter", "employee-web", "start"]

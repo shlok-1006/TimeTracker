@@ -185,6 +185,22 @@ services:
     expose:
       - "3001"   # internal only; reached through Nginx
 
+  # Employee dashboard (Next.js). Same pattern as admin-web, but mounted behind
+  # Nginx at /employee (NEXT_BASE_PATH baked in at build time). Same-origin /api.
+  employee-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.employee
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
+    container_name: timetracker-employee-web
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - server
+    expose:
+      - "3002"   # internal only; reached through Nginx
+
   # Reverse proxy / single web entrypoint on :80.
   #   /     -> admin-web:3001
   #   /api/ -> server:9000  (prefix stripped)
@@ -195,6 +211,7 @@ services:
     logging: *default-logging
     depends_on:
       - admin-web
+      - employee-web
       - server
     ports:
       - "80:80"

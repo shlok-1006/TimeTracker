@@ -11,9 +11,28 @@ const KEYRING_SERVICE: &str = "com.timetracker.desktop";
 const ACCOUNT_ACCESS: &str = "access_token";
 const ACCOUNT_REFRESH: &str = "refresh_token";
 
+/// Default API base URL, resolved at compile time. **Release** builds (the
+/// installers employees run) point at the hosted backend so a fresh install
+/// works with no configuration; **debug** builds (`tauri dev`) point at a local
+/// server. Either is overridable at runtime with `TIMETRACKER_API_BASE_URL`
+/// (e.g. `http://localhost:9000` for local dev against a release build).
+///
+/// The base includes the `/api` prefix: Nginx routes `/api/*` to the server and
+/// strips the prefix, so `{base}/auth/login` reaches the server's `/auth/login`.
+const DEFAULT_API_BASE: &str = if cfg!(debug_assertions) {
+    "http://localhost:9000"
+} else {
+    "https://time-tracker.rapidinnovation.dev/api"
+};
+
 pub fn api_base() -> String {
-    std::env::var("TIMETRACKER_API_BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:9000".to_string())
+    let base = std::env::var("TIMETRACKER_API_BASE_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_API_BASE.to_string());
+    // Trim any trailing slash so `{base}/path` never doubles up.
+    base.trim_end_matches('/').to_string()
 }
 
 fn entry(account: &str) -> Result<Entry, String> {

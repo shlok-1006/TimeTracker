@@ -61,8 +61,25 @@ const adminShotSchema = z.object({
 });
 export type AdminShot = z.infer<typeof adminShotSchema>;
 
-/** Try to rotate the refresh token. Returns true if a new access token is set. */
-async function tryRefresh(): Promise<boolean> {
+/** Single-flight guard: concurrent 401s must NOT each rotate the refresh token.
+ *  The server rotates on the first use and its reuse-detection treats the second
+ *  use of the same token as a stolen-token replay — revoking every session and
+ *  logging the user out. While one rotation is in flight, all callers await the
+ *  same promise and reuse its result. */
+let refreshInFlight: Promise<boolean> | null = null;
+
+/** Try to rotate the refresh token. Returns true if a new access token is set.
+ *  De-duplicated across concurrent callers via `refreshInFlight`. */
+function tryRefresh(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function doRefresh(): Promise<boolean> {
   const rt = useAuthStore.getState().refreshToken;
   if (!rt) return false;
   try {

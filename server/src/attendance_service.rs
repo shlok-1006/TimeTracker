@@ -1,8 +1,11 @@
 //! Attendance business logic (Feature 6C): derive a day's attendance status
 //! from the interval log, integrating approved leave and company holidays.
 //!
-//! Precedence: actual worked time always wins (present/partial). Only when there
-//! is *no* work do we explain the day as leave → holiday → weekend → absent.
+//! Precedence: worked time wins — at/above the present threshold the day is
+//! `present` (migration 0021 removed the "partial" tier: a started timer counts
+//! as present). Below it, we explain the day as leave → holiday → weekend →
+//! absent. `status` must stay within the `attendance_days_status_check`
+//! constraint: present | absent | leave | holiday | weekend.
 
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use sqlx::PgPool;
@@ -11,8 +14,20 @@ use uuid::Uuid;
 use crate::db::{attendance, leave};
 use crate::error::AppError;
 
-/// Worked seconds at/above which a day counts as a full "present" day.
-pub const FULL_DAY_SECONDS: i64 = 6 * 3600;
+/// Minimum worked seconds for a day to count as **present**. Policy: simply
+/// running the tracker for the day (a couple of minutes) marks it present — so
+/// this is 2 minutes, not a full work day. Overridable via
+/// `TIMETRACKER_ATTENDANCE_PRESENT_SECONDS`.
+pub const DEFAULT_PRESENT_THRESHOLD_SECONDS: i64 = 120;
+
+/// The present threshold (seconds), from env or the 2-minute default.
+fn present_threshold_seconds() -> i64 {
+    std::env::var("TIMETRACKER_ATTENDANCE_PRESENT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(DEFAULT_PRESENT_THRESHOLD_SECONDS)
+}
 
 /// UTC `[start, end)` bounds for a calendar day.
 fn day_bounds(day: NaiveDate) -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
@@ -27,14 +42,16 @@ fn is_weekend(day: NaiveDate) -> bool {
 /// Derive (status, note) from worked time + leave/holiday/weekend context.
 fn derive_status(
     worked_seconds: i64,
+    present_threshold: i64,
     leave_type: Option<&str>,
     holiday_name: Option<&str>,
     day: NaiveDate,
 ) -> (&'static str, String) {
-    if worked_seconds >= FULL_DAY_SECONDS {
+    // No "partial" tier — migration 0021 dropped it from the CHECK constraint,
+    // so producing it here would 500 on insert. At/above the threshold => present;
+    // otherwise explain the (sub-threshold) day as leave/holiday/weekend/absent.
+    if worked_seconds >= present_threshold {
         ("present", String::new())
-    } else if worked_seconds > 0 {
-        ("partial", String::new())
     } else if let Some(lt) = leave_type {
         ("leave", lt.to_string())
     } else if let Some(h) = holiday_name {
@@ -65,8 +82,13 @@ pub async fn rollup_day(
         )
     };
 
-    let (status, note) =
-        derive_status(activity.worked_seconds, leave_type.as_deref(), holiday_name.as_deref(), day);
+    let (status, note) = derive_status(
+        activity.worked_seconds,
+        present_threshold_seconds(),
+        leave_type.as_deref(),
+        holiday_name.as_deref(),
+        day,
+    );
 
     attendance::upsert(
         pool,
@@ -134,36 +156,56 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
     }
 
+    const T: i64 = DEFAULT_PRESENT_THRESHOLD_SECONDS; // 2 minutes
+
     #[test]
-    fn full_day_is_present() {
-        let (s, _) = derive_status(FULL_DAY_SECONDS, None, None, d(2026, 6, 8));
-        assert_eq!(s, "present");
+    fn tracking_at_least_two_minutes_is_present() {
+        // Exactly the threshold, and well over it, both count as present.
+        assert_eq!(derive_status(T, T, None, None, d(2026, 6, 8)).0, "present");
+        assert_eq!(derive_status(5 * 3600, T, None, None, d(2026, 6, 8)).0, "present");
     }
 
     #[test]
-    fn some_work_is_partial() {
-        let (s, _) = derive_status(3600, None, None, d(2026, 6, 8));
-        assert_eq!(s, "partial");
+    fn tracking_under_two_minutes_is_not_present() {
+        // No "partial" tier (migration 0021). Sub-threshold on a weekday with no
+        // leave/holiday falls through to absent — never "partial", which the
+        // attendance_days_status_check constraint would reject.
+        assert_eq!(derive_status(30, T, None, None, d(2026, 6, 8)).0, "absent");
+        assert_eq!(derive_status(T - 1, T, None, None, d(2026, 6, 8)).0, "absent");
+    }
+
+    #[test]
+    fn status_never_partial() {
+        // Guard against reintroducing a status the DB constraint rejects.
+        const ALLOWED: [&str; 5] = ["present", "absent", "leave", "holiday", "weekend"];
+        for worked in [0i64, 1, 59, T - 1, T, T + 1, 10 * 3600] {
+            for (lt, hol) in [(None, None), (Some("Annual"), None), (None, Some("NY"))] {
+                for day in [d(2026, 6, 8), d(2026, 6, 13)] {
+                    let (s, _) = derive_status(worked, T, lt, hol, day);
+                    assert!(ALLOWED.contains(&s), "disallowed status {s:?}");
+                }
+            }
+        }
     }
 
     #[test]
     fn work_overrides_leave_and_holiday() {
-        // A weekend day with work still counts as worked.
-        let (s, _) = derive_status(FULL_DAY_SECONDS, Some("Annual"), Some("X"), d(2026, 6, 13));
+        // A weekend day with work still counts as present.
+        let (s, _) = derive_status(T, T, Some("Annual"), Some("X"), d(2026, 6, 13));
         assert_eq!(s, "present");
     }
 
     #[test]
     fn no_work_prefers_leave_then_holiday_then_weekend_then_absent() {
-        assert_eq!(derive_status(0, Some("Sick"), Some("NY"), d(2026, 6, 8)).0, "leave");
-        assert_eq!(derive_status(0, None, Some("New Year"), d(2026, 6, 8)).0, "holiday");
-        assert_eq!(derive_status(0, None, None, d(2026, 6, 13)).0, "weekend"); // Saturday
-        assert_eq!(derive_status(0, None, None, d(2026, 6, 8)).0, "absent"); // Monday
+        assert_eq!(derive_status(0, T, Some("Sick"), Some("NY"), d(2026, 6, 8)).0, "leave");
+        assert_eq!(derive_status(0, T, None, Some("New Year"), d(2026, 6, 8)).0, "holiday");
+        assert_eq!(derive_status(0, T, None, None, d(2026, 6, 13)).0, "weekend"); // Saturday
+        assert_eq!(derive_status(0, T, None, None, d(2026, 6, 8)).0, "absent"); // Monday
     }
 
     #[test]
     fn leave_note_carries_type_name() {
-        let (s, note) = derive_status(0, Some("Annual Leave"), None, d(2026, 6, 8));
+        let (s, note) = derive_status(0, T, Some("Annual Leave"), None, d(2026, 6, 8));
         assert_eq!(s, "leave");
         assert_eq!(note, "Annual Leave");
     }

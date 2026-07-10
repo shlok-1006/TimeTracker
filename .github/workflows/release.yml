@@ -33,9 +33,9 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libgtk-3-dev libxdo-dev
 
+      # pnpm version comes from the "packageManager" field in package.json —
+      # specifying it here too makes pnpm/action-setup fail on the conflict.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 20

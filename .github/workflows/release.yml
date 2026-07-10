@@ -36,7 +36,8 @@ jobs:
             librsvg2-dev patchelf libgtk-3-dev libxdo-dev \
             libx11-dev libxcb1-dev libxrandr-dev libdbus-1-dev \
             libxss-dev libxtst-dev libxi-dev libxinerama-dev libxcursor-dev \
-            libxfixes-dev libxext-dev libudev-dev libinput-dev
+            libxfixes-dev libxext-dev libudev-dev libinput-dev \
+            libpipewire-0.3-dev libspa-0.2-dev
 
       # pnpm version comes from the "packageManager" field in package.json —
       # specifying it here too makes pnpm/action-setup fail on the conflict.

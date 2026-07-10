@@ -3,8 +3,14 @@
 //! works end-to-end in development without a mail server.
 
 use lettre::message::header::ContentType;
+use lettre::message::{Attachment, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+
+/// Employee install guide, embedded at compile time so the deployed container
+/// needs no extra files. Attached to every welcome email.
+const INSTALL_GUIDE_PDF: &[u8] = include_bytes!("../assets/TimeTracker-Employee-Install-Guide.pdf");
+const INSTALL_GUIDE_FILENAME: &str = "TimeTracker-Install-Guide.pdf";
 
 pub struct ApprovalEmail<'a> {
     pub owner_email: &'a str,
@@ -226,16 +232,26 @@ pub async fn send_welcome(e: WelcomeEmail<'_>) -> anyhow::Result<()> {
          4. Click Start to begin tracking your work time.\n\n",
     );
 
+    body.push_str("The full installation guide is attached to this email as a PDF.\n\n");
+
     if let Some(guide) = e.setup_guide_url {
         body.push_str(&format!(
-            "Full setup guide:\n\u{20}\u{20}{guide}\n\n",
+            "You can also read it online:\n\u{20}\u{20}{guide}\n\n",
             guide = guide
         ));
     }
 
     body.push_str("Welcome aboard!\n\n(TimeTracker)\n");
 
-    send_plain(&[e.email.to_string()], subject, &body).await
+    send_with_attachment(
+        &[e.email.to_string()],
+        subject,
+        &body,
+        INSTALL_GUIDE_FILENAME,
+        "application/pdf",
+        INSTALL_GUIDE_PDF,
+    )
+    .await
 }
 
 /// Send a plaintext message to one or more recipients. Falls back to logging
@@ -283,6 +299,69 @@ pub async fn send_plain(recipients: &[String], subject: &str, body: &str) -> any
             .subject(subject)
             .header(ContentType::TEXT_PLAIN)
             .body(body.to_string())?;
+        transport.send(message).await?;
+    }
+    Ok(())
+}
+
+/// Send a plaintext message with one file attached. Falls back to logging when
+/// SMTP isn't configured (dev), mirroring `send_plain`.
+pub async fn send_with_attachment(
+    recipients: &[String],
+    subject: &str,
+    body: &str,
+    filename: &str,
+    mime: &str,
+    bytes: &[u8],
+) -> anyhow::Result<()> {
+    let host = std::env::var("SMTP_HOST").unwrap_or_default();
+    if host.is_empty() {
+        tracing::info!(
+            "[email:log-mode] to={:?} | {} (+ attachment {}, {} bytes)\n{}",
+            recipients,
+            subject,
+            filename,
+            bytes.len(),
+            body
+        );
+        return Ok(());
+    }
+    if recipients.is_empty() {
+        return Ok(());
+    }
+
+    let from = std::env::var("SMTP_FROM").unwrap_or_else(|_| "timetracker@localhost".to_string());
+    let port: u16 = std::env::var("SMTP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(587);
+    let user = std::env::var("SMTP_USER").unwrap_or_default();
+    let pass = std::env::var("SMTP_PASS").unwrap_or_default();
+
+    let mut builder = if port == 465 {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&host)?
+    } else {
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host)?
+    }
+    .port(port);
+    if !user.is_empty() {
+        builder = builder.credentials(Credentials::new(user, pass));
+    }
+    let transport = builder.build();
+
+    let attachment =
+        Attachment::new(filename.to_string()).body(bytes.to_vec(), ContentType::parse(mime)?);
+
+    for to in recipients {
+        let message = Message::builder()
+            .from(from.parse()?)
+            .to(to.parse()?)
+            .subject(subject)
+            .multipart(
+                MultiPart::mixed()
+                    .singlepart(SinglePart::plain(body.to_string()))
+                    .singlepart(attachment.clone()),
+            )?;
         transport.send(message).await?;
     }
     Ok(())

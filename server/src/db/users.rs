@@ -189,8 +189,9 @@ pub async fn employee_ids(pool: &PgPool) -> Result<Vec<Uuid>, AppError> {
     Ok(rows.into_iter().map(|r| r.id).collect())
 }
 
-/// IDs to roll attendance up for on a given day window: every employee, plus
-/// any HR/PM who actually tracked time that day (they may use the desktop app
+/// IDs to roll attendance up for on a given day window: every employee whose
+/// account existed by then (attendance never predates the account), plus any
+/// HR/PM who actually tracked time that day (they may use the desktop app
 /// too). Portal-only admins are excluded so they don't accrue "absent" rows.
 pub async fn attendance_rollup_ids(
     pool: &PgPool,
@@ -199,7 +200,8 @@ pub async fn attendance_rollup_ids(
 ) -> Result<Vec<Uuid>, AppError> {
     let rows = sqlx::query!(
         r#"
-        SELECT id AS "id!" FROM users WHERE role = 'employee'::user_role
+        SELECT id AS "id!" FROM users
+        WHERE role = 'employee'::user_role AND created_at < $2
         UNION
         SELECT DISTINCT i.user_id AS "id!" FROM intervals i
         WHERE i.start_utc >= $1 AND i.start_utc < $2

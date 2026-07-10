@@ -53,6 +53,15 @@ async fn attendance_rollup_derives_all_statuses() {
     )
     .await
     .unwrap();
+    // Backdate the account: attendance never predates `users.created_at`
+    // (ensure_range clamps to it), and this test rolls up year-2020 days.
+    sqlx::query!(
+        "UPDATE users SET created_at = '2020-01-01T00:00:00Z' WHERE id = $1",
+        emp.id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     // Pick a clear weekday (Mon) and weekend (Sat) in 2020 (past → fillable).
     let monday = next_weekday(d(2020, 3, 2), Weekday::Mon);
@@ -152,4 +161,40 @@ async fn attendance_rollup_derives_all_statuses() {
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn attendance_never_predates_account_creation() {
+    let Some(pool) = pool().await else {
+        eprintln!("skipping attendance test: DATABASE_URL not set");
+        return;
+    };
+    // Fresh user created NOW: ensure_range over a 2020 week must not create
+    // any rows (attendance is clamped to the account-creation date, which is
+    // also what makes an admin "fresh start" — bump created_at + delete rows —
+    // stick instead of being re-derived).
+    let tag = Uuid::new_v4();
+    let emp = users::create(
+        &pool,
+        "Att Fresh",
+        &format!("att-fresh-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let monday = next_weekday(d(2020, 6, 1), Weekday::Mon);
+    let saturday = next_weekday(monday, Weekday::Sat);
+    attendance_service::ensure_range(&pool, emp.id, monday, saturday)
+        .await
+        .unwrap();
+
+    let rows = attendance::list_range(&pool, emp.id, monday, saturday)
+        .await
+        .unwrap();
+    assert!(rows.is_empty(), "pre-creation days must not be derived");
+
+    users::delete(&pool, emp.id).await.unwrap();
 }

@@ -111,6 +111,11 @@ pub async fn rollup_day(
 /// Ensure `[from, to]` (capped at today) is rolled up for a user: compute any
 /// missing past days once, and always refresh today (it's still live). Lets the
 /// calendar show data immediately without waiting for the nightly job.
+///
+/// The range is also clamped to the user's account-creation date: attendance
+/// never predates the account, so new hires don't get "absent" backfill — and
+/// an admin can grant a fresh start by bumping `users.created_at` (old rows,
+/// once deleted, are never re-derived).
 pub async fn ensure_range(
     pool: &PgPool,
     user_id: Uuid,
@@ -118,6 +123,10 @@ pub async fn ensure_range(
     to: NaiveDate,
 ) -> Result<(), AppError> {
     let today = Utc::now().date_naive();
+    let from = match crate::db::users::find_by_id(pool, user_id).await? {
+        Some(u) => from.max(u.created_at.date_naive()),
+        None => from,
+    };
     let end = to.min(today);
     if end < from {
         return Ok(());

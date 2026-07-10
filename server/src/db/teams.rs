@@ -42,9 +42,9 @@ pub async fn create(pool: &PgPool, name: &str, description: &str) -> Result<Team
             description: r.description,
             created_at: r.created_at,
         }),
-        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
-            Err(AppError::BadRequest("a team with that name already exists".into()))
-        }
+        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => Err(AppError::BadRequest(
+            "a team with that name already exists".into(),
+        )),
         Err(e) => Err(e.into()),
     }
 }
@@ -55,7 +55,12 @@ pub async fn list(pool: &PgPool) -> Result<Vec<Team>, AppError> {
         .await?;
     Ok(rows
         .into_iter()
-        .map(|r| Team { id: r.id, name: r.name, description: r.description, created_at: r.created_at })
+        .map(|r| Team {
+            id: r.id,
+            name: r.name,
+            description: r.description,
+            created_at: r.created_at,
+        })
         .collect())
 }
 
@@ -101,9 +106,9 @@ pub async fn update(
             description: r.description,
             created_at: r.created_at,
         })),
-        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
-            Err(AppError::BadRequest("a team with that name already exists".into()))
-        }
+        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => Err(AppError::BadRequest(
+            "a team with that name already exists".into(),
+        )),
         Err(e) => Err(e.into()),
     }
 }
@@ -164,7 +169,12 @@ pub async fn teams_for_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<Team>, A
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| Team { id: r.id, name: r.name, description: r.description, created_at: r.created_at })
+        .map(|r| Team {
+            id: r.id,
+            name: r.name,
+            description: r.description,
+            created_at: r.created_at,
+        })
         .collect())
 }
 
@@ -182,7 +192,11 @@ pub async fn members_of(pool: &PgPool, team_id: Uuid) -> Result<Vec<TeamMember>,
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| TeamMember { id: r.id, name: r.name, email: r.email })
+        .map(|r| TeamMember {
+            id: r.id,
+            name: r.name,
+            email: r.email,
+        })
         .collect())
 }
 

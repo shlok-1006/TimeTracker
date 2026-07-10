@@ -320,13 +320,25 @@ mod tests {
     #[test]
     fn full_day_yields_one_per_bucket() {
         // One shot in each of the five buckets → exactly 5 chosen, one per bucket.
-        let shots = vec![shot(1, 8), shot(2, 11), shot(3, 13), shot(4, 15), shot(5, 19)];
+        let shots = vec![
+            shot(1, 8),
+            shot(2, 11),
+            shot(3, 13),
+            shot(4, 15),
+            shot(5, 19),
+        ];
         let chosen = choose_samples(&shots);
         assert_eq!(chosen.len(), 5);
         let buckets: Vec<&str> = chosen.iter().map(|(b, _)| *b).collect();
         assert_eq!(
             buckets,
-            vec!["morning", "mid_morning", "noon", "afternoon", "late_afternoon"]
+            vec![
+                "morning",
+                "mid_morning",
+                "noon",
+                "afternoon",
+                "late_afternoon"
+            ]
         );
     }
 
@@ -366,7 +378,10 @@ mod tests {
     fn only_working_status_is_eligible() {
         assert!(is_eligible(&shot_with_status(1, 9, "working")));
         for status in ["meeting", "break", "idle", "not_working"] {
-            assert!(!is_eligible(&shot_with_status(1, 9, status)), "{status} must be ineligible");
+            assert!(
+                !is_eligible(&shot_with_status(1, 9, status)),
+                "{status} must be ineligible"
+            );
         }
     }
 

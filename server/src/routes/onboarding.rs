@@ -26,10 +26,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::auth;
 use crate::db::{audit, onboarding, users};
 use crate::error::AppError;
 use crate::middleware::RequireHr;
-use crate::auth;
 use crate::role::UserRole;
 use crate::state::AppState;
 
@@ -38,7 +38,6 @@ use crate::state::AppState;
 /// (PUT) window stays longer to allow the client time to transfer.
 const UPLOAD_URL_EXPIRES_SECS: u64 = 900;
 const VIEW_URL_EXPIRES_SECS: u64 = 120;
-
 
 /// Storage key prefix for a candidate's documents.
 fn doc_prefix(candidate_id: Uuid) -> String {
@@ -95,7 +94,14 @@ async fn create_candidate(
 
     let candidate =
         onboarding::create(&state.db, &name, &email, &position, stage_id, hr.id).await?;
-    audit::log(&state.db, hr.id, "candidate.create", "candidate", Some(candidate.id)).await;
+    audit::log(
+        &state.db,
+        hr.id,
+        "candidate.create",
+        "candidate",
+        Some(candidate.id),
+    )
+    .await;
     Ok(Json(json!(candidate)))
 }
 
@@ -106,7 +112,9 @@ async fn get_candidate(
     RequireHr(_hr): RequireHr,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let candidate = onboarding::get(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let candidate = onboarding::get(&state.db, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     let tasks = onboarding::list_tasks(&state.db, id).await?;
     let docs = onboarding::list_documents(&state.db, id).await?;
     let now = Utc::now();
@@ -198,7 +206,9 @@ async fn update_candidate(
     }
     audit::log(&state.db, hr.id, "candidate.update", "candidate", Some(id)).await;
 
-    let updated = onboarding::get(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let updated = onboarding::get(&state.db, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     Ok(Json(json!(updated)))
 }
 
@@ -232,7 +242,14 @@ async fn add_task(
         return Err(AppError::NotFound);
     }
     let task = onboarding::create_task(&state.db, id, &title).await?;
-    audit::log(&state.db, hr.id, "candidate.task.create", "candidate_task", Some(task.id)).await;
+    audit::log(
+        &state.db,
+        hr.id,
+        "candidate.task.create",
+        "candidate_task",
+        Some(task.id),
+    )
+    .await;
     Ok(Json(json!(task)))
 }
 
@@ -250,7 +267,14 @@ async fn toggle_task(
     if !onboarding::set_task_done(&state.db, tid, body.done).await? {
         return Err(AppError::NotFound);
     }
-    audit::log(&state.db, hr.id, "candidate.task.update", "candidate_task", Some(tid)).await;
+    audit::log(
+        &state.db,
+        hr.id,
+        "candidate.task.update",
+        "candidate_task",
+        Some(tid),
+    )
+    .await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -262,7 +286,14 @@ async fn delete_task(
     if !onboarding::delete_task(&state.db, tid).await? {
         return Err(AppError::NotFound);
     }
-    audit::log(&state.db, hr.id, "candidate.task.delete", "candidate_task", Some(tid)).await;
+    audit::log(
+        &state.db,
+        hr.id,
+        "candidate.task.delete",
+        "candidate_task",
+        Some(tid),
+    )
+    .await;
     Ok(Json(json!({ "deleted": true })))
 }
 
@@ -292,7 +323,9 @@ async fn presign_document(
     let doc_type = crate::validate::text(&body.doc_type, "doc_type", 100, false)?;
     let suffix = sanitize_filename(body.filename.as_deref().unwrap_or(""));
     let storage_key = format!("{}{}-{}", doc_prefix(id), Uuid::new_v4(), suffix);
-    let url = state.storage.presign_put(&storage_key, UPLOAD_URL_EXPIRES_SECS, Utc::now());
+    let url = state
+        .storage
+        .presign_put(&storage_key, UPLOAD_URL_EXPIRES_SECS, Utc::now());
     Ok(Json(json!({
         "url": url,
         "method": "PUT",
@@ -336,7 +369,14 @@ async fn save_document(
     // RA-19: validate doc_type.
     let doc_type = crate::validate::text(&body.doc_type, "doc_type", 100, false)?;
     let doc = onboarding::add_document(&state.db, id, &doc_type, &body.storage_key).await?;
-    audit::log(&state.db, hr.id, "candidate.document.add", "candidate_document", Some(doc.id)).await;
+    audit::log(
+        &state.db,
+        hr.id,
+        "candidate.document.add",
+        "candidate_document",
+        Some(doc.id),
+    )
+    .await;
     let now = Utc::now();
     Ok(Json(json!({
         "id": doc.id,
@@ -356,9 +396,13 @@ async fn convert_candidate(
     RequireHr(hr): RequireHr,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let candidate = onboarding::get(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let candidate = onboarding::get(&state.db, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     if candidate.converted_user_id.is_some() {
-        return Err(AppError::BadRequest("candidate is already converted".into()));
+        return Err(AppError::BadRequest(
+            "candidate is already converted".into(),
+        ));
     }
 
     let password = auth::generate_temp_password();
@@ -392,7 +436,13 @@ async fn convert_candidate(
 fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches('-');
     let out = if trimmed.is_empty() { "file" } else { trimmed };
@@ -402,17 +452,25 @@ fn sanitize_filename(name: &str) -> String {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/onboarding/stages", get(list_stages))
-        .route("/admin/candidates", get(list_candidates).post(create_candidate))
+        .route(
+            "/admin/candidates",
+            get(list_candidates).post(create_candidate),
+        )
         .route(
             "/admin/candidates/:id",
-            get(get_candidate).patch(update_candidate).delete(delete_candidate),
+            get(get_candidate)
+                .patch(update_candidate)
+                .delete(delete_candidate),
         )
         .route("/admin/candidates/:id/tasks", post(add_task))
         .route(
             "/admin/candidate-tasks/:tid",
             patch(toggle_task).delete(delete_task),
         )
-        .route("/admin/candidates/:id/documents/presign", post(presign_document))
+        .route(
+            "/admin/candidates/:id/documents/presign",
+            post(presign_document),
+        )
         .route("/admin/candidates/:id/documents", post(save_document))
         .route("/admin/candidates/:id/convert", post(convert_candidate))
 }

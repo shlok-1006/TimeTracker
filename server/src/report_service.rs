@@ -253,7 +253,10 @@ mod tests {
         let s = summarize(&a);
         assert!(s.contains("2 screenshot"));
         assert!(s.contains("50%"));
-        assert_eq!(summarize(&aggregate(&[])), "No screenshots were analysed for this day.");
+        assert_eq!(
+            summarize(&aggregate(&[])),
+            "No screenshots were analysed for this day."
+        );
     }
 
     /// Build an `AnalysisReport` from an aggregate for predicate tests.
@@ -286,7 +289,10 @@ mod tests {
     #[test]
     fn at_or_above_threshold_is_not_flagged() {
         // 50% is above 35%.
-        assert!(!is_low_score(&report_from(&["aligned", "not_aligned"]), 35.0));
+        assert!(!is_low_score(
+            &report_from(&["aligned", "not_aligned"]),
+            35.0
+        ));
         // Exactly at the threshold is not "below".
         let mut r = report_from(&["aligned", "not_aligned"]);
         r.alignment_score = 35.0;
@@ -296,7 +302,10 @@ mod tests {
     #[test]
     fn no_scored_verdicts_is_never_flagged() {
         // All inconclusive → score 0 but no signal → not an alert.
-        assert!(!is_low_score(&report_from(&["inconclusive", "inconclusive"]), 35.0));
+        assert!(!is_low_score(
+            &report_from(&["inconclusive", "inconclusive"]),
+            35.0
+        ));
         // Empty day → not an alert.
         assert!(!is_low_score(&report_from(&[]), 35.0));
     }
@@ -304,6 +313,9 @@ mod tests {
     #[test]
     fn zero_percent_with_real_signal_is_flagged() {
         // All not_aligned → genuine 0% low score.
-        assert!(is_low_score(&report_from(&["not_aligned", "not_aligned"]), 35.0));
+        assert!(is_low_score(
+            &report_from(&["not_aligned", "not_aligned"]),
+            35.0
+        ));
     }
 }

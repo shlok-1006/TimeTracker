@@ -240,9 +240,9 @@ pub async fn create(
             team_id: r.team_id,
             created_at: r.created_at,
         }),
-        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
-            Err(AppError::BadRequest("a user with that email already exists".into()))
-        }
+        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => Err(AppError::BadRequest(
+            "a user with that email already exists".into(),
+        )),
         Err(e) => Err(e.into()),
     }
 }
@@ -257,11 +257,7 @@ pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
 }
 
 /// Replace a user's password hash. Returns whether a row was updated.
-pub async fn set_password(
-    pool: &PgPool,
-    id: Uuid,
-    password_hash: &str,
-) -> Result<bool, AppError> {
+pub async fn set_password(pool: &PgPool, id: Uuid, password_hash: &str) -> Result<bool, AppError> {
     let res = sqlx::query!(
         "UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1",
         id,

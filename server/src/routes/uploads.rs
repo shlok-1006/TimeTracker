@@ -118,7 +118,10 @@ async fn my_screenshots(
     let day = q.day.unwrap_or_else(|| Utc::now().date_naive());
     let now = Utc::now();
     let rows = screenshots::list_for_day(&state.db, user.id, day).await?;
-    let items: Vec<Value> = rows.iter().map(|r| day_item(&state.storage, r, now)).collect();
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|r| day_item(&state.storage, r, now))
+        .collect();
     Ok(Json(Value::Array(items)))
 }
 

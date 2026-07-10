@@ -100,8 +100,14 @@ pub async fn analyze_user_day(
                 continue;
             }
         };
-        match vision_analyzer::analyze_screenshot(claude, &image, "image/jpeg", &s.captured_status, &tickets)
-            .await
+        match vision_analyzer::analyze_screenshot(
+            claude,
+            &image,
+            "image/jpeg",
+            &s.captured_status,
+            &tickets,
+        )
+        .await
         {
             Ok(AnalysisOutcome::Analyzed(a)) => {
                 analysis_results::upsert(db, job.id, s.screenshot_id, &a).await?;
@@ -113,13 +119,19 @@ pub async fn analyze_user_day(
     }
 
     let report = report_service::build_report(db, user_id, day, job.id, claude).await?;
-    Ok(AnalyzeOutcome { analyzed, skipped, report })
+    Ok(AnalyzeOutcome {
+        analyzed,
+        skipped,
+        report,
+    })
 }
 
 /// Group screenshots by the UTC calendar day they were taken on. Verdicts are
 /// stored under each day's `analysis_jobs` row (the `analysis_results.job_id`
 /// FK), so a multi-day range fans out into per-day jobs and reports.
-fn group_by_day(shots: Vec<screenshots::ScreenshotRow>) -> BTreeMap<NaiveDate, Vec<screenshots::ScreenshotRow>> {
+fn group_by_day(
+    shots: Vec<screenshots::ScreenshotRow>,
+) -> BTreeMap<NaiveDate, Vec<screenshots::ScreenshotRow>> {
     let mut by_day: BTreeMap<NaiveDate, Vec<screenshots::ScreenshotRow>> = BTreeMap::new();
     for s in shots {
         by_day.entry(s.taken_at.date_naive()).or_default().push(s);
@@ -161,8 +173,14 @@ async fn analyze_user_range(
                     continue;
                 }
             };
-            match vision_analyzer::analyze_screenshot(claude, &image, "image/jpeg", &s.captured_status, &tickets)
-                .await
+            match vision_analyzer::analyze_screenshot(
+                claude,
+                &image,
+                "image/jpeg",
+                &s.captured_status,
+                &tickets,
+            )
+            .await
             {
                 Ok(AnalysisOutcome::Analyzed(a)) => {
                     analysis_results::upsert(db, job.id, s.id, &a).await?;
@@ -280,9 +298,15 @@ mod tests {
                 NaiveDate::from_ymd_opt(2020, 6, 3).unwrap(),
             ]
         );
-        assert_eq!(by_day[&NaiveDate::from_ymd_opt(2020, 6, 1).unwrap()].len(), 2);
+        assert_eq!(
+            by_day[&NaiveDate::from_ymd_opt(2020, 6, 1).unwrap()].len(),
+            2
+        );
         // A 23:59:59Z shot belongs to that day, not the next (UTC day bounds).
-        assert_eq!(by_day[&NaiveDate::from_ymd_opt(2020, 6, 3).unwrap()].len(), 1);
+        assert_eq!(
+            by_day[&NaiveDate::from_ymd_opt(2020, 6, 3).unwrap()].len(),
+            1
+        );
     }
 
     #[test]

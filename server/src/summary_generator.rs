@@ -40,7 +40,9 @@ impl SummaryProvider for ClaudeProvider {
         ClaudeProvider::model(self)
     }
     async fn complete_json(&self, prompt: &str) -> Result<String, String> {
-        self.generate_text_json(prompt).await.map_err(|e| e.to_string())
+        self.generate_text_json(prompt)
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -152,7 +154,11 @@ mod tests {
     }
     impl MockProvider {
         fn new(configured: bool, responses: Vec<Result<String, String>>) -> Self {
-            Self { configured, responses: Mutex::new(responses), calls: Mutex::new(0) }
+            Self {
+                configured,
+                responses: Mutex::new(responses),
+                calls: Mutex::new(0),
+            }
         }
         fn calls(&self) -> usize {
             *self.calls.lock().unwrap()
@@ -183,7 +189,10 @@ mod tests {
 
     #[test]
     fn parses_valid_and_fenced() {
-        assert_eq!(parse_summary(r#"{"summary":"Worked on auth."}"#).unwrap(), "Worked on auth.");
+        assert_eq!(
+            parse_summary(r#"{"summary":"Worked on auth."}"#).unwrap(),
+            "Worked on auth."
+        );
         let fenced = "```json\n{\"summary\":\"Did X then Y.\"}\n```";
         assert_eq!(parse_summary(fenced).unwrap(), "Did X then Y.");
     }
@@ -208,7 +217,11 @@ mod tests {
         let mock = MockProvider::new(true, vec![]);
         let out = generate_summary(&mock, &[]).await.unwrap();
         assert!(out.contains("No activity"));
-        assert_eq!(mock.calls(), 0, "provider must not be called with no rationales");
+        assert_eq!(
+            mock.calls(),
+            0,
+            "provider must not be called with no rationales"
+        );
 
         // whitespace-only rationales are filtered → also skipped
         let out2 = generate_summary(&mock, &r(&["  ", ""])).await.unwrap();
@@ -226,8 +239,13 @@ mod tests {
 
     #[tokio::test]
     async fn succeeds_first_try() {
-        let mock = MockProvider::new(true, vec![Ok(r#"{"summary":"Solid progress on the API."}"#.into())]);
-        let out = generate_summary(&mock, &r(&["coded the API"])).await.unwrap();
+        let mock = MockProvider::new(
+            true,
+            vec![Ok(r#"{"summary":"Solid progress on the API."}"#.into())],
+        );
+        let out = generate_summary(&mock, &r(&["coded the API"]))
+            .await
+            .unwrap();
         assert_eq!(out, "Solid progress on the API.");
         assert_eq!(mock.calls(), 1);
     }
@@ -236,7 +254,10 @@ mod tests {
     async fn retries_malformed_then_succeeds() {
         let mock = MockProvider::new(
             true,
-            vec![Ok("garbage".into()), Ok(r#"{"summary":"recovered"}"#.into())],
+            vec![
+                Ok("garbage".into()),
+                Ok(r#"{"summary":"recovered"}"#.into()),
+            ],
         );
         let out = generate_summary(&mock, &r(&["x"])).await.unwrap();
         assert_eq!(out, "recovered");
@@ -258,7 +279,11 @@ mod tests {
     async fn fails_after_max_attempts() {
         let mock = MockProvider::new(
             true,
-            vec![Ok("nope".into()), Ok("still bad".into()), Ok("garbage".into())],
+            vec![
+                Ok("nope".into()),
+                Ok("still bad".into()),
+                Ok("garbage".into()),
+            ],
         );
         let out = generate_summary(&mock, &r(&["x"])).await;
         assert!(out.is_err());

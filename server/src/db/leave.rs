@@ -66,14 +66,17 @@ pub struct Balance {
 // ---- Leave types ----
 
 pub async fn list_types(pool: &PgPool) -> Result<Vec<LeaveType>, AppError> {
-    let rows = sqlx::query!(
-        "SELECT id, name, paid, default_days FROM leave_types ORDER BY name"
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query!("SELECT id, name, paid, default_days FROM leave_types ORDER BY name")
+        .fetch_all(pool)
+        .await?;
     Ok(rows
         .into_iter()
-        .map(|r| LeaveType { id: r.id, name: r.name, paid: r.paid, default_days: r.default_days })
+        .map(|r| LeaveType {
+            id: r.id,
+            name: r.name,
+            paid: r.paid,
+            default_days: r.default_days,
+        })
         .collect())
 }
 
@@ -92,7 +95,12 @@ pub async fn create_type(
     )
     .fetch_one(pool)
     .await?;
-    Ok(LeaveType { id: r.id, name: r.name, paid: r.paid, default_days: r.default_days })
+    Ok(LeaveType {
+        id: r.id,
+        name: r.name,
+        paid: r.paid,
+        default_days: r.default_days,
+    })
 }
 
 // ---- Holidays ----
@@ -106,7 +114,14 @@ pub async fn list_holidays(pool: &PgPool, year: Option<i32>) -> Result<Vec<Holid
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(|r| Holiday { id: r.id, day: r.day, name: r.name }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| Holiday {
+            id: r.id,
+            day: r.day,
+            name: r.name,
+        })
+        .collect())
 }
 
 /// The name of the holiday falling on `day`, if any (for attendance rollups).
@@ -159,7 +174,11 @@ pub async fn holiday_dates_between(
     Ok(rows.into_iter().map(|r| r.day).collect())
 }
 
-pub async fn create_holiday(pool: &PgPool, day: NaiveDate, name: &str) -> Result<Holiday, AppError> {
+pub async fn create_holiday(
+    pool: &PgPool,
+    day: NaiveDate,
+    name: &str,
+) -> Result<Holiday, AppError> {
     let r = sqlx::query!(
         "INSERT INTO holidays (day, name) VALUES ($1, $2)
          ON CONFLICT (day) DO UPDATE SET name = EXCLUDED.name
@@ -169,7 +188,11 @@ pub async fn create_holiday(pool: &PgPool, day: NaiveDate, name: &str) -> Result
     )
     .fetch_one(pool)
     .await?;
-    Ok(Holiday { id: r.id, day: r.day, name: r.name })
+    Ok(Holiday {
+        id: r.id,
+        day: r.day,
+        name: r.name,
+    })
 }
 
 // ---- Allocations ----
@@ -335,13 +358,13 @@ pub async fn list_pending(
 }
 
 /// (user_id, status) of a request, for authorization + workflow checks.
-pub async fn owner_and_status(
-    pool: &PgPool,
-    id: Uuid,
-) -> Result<Option<(Uuid, String)>, AppError> {
-    let row = sqlx::query!("SELECT user_id, status FROM leave_requests WHERE id = $1", id)
-        .fetch_optional(pool)
-        .await?;
+pub async fn owner_and_status(pool: &PgPool, id: Uuid) -> Result<Option<(Uuid, String)>, AppError> {
+    let row = sqlx::query!(
+        "SELECT user_id, status FROM leave_requests WHERE id = $1",
+        id
+    )
+    .fetch_optional(pool)
+    .await?;
     Ok(row.map(|r| (r.user_id, r.status)))
 }
 

@@ -50,7 +50,9 @@ pub struct LinearService {
 impl LinearService {
     pub fn from_env() -> Self {
         Self {
-            api_key: std::env::var("LINEAR_API_KEY").ok().filter(|s| !s.is_empty()),
+            api_key: std::env::var("LINEAR_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
             client: reqwest::Client::new(),
             cache: TicketCache::new(CACHE_TTL),
         }
@@ -120,7 +122,9 @@ impl LinearService {
                 }
             }
         }"#;
-        let data = self.graphql(q, json!({ "assignee": linear_user_id })).await?;
+        let data = self
+            .graphql(q, json!({ "assignee": linear_user_id }))
+            .await?;
         let nodes = data
             .pointer("/issues/nodes")
             .and_then(|v| v.as_array())
@@ -261,7 +265,10 @@ impl LinearService {
         let by_search =
             format!("query($q: String!) {{ issueSearch(query: $q, first: 1) {{ nodes {{ {ISSUE_FIELDS} }} }} }}");
         match self.graphql(&by_search, json!({ "q": input })).await {
-            Ok(data) => Ok(data.pointer("/issueSearch/nodes/0").filter(|v| !v.is_null()).cloned()),
+            Ok(data) => Ok(data
+                .pointer("/issueSearch/nodes/0")
+                .filter(|v| !v.is_null())
+                .cloned()),
             Err(_) => Ok(None),
         }
     }
@@ -304,7 +311,10 @@ fn owner_of(node: &Value) -> (Option<String>, Option<String>) {
 }
 
 fn str_at(v: &Value, key: &str) -> String {
-    v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Parse a Linear `issue` GraphQL node into our `Ticket` shape.
@@ -338,7 +348,11 @@ fn parse_ticket(node: &Value) -> Ticket {
 
 /// One-line, length-capped excerpt of a (possibly markdown) description.
 fn excerpt(desc: Option<&str>) -> String {
-    let oneline = desc.unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
+    let oneline = desc
+        .unwrap_or("")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if oneline.chars().count() > EXCERPT_CHARS {
         let s: String = oneline.chars().take(EXCERPT_CHARS).collect();
         format!("{s}…")
@@ -393,7 +407,10 @@ mod tests {
 
         // No parent → fall back to the ticket's own assignee.
         let no_parent = json!({ "assignee": { "email": "emp@x.com", "name": "Emp" } });
-        assert_eq!(owner_of(&no_parent), (Some("emp@x.com".into()), Some("Emp".into())));
+        assert_eq!(
+            owner_of(&no_parent),
+            (Some("emp@x.com".into()), Some("Emp".into()))
+        );
 
         // Nothing → none.
         assert_eq!(owner_of(&json!({})), (None, None));

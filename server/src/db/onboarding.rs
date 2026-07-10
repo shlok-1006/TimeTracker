@@ -75,7 +75,14 @@ pub async fn list_stages(pool: &PgPool) -> Result<Vec<Stage>, AppError> {
     let rows = sqlx::query!("SELECT id, name, sequence FROM onboarding_stages ORDER BY sequence")
         .fetch_all(pool)
         .await?;
-    Ok(rows.into_iter().map(|r| Stage { id: r.id, name: r.name, sequence: r.sequence }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| Stage {
+            id: r.id,
+            name: r.name,
+            sequence: r.sequence,
+        })
+        .collect())
 }
 
 /// The first pipeline stage (lowest sequence) — the default for new candidates.
@@ -87,9 +94,12 @@ pub async fn first_stage_id(pool: &PgPool) -> Result<Uuid, AppError> {
 }
 
 pub async fn stage_exists(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
-    let r = sqlx::query!(r#"SELECT EXISTS(SELECT 1 FROM onboarding_stages WHERE id=$1) AS "e!""#, id)
-        .fetch_one(pool)
-        .await?;
+    let r = sqlx::query!(
+        r#"SELECT EXISTS(SELECT 1 FROM onboarding_stages WHERE id=$1) AS "e!""#,
+        id
+    )
+    .fetch_one(pool)
+    .await?;
     Ok(r.e)
 }
 
@@ -114,7 +124,9 @@ pub async fn create(
     )
     .fetch_one(pool)
     .await?;
-    get(pool, r.id).await?.ok_or_else(|| AppError::Internal(anyhow::anyhow!("created candidate vanished")))
+    get(pool, r.id)
+        .await?
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("created candidate vanished")))
 }
 
 pub async fn list(pool: &PgPool) -> Result<Vec<Candidate>, AppError> {

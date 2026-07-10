@@ -67,7 +67,16 @@ pub async fn create(
     )
     .fetch_one(pool)
     .await?;
-    Ok(map(r.id, r.user_id, r.created_by, r.title, r.description, r.status, r.created_at, r.updated_at))
+    Ok(map(
+        r.id,
+        r.user_id,
+        r.created_by,
+        r.title,
+        r.description,
+        r.status,
+        r.created_at,
+        r.updated_at,
+    ))
 }
 
 /// All of an employee's manual tasks, newest first.
@@ -81,7 +90,18 @@ pub async fn list_for_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<ManualTas
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| map(r.id, r.user_id, r.created_by, r.title, r.description, r.status, r.created_at, r.updated_at))
+        .map(|r| {
+            map(
+                r.id,
+                r.user_id,
+                r.created_by,
+                r.title,
+                r.description,
+                r.status,
+                r.created_at,
+                r.updated_at,
+            )
+        })
         .collect())
 }
 
@@ -94,7 +114,18 @@ pub async fn get(pool: &PgPool, id: Uuid) -> Result<Option<ManualTask>, AppError
     )
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|r| map(r.id, r.user_id, r.created_by, r.title, r.description, r.status, r.created_at, r.updated_at)))
+    Ok(row.map(|r| {
+        map(
+            r.id,
+            r.user_id,
+            r.created_by,
+            r.title,
+            r.description,
+            r.status,
+            r.created_at,
+            r.updated_at,
+        )
+    }))
 }
 
 /// Update title and/or description (PATCH semantics; `None` leaves a field).

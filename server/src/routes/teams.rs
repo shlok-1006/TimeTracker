@@ -81,11 +81,10 @@ async fn team_summary(
 
 /// `GET /me/teams` — the teams the authenticated employee belongs to (used by
 /// the desktop's pre-timer team dropdown). Any authenticated user.
-async fn my_teams(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> Result<Json<Value>, AppError> {
-    Ok(Json(json!(teams::teams_for_user(&state.db, user.id).await?)))
+async fn my_teams(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!(
+        teams::teams_for_user(&state.db, user.id).await?
+    )))
 }
 
 /// `GET /me/team-options` — all teams the employee can choose from (self-service
@@ -231,7 +230,9 @@ async fn add_member(
     }
     teams::add_member(&state.db, body.user_id, team_id).await?;
     audit::log(&state.db, hr.id, "team.add_member", "team", Some(team_id)).await;
-    Ok(Json(json!({ "team_id": team_id, "user_id": body.user_id, "added": true })))
+    Ok(Json(
+        json!({ "team_id": team_id, "user_id": body.user_id, "added": true }),
+    ))
 }
 
 async fn remove_member(
@@ -242,8 +243,17 @@ async fn remove_member(
     if !teams::remove_member(&state.db, user_id, team_id).await? {
         return Err(AppError::NotFound);
     }
-    audit::log(&state.db, hr.id, "team.remove_member", "team", Some(team_id)).await;
-    Ok(Json(json!({ "team_id": team_id, "user_id": user_id, "removed": true })))
+    audit::log(
+        &state.db,
+        hr.id,
+        "team.remove_member",
+        "team",
+        Some(team_id),
+    )
+    .await;
+    Ok(Json(
+        json!({ "team_id": team_id, "user_id": user_id, "removed": true }),
+    ))
 }
 
 pub fn router() -> Router<AppState> {
@@ -261,5 +271,8 @@ pub fn router() -> Router<AppState> {
             axum::routing::patch(update_team).delete(delete_team),
         )
         .route("/teams/:id/members", post(add_member).get(list_members))
-        .route("/teams/:id/members/:user_id", axum::routing::delete(remove_member))
+        .route(
+            "/teams/:id/members/:user_id",
+            axum::routing::delete(remove_member),
+        )
 }

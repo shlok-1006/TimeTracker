@@ -80,11 +80,7 @@ pub async fn list_for_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<TicketReq
 
 /// Whether `user_id` has an **approved** access request for `ticket_id`
 /// (authorizes reading that ticket's full context — SEC-12).
-pub async fn has_approved(
-    pool: &PgPool,
-    user_id: Uuid,
-    ticket_id: &str,
-) -> Result<bool, AppError> {
+pub async fn has_approved(pool: &PgPool, user_id: Uuid, ticket_id: &str) -> Result<bool, AppError> {
     let row = sqlx::query!(
         r#"SELECT EXISTS(
               SELECT 1 FROM ticket_requests
@@ -100,11 +96,7 @@ pub async fn has_approved(
 
 /// Apply a decision (approved|rejected) to a pending request by token.
 /// Returns the ticket id if a pending request was updated.
-pub async fn decide(
-    pool: &PgPool,
-    token: &str,
-    status: &str,
-) -> Result<Option<String>, AppError> {
+pub async fn decide(pool: &PgPool, token: &str, status: &str) -> Result<Option<String>, AppError> {
     // Look up by the token hash (SEC-28) and enforce a 7-day validity window.
     let row = sqlx::query!(
         r#"

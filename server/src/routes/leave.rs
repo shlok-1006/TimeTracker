@@ -45,8 +45,13 @@ async fn my_balance(
     })))
 }
 
-async fn my_requests(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, AppError> {
-    Ok(Json(json!(leave::list_requests_for_user(&state.db, user.id).await?)))
+async fn my_requests(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!(
+        leave::list_requests_for_user(&state.db, user.id).await?
+    )))
 }
 
 #[derive(Deserialize)]
@@ -72,7 +77,14 @@ async fn request_leave(
         &body.reason,
     )
     .await?;
-    audit::log(&state.db, user.id, "leave.request", "leave_request", Some(id)).await;
+    audit::log(
+        &state.db,
+        user.id,
+        "leave.request",
+        "leave_request",
+        Some(id),
+    )
+    .await;
     Ok(Json(json!({ "id": id, "days": days, "status": "pending" })))
 }
 
@@ -109,7 +121,11 @@ async fn pending_requests(
     RequireAdmin(user): RequireAdmin,
 ) -> Result<Json<Value>, AppError> {
     // HR sees all; a project manager sees only their team's.
-    let scope = if user.role == UserRole::Hr { None } else { Some(user.id) };
+    let scope = if user.role == UserRole::Hr {
+        None
+    } else {
+        Some(user.id)
+    };
     Ok(Json(json!(leave::list_pending(&state.db, scope).await?)))
 }
 
@@ -124,12 +140,21 @@ async fn decide_request(
         .ok_or(AppError::NotFound)?;
     authorize_approver(state, approver, owner).await?;
     if current != "pending" {
-        return Err(AppError::BadRequest(format!("request is already {current}")));
+        return Err(AppError::BadRequest(format!(
+            "request is already {current}"
+        )));
     }
     if !leave::decide(&state.db, id, status, approver.id).await? {
         return Err(AppError::BadRequest("request is no longer pending".into()));
     }
-    audit::log(&state.db, approver.id, &format!("leave.{status}"), "leave_request", Some(id)).await;
+    audit::log(
+        &state.db,
+        approver.id,
+        &format!("leave.{status}"),
+        "leave_request",
+        Some(id),
+    )
+    .await;
     Ok(Json(json!({ "id": id, "status": status })))
 }
 
@@ -172,7 +197,14 @@ async fn create_type(
         return Err(AppError::BadRequest("name is required".into()));
     }
     let t = leave::create_type(&state.db, body.name.trim(), body.paid, body.default_days).await?;
-    audit::log(&state.db, hr.id, "leave.type.create", "leave_type", Some(t.id)).await;
+    audit::log(
+        &state.db,
+        hr.id,
+        "leave.type.create",
+        "leave_type",
+        Some(t.id),
+    )
+    .await;
     Ok(Json(json!(t)))
 }
 
@@ -190,9 +222,22 @@ async fn allocate(
     Json(body): Json<NewAllocation>,
 ) -> Result<Json<Value>, AppError> {
     let year = body.year.unwrap_or_else(|| Utc::now().year());
-    leave::upsert_allocation(&state.db, body.user_id, body.leave_type_id, year, body.allotted_days)
-        .await?;
-    audit::log(&state.db, hr.id, "leave.allocate", "user", Some(body.user_id)).await;
+    leave::upsert_allocation(
+        &state.db,
+        body.user_id,
+        body.leave_type_id,
+        year,
+        body.allotted_days,
+    )
+    .await?;
+    audit::log(
+        &state.db,
+        hr.id,
+        "leave.allocate",
+        "user",
+        Some(body.user_id),
+    )
+    .await;
     Ok(Json(json!({
         "user_id": body.user_id, "leave_type_id": body.leave_type_id,
         "year": year, "allotted_days": body.allotted_days

@@ -238,7 +238,9 @@ impl StorageClient {
             .map_err(|e| format!("reading object bytes failed: {e}"))?
         {
             if buf.len() as u64 + chunk.len() as u64 > MAX_SCREENSHOT_BYTES {
-                return Err(format!("object {key} too large: exceeds {MAX_SCREENSHOT_BYTES} bytes"));
+                return Err(format!(
+                    "object {key} too large: exceeds {MAX_SCREENSHOT_BYTES} bytes"
+                ));
             }
             buf.extend_from_slice(&chunk);
         }
@@ -535,7 +537,8 @@ mod tests {
 
     #[test]
     fn gcs_presign_produces_goog4_signed_url() {
-        let url = StorageClient::new(test_gcs_config()).presign_put("user/abc.jpg", 900, Utc::now());
+        let url =
+            StorageClient::new(test_gcs_config()).presign_put("user/abc.jpg", 900, Utc::now());
         // Path-style GCS host + key.
         assert!(
             url.starts_with("https://storage.googleapis.com/screenshots/user/abc.jpg?"),
@@ -543,7 +546,9 @@ mod tests {
         );
         assert!(url.contains("X-Goog-Algorithm=GOOG4-RSA-SHA256"));
         // Credential carries the SA email (with '/' + '@' percent-encoded).
-        assert!(url.contains("X-Goog-Credential=timetracker-storage%40ruh-ai-dev.iam.gserviceaccount.com%2F"));
+        assert!(url.contains(
+            "X-Goog-Credential=timetracker-storage%40ruh-ai-dev.iam.gserviceaccount.com%2F"
+        ));
         assert!(url.contains("%2Fauto%2Fstorage%2Fgoog4_request"));
         assert!(url.contains("X-Goog-SignedHeaders=host"));
         // A signature is present and looks like hex (RSA-2048 => 512 hex chars).

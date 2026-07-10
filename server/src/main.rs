@@ -30,7 +30,10 @@ async fn main() -> anyhow::Result<()> {
     let jwt = JwtKeys::new(&config.jwt_access_secret, config.jwt_access_ttl_seconds);
     let storage = StorageClient::new(S3Config::from_env()?);
     let linear = server::linear_service::LinearService::from_env();
-    tracing::info!(linear_configured = linear.is_configured(), "linear integration");
+    tracing::info!(
+        linear_configured = linear.is_configured(),
+        "linear integration"
+    );
     let claude = server::claude_provider::ClaudeProvider::from_env();
     tracing::info!(
         claude_configured = claude.is_configured(),

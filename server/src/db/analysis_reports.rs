@@ -116,8 +116,18 @@ pub async fn get(
 
     Ok(row.map(|r| {
         map_row(
-            r.id, r.user_id, r.day, r.job_id, r.total_analyzed, r.aligned_count, r.partially_count,
-            r.not_aligned_count, r.inconclusive_count, r.alignment_score, r.summary_text, r.model,
+            r.id,
+            r.user_id,
+            r.day,
+            r.job_id,
+            r.total_analyzed,
+            r.aligned_count,
+            r.partially_count,
+            r.not_aligned_count,
+            r.inconclusive_count,
+            r.alignment_score,
+            r.summary_text,
+            r.model,
             r.created_at,
         )
     }))
@@ -230,9 +240,19 @@ pub async fn list_for_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<AnalysisR
         .into_iter()
         .map(|r| {
             map_row(
-                r.id, r.user_id, r.day, r.job_id, r.total_analyzed, r.aligned_count,
-                r.partially_count, r.not_aligned_count, r.inconclusive_count, r.alignment_score,
-                r.summary_text, r.model, r.created_at,
+                r.id,
+                r.user_id,
+                r.day,
+                r.job_id,
+                r.total_analyzed,
+                r.aligned_count,
+                r.partially_count,
+                r.not_aligned_count,
+                r.inconclusive_count,
+                r.alignment_score,
+                r.summary_text,
+                r.model,
+                r.created_at,
             )
         })
         .collect())

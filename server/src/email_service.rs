@@ -41,7 +41,10 @@ pub async fn send_approval_request(e: ApprovalEmail<'_>) -> anyhow::Result<()> {
         // Log-mode: no SMTP configured. The action links embed a one-time
         // decision token, so they are suppressed by default (SEC-29) — set
         // EMAIL_DEBUG_LINKS=true only in local dev to print them.
-        if std::env::var("EMAIL_DEBUG_LINKS").map(|v| v == "true").unwrap_or(false) {
+        if std::env::var("EMAIL_DEBUG_LINKS")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+        {
             tracing::info!(
                 "[email:log-mode] to={} | {}\n  APPROVE: {}\n  REJECT:  {}",
                 e.owner_email,
@@ -224,7 +227,10 @@ pub async fn send_welcome(e: WelcomeEmail<'_>) -> anyhow::Result<()> {
     );
 
     if let Some(guide) = e.setup_guide_url {
-        body.push_str(&format!("Full setup guide:\n\u{20}\u{20}{guide}\n\n", guide = guide));
+        body.push_str(&format!(
+            "Full setup guide:\n\u{20}\u{20}{guide}\n\n",
+            guide = guide
+        ));
     }
 
     body.push_str("Welcome aboard!\n\n(TimeTracker)\n");
@@ -239,7 +245,12 @@ pub async fn send_plain(recipients: &[String], subject: &str, body: &str) -> any
     if host.is_empty() {
         // Log-mode: no SMTP configured — surface the message so the flow works
         // end-to-end in development.
-        tracing::info!("[email:log-mode] to={:?} | {}\n{}", recipients, subject, body);
+        tracing::info!(
+            "[email:log-mode] to={:?} | {}\n{}",
+            recipients,
+            subject,
+            body
+        );
         return Ok(());
     }
     if recipients.is_empty() {

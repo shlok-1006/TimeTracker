@@ -29,10 +29,7 @@ pub fn text(value: &str, label: &str, max: usize, required: bool) -> Result<Stri
 /// obvious junk that `contains('@')` let through (SEC-27).
 pub fn email(value: &str) -> Result<String, AppError> {
     let v = value.trim();
-    if v.is_empty()
-        || v.len() > 320
-        || v.chars().any(|c| c.is_control() || c.is_whitespace())
-    {
+    if v.is_empty() || v.len() > 320 || v.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err(AppError::BadRequest("invalid email".into()));
     }
     let (local, domain) = v
@@ -54,7 +51,11 @@ pub fn email(value: &str) -> Result<String, AppError> {
 /// Strip control characters and cap length for values interpolated into
 /// outbound messages (email subjects/bodies) — SEC-26.
 pub fn sanitize_line(value: &str, max: usize) -> String {
-    value.chars().filter(|c| !c.is_control()).take(max).collect()
+    value
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(max)
+        .collect()
 }
 
 #[cfg(test)]

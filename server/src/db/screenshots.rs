@@ -164,7 +164,10 @@ pub async fn count_in_range(
     )
     .fetch_one(pool)
     .await?;
-    Ok(RangeCounts { total: row.total, working: row.working })
+    Ok(RangeCounts {
+        total: row.total,
+        working: row.working,
+    })
 }
 
 /// Every *working* screenshot a user captured in `[from, to)`, oldest first.
@@ -205,10 +208,7 @@ pub async fn list_working_in_range(
 
 /// Distinct users who captured *working* screenshots on `day` (UTC). Used by the
 /// nightly scheduler to know whose reports to build.
-pub async fn working_user_ids_on_day(
-    pool: &PgPool,
-    day: NaiveDate,
-) -> Result<Vec<Uuid>, AppError> {
+pub async fn working_user_ids_on_day(pool: &PgPool, day: NaiveDate) -> Result<Vec<Uuid>, AppError> {
     let (from, to) = day_bounds(day);
     let rows = sqlx::query!(
         r#"SELECT DISTINCT user_id FROM screenshots

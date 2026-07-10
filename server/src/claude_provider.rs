@@ -41,7 +41,9 @@ impl ClaudeProvider {
     /// and optional `ANTHROPIC_MODEL` (defaults to `claude-haiku-4-5-20251001`).
     pub fn from_env() -> Self {
         Self {
-            api_key: std::env::var("ANTHROPIC_API_KEY").ok().filter(|s| !s.is_empty()),
+            api_key: std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
             model: std::env::var("ANTHROPIC_MODEL")
                 .ok()
                 .filter(|s| !s.is_empty())

@@ -85,7 +85,11 @@ async fn attendance_report(
     Query(q): Query<RangeQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (from, to) = resolve_range(&q)?;
-    let scope = if viewer.role == UserRole::Hr { None } else { Some(viewer.id) };
+    let scope = if viewer.role == UserRole::Hr {
+        None
+    } else {
+        Some(viewer.id)
+    };
     let rows = attendance::report(&state.db, from, to, scope).await?;
     Ok(Json(json!({ "from": from, "to": to, "employees": rows })))
 }
@@ -102,7 +106,9 @@ async fn rollup(
     RequireHr(hr): RequireHr,
     Query(q): Query<RollupQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let day = q.day.unwrap_or_else(|| (Utc::now() - Duration::days(1)).date_naive());
+    let day = q
+        .day
+        .unwrap_or_else(|| (Utc::now() - Duration::days(1)).date_naive());
     let count = attendance_service::rollup_all_for_day(&state.db, day).await?;
     audit::log(&state.db, hr.id, "attendance.rollup", "attendance", None).await;
     Ok(Json(json!({ "day": day, "employees": count })))

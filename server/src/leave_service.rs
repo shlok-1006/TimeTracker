@@ -83,20 +83,30 @@ mod tests {
     #[test]
     fn excludes_weekend() {
         // Fri .. next Mon = Fri + Mon = 2 (Sat/Sun skipped).
-        assert_eq!(count_business_days(d(2026, 6, 12), d(2026, 6, 15), &[]), 2.0);
+        assert_eq!(
+            count_business_days(d(2026, 6, 12), d(2026, 6, 15), &[]),
+            2.0
+        );
     }
 
     #[test]
     fn excludes_holidays() {
         // Mon..Fri with Wed (06-10) a holiday = 4.
         let holidays = vec![d(2026, 6, 10)];
-        assert_eq!(count_business_days(d(2026, 6, 8), d(2026, 6, 12), &holidays), 4.0);
+        assert_eq!(
+            count_business_days(d(2026, 6, 8), d(2026, 6, 12), &holidays),
+            4.0
+        );
     }
 
     #[test]
     fn single_day_and_reversed() {
         assert_eq!(count_business_days(d(2026, 6, 8), d(2026, 6, 8), &[]), 1.0); // Monday
-        assert_eq!(count_business_days(d(2026, 6, 13), d(2026, 6, 13), &[]), 0.0); // Saturday
-        assert_eq!(count_business_days(d(2026, 6, 12), d(2026, 6, 8), &[]), 0.0); // reversed
+        assert_eq!(
+            count_business_days(d(2026, 6, 13), d(2026, 6, 13), &[]),
+            0.0
+        ); // Saturday
+        assert_eq!(count_business_days(d(2026, 6, 12), d(2026, 6, 8), &[]), 0.0);
+        // reversed
     }
 }

@@ -107,8 +107,7 @@ fn env_or(key: &str, default: &str) -> String {
 const MIN_JWT_SECRET_LEN: usize = 32;
 
 /// Known placeholder secrets that must never reach production.
-const JWT_SECRET_PLACEHOLDERS: [&str; 3] =
-    ["change-me-access", "change-me-refresh", "change-me"];
+const JWT_SECRET_PLACEHOLDERS: [&str; 3] = ["change-me-access", "change-me-refresh", "change-me"];
 
 /// Reject short, placeholder, or low-entropy JWT secrets at startup (SEC-07).
 /// Validates the exact string used for signing — not a trimmed copy (RA-13).
@@ -128,7 +127,10 @@ fn validate_jwt_secret(secret: &str) -> anyhow::Result<()> {
     }
     // Guard against a long-but-trivial secret (e.g. 32 repeated chars): require a
     // minimum number of distinct bytes so the length check can't be gamed (RA-13).
-    let distinct = secret.bytes().collect::<std::collections::HashSet<u8>>().len();
+    let distinct = secret
+        .bytes()
+        .collect::<std::collections::HashSet<u8>>()
+        .len();
     if distinct < 8 {
         anyhow::bail!(
             "JWT_ACCESS_SECRET has too few distinct characters ({distinct}); it looks \

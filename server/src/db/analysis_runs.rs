@@ -108,7 +108,11 @@ pub async fn bump(
 
 /// Terminal transition: mark the run completed or failed (with a message).
 pub async fn finish(pool: &PgPool, id: Uuid, error: Option<&str>) -> Result<(), AppError> {
-    let status = if error.is_some() { "failed" } else { "completed" };
+    let status = if error.is_some() {
+        "failed"
+    } else {
+        "completed"
+    };
     sqlx::query!(
         r#"
         UPDATE analysis_range_runs

@@ -60,7 +60,11 @@ async fn decide(
 fn confirm_page(token: &str, verb: &str) -> Html<String> {
     // token is a 64-hex string; esc() it defensively for the attribute context.
     let action = format!("/tickets/requests/{}/{}", esc(token), verb);
-    let label = if verb == "approve" { "Approve" } else { "Reject" };
+    let label = if verb == "approve" {
+        "Approve"
+    } else {
+        "Reject"
+    };
     Html(format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>Confirm {label}</title>\
          <style>body{{font-family:system-ui;display:flex;height:100vh;align-items:center;\

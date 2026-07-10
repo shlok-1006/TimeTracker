@@ -23,7 +23,10 @@ const RUN_HOUR_UTC: u32 = 2;
 pub async fn run(state: AppState) {
     loop {
         let wait = duration_until_next_run();
-        tracing::info!(secs = wait.as_secs(), "nightly analysis: sleeping until next run");
+        tracing::info!(
+            secs = wait.as_secs(),
+            "nightly analysis: sleeping until next run"
+        );
         tokio::time::sleep(wait).await;
         run_once(&state).await;
     }
@@ -36,8 +39,14 @@ fn duration_until_next_run() -> std::time::Duration {
         .and_hms_opt(RUN_HOUR_UTC, 0, 0)
         .expect("valid run time");
     let today_run = Utc.from_utc_datetime(&at);
-    let next = if now < today_run { today_run } else { today_run + Duration::days(1) };
-    (next - now).to_std().unwrap_or_else(|_| std::time::Duration::from_secs(3600))
+    let next = if now < today_run {
+        today_run
+    } else {
+        today_run + Duration::days(1)
+    };
+    (next - now)
+        .to_std()
+        .unwrap_or_else(|_| std::time::Duration::from_secs(3600))
 }
 
 /// Build yesterday's reports for every employee with working screenshots.
@@ -123,7 +132,9 @@ async fn maybe_alert_low_score(state: &AppState, report: &AnalysisReport) {
         match users::find_by_id(&state.db, mid).await {
             Ok(Some(pm)) => recipients.push(pm.email),
             Ok(None) => {}
-            Err(e) => tracing::warn!(user_id = %report.user_id, "low-score alert: PM lookup failed: {e}"),
+            Err(e) => {
+                tracing::warn!(user_id = %report.user_id, "low-score alert: PM lookup failed: {e}")
+            }
         }
     }
     recipients.sort();
@@ -146,7 +157,8 @@ async fn maybe_alert_low_score(state: &AppState, report: &AnalysisReport) {
     match email_service::send_low_score_alert(email).await {
         Ok(()) => {
             if let Err(e) =
-                analysis_reports::mark_low_score_notified(&state.db, report.user_id, report.day).await
+                analysis_reports::mark_low_score_notified(&state.db, report.user_id, report.day)
+                    .await
             {
                 tracing::warn!(user_id = %report.user_id, "low-score notify stamp failed: {e}");
             }

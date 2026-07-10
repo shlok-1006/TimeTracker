@@ -123,7 +123,10 @@ pub async fn ensure_range(
         return Ok(());
     }
     let existing: std::collections::HashSet<NaiveDate> =
-        attendance::existing_days(pool, user_id, from, end).await?.into_iter().collect();
+        attendance::existing_days(pool, user_id, from, end)
+            .await?
+            .into_iter()
+            .collect();
 
     let mut day = from;
     while day <= end {
@@ -162,7 +165,10 @@ mod tests {
     fn tracking_at_least_two_minutes_is_present() {
         // Exactly the threshold, and well over it, both count as present.
         assert_eq!(derive_status(T, T, None, None, d(2026, 6, 8)).0, "present");
-        assert_eq!(derive_status(5 * 3600, T, None, None, d(2026, 6, 8)).0, "present");
+        assert_eq!(
+            derive_status(5 * 3600, T, None, None, d(2026, 6, 8)).0,
+            "present"
+        );
     }
 
     #[test]
@@ -171,7 +177,10 @@ mod tests {
         // leave/holiday falls through to absent — never "partial", which the
         // attendance_days_status_check constraint would reject.
         assert_eq!(derive_status(30, T, None, None, d(2026, 6, 8)).0, "absent");
-        assert_eq!(derive_status(T - 1, T, None, None, d(2026, 6, 8)).0, "absent");
+        assert_eq!(
+            derive_status(T - 1, T, None, None, d(2026, 6, 8)).0,
+            "absent"
+        );
     }
 
     #[test]
@@ -197,8 +206,14 @@ mod tests {
 
     #[test]
     fn no_work_prefers_leave_then_holiday_then_weekend_then_absent() {
-        assert_eq!(derive_status(0, T, Some("Sick"), Some("NY"), d(2026, 6, 8)).0, "leave");
-        assert_eq!(derive_status(0, T, None, Some("New Year"), d(2026, 6, 8)).0, "holiday");
+        assert_eq!(
+            derive_status(0, T, Some("Sick"), Some("NY"), d(2026, 6, 8)).0,
+            "leave"
+        );
+        assert_eq!(
+            derive_status(0, T, None, Some("New Year"), d(2026, 6, 8)).0,
+            "holiday"
+        );
         assert_eq!(derive_status(0, T, None, None, d(2026, 6, 13)).0, "weekend"); // Saturday
         assert_eq!(derive_status(0, T, None, None, d(2026, 6, 8)).0, "absent"); // Monday
     }

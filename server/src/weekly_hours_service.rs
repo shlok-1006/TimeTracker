@@ -90,7 +90,8 @@ pub async fn run_for_week(
     // toward the requirement rather than silently dropping out. Idempotent.
     let employee_ids = users::employee_ids(pool).await?;
     for id in &employee_ids {
-        if let Err(e) = crate::attendance_service::ensure_range(pool, *id, week_start, week_end).await
+        if let Err(e) =
+            crate::attendance_service::ensure_range(pool, *id, week_start, week_end).await
         {
             tracing::warn!(user_id = %id, "weekly hours: attendance ensure failed: {e}");
         }
@@ -229,12 +230,18 @@ mod tests {
     #[test]
     fn previous_week_from_monday() {
         // Mon 2026-07-06 ⇒ previous week Mon 2026-06-29 .. Sun 2026-07-05.
-        assert_eq!(previous_week(d(2026, 7, 6)), (d(2026, 6, 29), d(2026, 7, 5)));
+        assert_eq!(
+            previous_week(d(2026, 7, 6)),
+            (d(2026, 6, 29), d(2026, 7, 5))
+        );
     }
 
     #[test]
     fn previous_week_from_midweek() {
         // Wed 2026-07-01 ⇒ previous week Mon 2026-06-22 .. Sun 2026-06-28.
-        assert_eq!(previous_week(d(2026, 7, 1)), (d(2026, 6, 22), d(2026, 6, 28)));
+        assert_eq!(
+            previous_week(d(2026, 7, 1)),
+            (d(2026, 6, 22), d(2026, 6, 28))
+        );
     }
 }

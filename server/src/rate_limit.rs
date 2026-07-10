@@ -186,7 +186,10 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("x-real-ip", "9.9.9.9".parse().unwrap());
         let peer: SocketAddr = "5.6.7.8:443".parse().unwrap();
-        assert_eq!(client_key(&h, Some(peer), false).as_deref(), Some("5.6.7.8"));
+        assert_eq!(
+            client_key(&h, Some(peer), false).as_deref(),
+            Some("5.6.7.8")
+        );
     }
 
     #[test]

@@ -17,7 +17,10 @@ const RUN_HOUR_UTC: u32 = 6;
 pub async fn run(state: AppState) {
     loop {
         let wait = duration_until_next_run(Utc::now());
-        tracing::info!(secs = wait.as_secs(), "weekly hours: sleeping until next Monday run");
+        tracing::info!(
+            secs = wait.as_secs(),
+            "weekly hours: sleeping until next Monday run"
+        );
         tokio::time::sleep(wait).await;
         run_once(&state).await;
     }
@@ -31,7 +34,11 @@ fn duration_until_next_run(now: chrono::DateTime<Utc>) -> std::time::Duration {
     let days_until_monday = (7 - now.weekday().num_days_from_monday() as i64) % 7;
     let candidate_date = now.date_naive() + Duration::days(days_until_monday);
     let candidate = Utc.from_utc_datetime(&candidate_date.and_time(run_time));
-    let next = if candidate > now { candidate } else { candidate + Duration::days(7) };
+    let next = if candidate > now {
+        candidate
+    } else {
+        candidate + Duration::days(7)
+    };
     (next - now)
         .to_std()
         .unwrap_or_else(|_| std::time::Duration::from_secs(3600))

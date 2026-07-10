@@ -23,7 +23,9 @@ use crate::state::AppState;
 
 /// `GET /me/tasks` — the authenticated employee's own manual tasks.
 async fn my_tasks(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, AppError> {
-    Ok(Json(json!(manual_tasks::list_for_user(&state.db, user.id).await?)))
+    Ok(Json(json!(
+        manual_tasks::list_for_user(&state.db, user.id).await?
+    )))
 }
 
 #[derive(Deserialize)]
@@ -47,8 +49,16 @@ async fn create_task(
     if users::find_by_id(&state.db, target).await?.is_none() {
         return Err(AppError::NotFound);
     }
-    let task = manual_tasks::create(&state.db, target, hr.id, title, body.description.trim()).await?;
-    audit::log(&state.db, hr.id, "task.create", "manual_task", Some(task.id)).await;
+    let task =
+        manual_tasks::create(&state.db, target, hr.id, title, body.description.trim()).await?;
+    audit::log(
+        &state.db,
+        hr.id,
+        "task.create",
+        "manual_task",
+        Some(task.id),
+    )
+    .await;
     Ok(Json(json!(task)))
 }
 
@@ -57,7 +67,9 @@ async fn list_tasks(
     RequireHr(_hr): RequireHr,
     Path(target): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    Ok(Json(json!(manual_tasks::list_for_user(&state.db, target).await?)))
+    Ok(Json(json!(
+        manual_tasks::list_for_user(&state.db, target).await?
+    )))
 }
 
 #[derive(Deserialize)]
@@ -81,7 +93,9 @@ async fn update_task(
     }
     if let Some(s) = body.status.as_deref() {
         if !manual_tasks::is_valid_status(s) {
-            return Err(AppError::BadRequest("status must be 'open' or 'done'".into()));
+            return Err(AppError::BadRequest(
+                "status must be 'open' or 'done'".into(),
+            ));
         }
     }
     let title = body.title.as_deref().map(str::trim);
@@ -98,7 +112,9 @@ async fn update_task(
     }
     audit::log(&state.db, hr.id, "task.update", "manual_task", Some(id)).await;
 
-    let updated = manual_tasks::get(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let updated = manual_tasks::get(&state.db, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     Ok(Json(json!(updated)))
 }
 

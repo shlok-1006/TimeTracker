@@ -31,8 +31,7 @@ fn hash_refresh_token(token: &str) -> String {
 /// CSPRNG over a mixed alphabet (ambiguous chars removed). Replaces the old
 /// 32-bit `Tt-<8 hex>!` format; HR hands it over once and the user resets it.
 pub fn generate_temp_password() -> String {
-    const CHARSET: &[u8] =
-        b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*?";
+    const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*?";
     const LEN: usize = 20;
     let mut buf = [0u8; LEN];
     OsRng.fill_bytes(&mut buf);
@@ -147,7 +146,14 @@ pub async fn login(state: &AppState, req: LoginRequest) -> Result<LoginResponse,
 
     if !verify_password(&req.password, &user.password_hash) {
         // SEC-22: record the failed attempt against the known account.
-        audit::log(&state.db, user.id, "auth.login_failed", "user", Some(user.id)).await;
+        audit::log(
+            &state.db,
+            user.id,
+            "auth.login_failed",
+            "user",
+            Some(user.id),
+        )
+        .await;
         return Err(AppError::Unauthorized);
     }
 

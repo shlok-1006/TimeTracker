@@ -31,10 +31,7 @@ fn ticket_request_limiter() -> &'static crate::rate_limit::RateLimiter {
 }
 
 /// `POST /me/linear/link` — link the caller's account to Linear by email match.
-async fn link(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> Result<Json<Value>, AppError> {
+async fn link(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, AppError> {
     let me = users::find_by_id(&state.db, user.id)
         .await?
         .ok_or(AppError::Unauthorized)?;
@@ -42,7 +39,9 @@ async fn link(
         .linear
         .link_user_to_linear(&state.db, user.id, &me.email)
         .await?;
-    Ok(Json(json!({ "linked": true, "linear_user_id": linear_user_id })))
+    Ok(Json(
+        json!({ "linked": true, "linear_user_id": linear_user_id }),
+    ))
 }
 
 /// `GET /me/tickets` — the caller's assigned Linear tickets (cached hourly).
@@ -50,7 +49,10 @@ async fn my_tickets(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Value>, AppError> {
-    let tickets = state.linear.fetch_assigned_tickets(&state.db, user.id).await?;
+    let tickets = state
+        .linear
+        .fetch_assigned_tickets(&state.db, user.id)
+        .await?;
     Ok(Json(json!({ "tickets": tickets })))
 }
 
@@ -62,7 +64,10 @@ async fn ticket_context(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let assigned = state.linear.fetch_assigned_tickets(&state.db, user.id).await?;
+    let assigned = state
+        .linear
+        .fetch_assigned_tickets(&state.db, user.id)
+        .await?;
     let authorized = assigned.iter().any(|t| t.id == id)
         || ticket_requests::has_approved(&state.db, user.id, &id).await?;
     if !authorized {
@@ -107,11 +112,7 @@ async fn request_ticket(
         .ok_or_else(|| AppError::BadRequest("ticket not found in Linear".into()))?;
 
     // Unguessable token used in the emailed approve/reject links.
-    let token = format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    );
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
 
     ticket_requests::create(
         &state.db,

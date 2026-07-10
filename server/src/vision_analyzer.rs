@@ -17,7 +17,12 @@ const MAX_ATTEMPTS: usize = 3;
 const CONFIDENCE_THRESHOLD: f64 = 0.4;
 
 /// The four valid verdicts.
-pub const VERDICTS: [&str; 4] = ["aligned", "partially_aligned", "not_aligned", "inconclusive"];
+pub const VERDICTS: [&str; 4] = [
+    "aligned",
+    "partially_aligned",
+    "not_aligned",
+    "inconclusive",
+];
 
 /// A validated analysis result, ready to persist.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -77,8 +82,7 @@ pub fn build_prompt(tickets: &[Ticket]) -> String {
             })
         })
         .collect();
-    let tickets_json =
-        serde_json::to_string_pretty(&context).unwrap_or_else(|_| "[]".to_string());
+    let tickets_json = serde_json::to_string_pretty(&context).unwrap_or_else(|_| "[]".to_string());
 
     format!(
         "You are a work-verification assistant. Compare the attached SCREENSHOT of an \
@@ -120,8 +124,7 @@ fn extract_json_object(s: &str) -> &str {
 /// Parse + strictly validate a raw response against the contract.
 fn parse_and_validate(text: &str) -> Result<RawOutput, String> {
     let json = extract_json_object(text);
-    let raw: RawOutput =
-        serde_json::from_str(json).map_err(|e| format!("invalid JSON ({e})"))?;
+    let raw: RawOutput = serde_json::from_str(json).map_err(|e| format!("invalid JSON ({e})"))?;
 
     if !VERDICTS.contains(&raw.verdict.as_str()) {
         return Err(format!("invalid verdict: {:?}", raw.verdict));
@@ -286,7 +289,11 @@ mod tests {
             let out = analyze_screenshot(&claude, b"x", "image/jpeg", status, &[])
                 .await
                 .unwrap();
-            assert_eq!(out, AnalysisOutcome::SkippedMeetingScreenshot, "status {status}");
+            assert_eq!(
+                out,
+                AnalysisOutcome::SkippedMeetingScreenshot,
+                "status {status}"
+            );
         }
     }
 
@@ -326,9 +333,11 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_confidence() {
-        assert!(parse_and_validate(r#"{"verdict":"aligned","confidence":1.5}"#)
-            .unwrap_err()
-            .contains("out of range"));
+        assert!(
+            parse_and_validate(r#"{"verdict":"aligned","confidence":1.5}"#)
+                .unwrap_err()
+                .contains("out of range")
+        );
     }
 
     #[test]

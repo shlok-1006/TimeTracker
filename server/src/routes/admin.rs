@@ -135,7 +135,9 @@ async fn user_timeline(
             })
         })
         .collect();
-    Ok(Json(json!({ "from": q.from, "to": q.to, "segments": items })))
+    Ok(Json(
+        json!({ "from": q.from, "to": q.to, "segments": items }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -171,8 +173,17 @@ async fn sample_day(
         })
         .collect();
 
-    audit::log(&state.db, user.id, "screenshot.sample", "user", Some(target)).await;
-    Ok(Json(json!({ "day": day, "count": samples.len(), "samples": samples })))
+    audit::log(
+        &state.db,
+        user.id,
+        "screenshot.sample",
+        "user",
+        Some(target),
+    )
+    .await;
+    Ok(Json(
+        json!({ "day": day, "count": samples.len(), "samples": samples }),
+    ))
 }
 
 /// `POST /admin/users/:id/analyze?day=YYYY-MM-DD` — run Vision AI over the day's
@@ -204,7 +215,14 @@ async fn analyze_day(
     )
     .await?;
 
-    audit::log(&state.db, user.id, "screenshot.analyze", "user", Some(target)).await;
+    audit::log(
+        &state.db,
+        user.id,
+        "screenshot.analyze",
+        "user",
+        Some(target),
+    )
+    .await;
     Ok(Json(json!({
         "day": day,
         "analyzed": out.analyzed,
@@ -312,9 +330,15 @@ async fn analyze_range(
         ));
     }
 
-    let run_id =
-        analysis_runs::create(&state.db, target, user.id, q.from, q.to, counts.working as i32)
-            .await?;
+    let run_id = analysis_runs::create(
+        &state.db,
+        target,
+        user.id,
+        q.from,
+        q.to,
+        counts.working as i32,
+    )
+    .await?;
 
     tokio::spawn(crate::analysis_service::run_range_analysis(
         state.db.clone(),
@@ -327,7 +351,14 @@ async fn analyze_range(
         run_id,
     ));
 
-    audit::log(&state.db, user.id, "screenshot.analyze_range", "user", Some(target)).await;
+    audit::log(
+        &state.db,
+        user.id,
+        "screenshot.analyze_range",
+        "user",
+        Some(target),
+    )
+    .await;
     Ok(Json(json!({
         "run_id": run_id,
         "total": counts.working,
@@ -342,7 +373,9 @@ async fn analysis_run_status(
     RequireAdmin(user): RequireAdmin,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let run = analysis_runs::get(&state.db, run_id).await?.ok_or(AppError::NotFound)?;
+    let run = analysis_runs::get(&state.db, run_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     authorize_view(&state, &user, run.user_id).await?;
     Ok(Json(json!(run)))
 }
@@ -394,7 +427,9 @@ async fn create_user(
     let role = UserRole::from_str(&body.role)
         .map_err(|_| AppError::BadRequest("role must be employee, project_manager or hr".into()))?;
     if body.password.len() < 8 {
-        return Err(AppError::BadRequest("password must be at least 8 characters".into()));
+        return Err(AppError::BadRequest(
+            "password must be at least 8 characters".into(),
+        ));
     }
     if !body.email.contains('@') {
         return Err(AppError::BadRequest("invalid email".into()));
@@ -419,7 +454,9 @@ async fn create_user(
     let download_url = std::env::var("DESKTOP_DOWNLOAD_URL").unwrap_or_else(|_| {
         "https://github.com/shlok-1006/TimeTracker/releases/latest".to_string()
     });
-    let setup_guide_url = std::env::var("SETUP_GUIDE_URL").ok().filter(|s| !s.is_empty());
+    let setup_guide_url = std::env::var("SETUP_GUIDE_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
     let server_url = std::env::var("DESKTOP_SERVER_URL").unwrap_or_default();
     if let Err(e) = crate::email_service::send_welcome(crate::email_service::WelcomeEmail {
         email: &user.email,
@@ -444,11 +481,15 @@ async fn delete_user(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     if id == hr.id {
-        return Err(AppError::BadRequest("you cannot delete your own account".into()));
+        return Err(AppError::BadRequest(
+            "you cannot delete your own account".into(),
+        ));
     }
     // Capture the identity BEFORE the cascade delete, so the Alumni log retains
     // the removed employee even though their user row and data are gone.
-    let removed = users::find_by_id(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let removed = users::find_by_id(&state.db, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     if !users::delete(&state.db, id).await? {
         return Err(AppError::NotFound);
     }
@@ -485,7 +526,11 @@ async fn reset_password(
 ) -> Result<Json<Value>, AppError> {
     let password = match body.password {
         Some(p) if p.len() >= 8 => p,
-        Some(_) => return Err(AppError::BadRequest("password must be at least 8 characters".into())),
+        Some(_) => {
+            return Err(AppError::BadRequest(
+                "password must be at least 8 characters".into(),
+            ))
+        }
         None => auth::generate_temp_password(),
     };
 
@@ -514,14 +559,23 @@ pub fn router() -> Router<AppState> {
         .route("/admin/alumni", get(list_alumni))
         .route("/admin/users", get(list_users).post(create_user))
         .route("/admin/users/:id", delete(delete_user))
-        .route("/admin/users/:id/reset-password", axum::routing::post(reset_password))
+        .route(
+            "/admin/users/:id/reset-password",
+            axum::routing::post(reset_password),
+        )
         .route("/admin/users/:id/hours", get(user_hours))
         .route("/admin/users/:id/screenshots", get(user_screenshots))
         .route("/admin/users/:id/timeline", get(user_timeline))
         .route("/admin/users/:id/sample", axum::routing::post(sample_day))
         .route("/admin/users/:id/analyze", axum::routing::post(analyze_day))
         .route("/admin/users/:id/analysis", get(analysis_for_day))
-        .route("/admin/users/:id/analyze-range/preview", get(analyze_range_preview))
-        .route("/admin/users/:id/analyze-range", axum::routing::post(analyze_range))
+        .route(
+            "/admin/users/:id/analyze-range/preview",
+            get(analyze_range_preview),
+        )
+        .route(
+            "/admin/users/:id/analyze-range",
+            axum::routing::post(analyze_range),
+        )
         .route("/admin/analysis-runs/:id", get(analysis_run_status))
 }

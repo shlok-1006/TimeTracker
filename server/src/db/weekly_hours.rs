@@ -116,7 +116,10 @@ pub async fn upsert(
     )
     .fetch_one(pool)
     .await?;
-    Ok(Upserted { id: row.id, notified_at: row.notified_at })
+    Ok(Upserted {
+        id: row.id,
+        notified_at: row.notified_at,
+    })
 }
 
 /// Stamp `notified_at = now()` once the shortfall warning has been sent.

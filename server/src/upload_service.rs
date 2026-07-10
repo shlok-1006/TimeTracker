@@ -97,11 +97,29 @@ mod tests {
         let sneaky = format!("{user}/../{victim}/20260101/{uuid}.jpg");
         assert!(!is_valid_screenshot_key(&sneaky, user));
         // Leading slash, double slash, wrong owner, bad date, non-jpg, non-uuid.
-        assert!(!is_valid_screenshot_key(&format!("/{user}/20260101/{uuid}.jpg"), user));
-        assert!(!is_valid_screenshot_key(&format!("{user}//{uuid}.jpg"), user));
-        assert!(!is_valid_screenshot_key(&format!("{victim}/20260101/{uuid}.jpg"), user));
-        assert!(!is_valid_screenshot_key(&format!("{user}/2026/{uuid}.jpg"), user));
-        assert!(!is_valid_screenshot_key(&format!("{user}/20260101/{uuid}.png"), user));
-        assert!(!is_valid_screenshot_key(&format!("{user}/20260101/not-a-uuid.jpg"), user));
+        assert!(!is_valid_screenshot_key(
+            &format!("/{user}/20260101/{uuid}.jpg"),
+            user
+        ));
+        assert!(!is_valid_screenshot_key(
+            &format!("{user}//{uuid}.jpg"),
+            user
+        ));
+        assert!(!is_valid_screenshot_key(
+            &format!("{victim}/20260101/{uuid}.jpg"),
+            user
+        ));
+        assert!(!is_valid_screenshot_key(
+            &format!("{user}/2026/{uuid}.jpg"),
+            user
+        ));
+        assert!(!is_valid_screenshot_key(
+            &format!("{user}/20260101/{uuid}.png"),
+            user
+        ));
+        assert!(!is_valid_screenshot_key(
+            &format!("{user}/20260101/not-a-uuid.jpg"),
+            user
+        ));
     }
 }

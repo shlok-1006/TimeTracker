@@ -38,7 +38,12 @@ async fn main() -> anyhow::Result<()> {
 
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let pool = db::connect(&database_url, 5).await?;
-    db::run_migrations(&pool).await?;
+    // Skip migrations when the target DB is already migrated (e.g. the deployed
+    // server applied them). Avoids a spurious checksum mismatch when the seed is
+    // built on a different platform (Windows CRLF) than the server (Linux LF).
+    if std::env::var("SEED_SKIP_MIGRATIONS").ok().as_deref() != Some("true") {
+        db::run_migrations(&pool).await?;
+    }
 
     let hr = db::users::upsert(
         &pool,

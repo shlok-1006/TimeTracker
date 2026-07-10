@@ -42,13 +42,20 @@ async fn req(method: &str, path: &str, role: Option<UserRole>) -> StatusCode {
     if method == "POST" {
         b = b.header("content-type", "application/json");
     }
-    let body = if method == "POST" { Body::from("{}") } else { Body::empty() };
+    let body = if method == "POST" {
+        Body::from("{}")
+    } else {
+        Body::empty()
+    };
     app().oneshot(b.body(body).unwrap()).await.unwrap().status()
 }
 
 #[tokio::test]
 async fn employee_self_service_requires_auth() {
-    assert_eq!(req("GET", "/me/leave/balance", None).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        req("GET", "/me/leave/balance", None).await,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]

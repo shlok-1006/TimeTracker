@@ -21,7 +21,11 @@ const SECRET: &str = "team-summary-secret";
 
 async fn pool() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
-    PgPoolOptions::new().max_connections(2).connect(&url).await.ok()
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .ok()
 }
 
 fn dto(offset_min: i64, dur_secs: i64, kind: &str, team: Uuid) -> IntervalDto {
@@ -42,15 +46,53 @@ async fn team_summary_metrics() {
         return;
     };
     let tag = Uuid::new_v4();
-    let team = teams::create(&pool, &format!("Sum-{tag}"), "summary team").await.unwrap();
-    let e1 = users::create(&pool, "M1", &format!("m1-{tag}@t.local"), "h", UserRole::Employee, None).await.unwrap();
-    let e2 = users::create(&pool, "M2", &format!("m2-{tag}@t.local"), "h", UserRole::Employee, None).await.unwrap();
+    let team = teams::create(&pool, &format!("Sum-{tag}"), "summary team")
+        .await
+        .unwrap();
+    let e1 = users::create(
+        &pool,
+        "M1",
+        &format!("m1-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
+    let e2 = users::create(
+        &pool,
+        "M2",
+        &format!("m2-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
     teams::add_member(&pool, e1.id, team.id).await.unwrap();
     teams::add_member(&pool, e2.id, team.id).await.unwrap();
 
     // e1: active 3600 + meeting 1800 → worked 5400 ; e2: active 1800 + idle 600 → worked 1800.
-    insert_batch(&pool, e1.id, &[dto(0, 3600, "active", team.id), dto(60, 1800, "meeting", team.id)]).await.unwrap();
-    insert_batch(&pool, e2.id, &[dto(120, 1800, "active", team.id), dto(180, 600, "idle", team.id)]).await.unwrap();
+    insert_batch(
+        &pool,
+        e1.id,
+        &[
+            dto(0, 3600, "active", team.id),
+            dto(60, 1800, "meeting", team.id),
+        ],
+    )
+    .await
+    .unwrap();
+    insert_batch(
+        &pool,
+        e2.id,
+        &[
+            dto(120, 1800, "active", team.id),
+            dto(180, 600, "idle", team.id),
+        ],
+    )
+    .await
+    .unwrap();
 
     let b = teams::status_breakdown(&pool, team.id, None).await.unwrap();
     assert_eq!(b.total, 7200, "total worked = active+meeting");
@@ -97,19 +139,32 @@ fn lazy_app() -> axum::Router {
 async fn status(path: &str, role: Option<UserRole>) -> StatusCode {
     let mut b = Request::builder().uri(path);
     if let Some(r) = role {
-        let t = JwtKeys::new(SECRET, 900).issue(Uuid::new_v4(), r, None).unwrap();
+        let t = JwtKeys::new(SECRET, 900)
+            .issue(Uuid::new_v4(), r, None)
+            .unwrap();
         b = b.header("authorization", format!("Bearer {t}"));
     }
-    lazy_app().oneshot(b.body(Body::empty()).unwrap()).await.unwrap().status()
+    lazy_app()
+        .oneshot(b.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status()
 }
 
 #[tokio::test]
 async fn summary_requires_admin() {
     assert_eq!(status("/admin/teams", None).await, StatusCode::UNAUTHORIZED);
-    assert_eq!(status("/admin/teams", Some(UserRole::Employee)).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        status("/admin/teams", Some(UserRole::Employee)).await,
+        StatusCode::FORBIDDEN
+    );
     let id = Uuid::new_v4();
     assert_eq!(
-        status(&format!("/admin/teams/{id}/summary"), Some(UserRole::Employee)).await,
+        status(
+            &format!("/admin/teams/{id}/summary"),
+            Some(UserRole::Employee)
+        )
+        .await,
         StatusCode::FORBIDDEN
     );
 }

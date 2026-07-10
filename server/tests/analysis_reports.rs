@@ -50,9 +50,16 @@ async fn upsert_get_and_unique_per_user_day() {
 
     // Prerequisites: a temp employee + that day's analysis job (FK targets).
     let email = format!("report-test-{}@timetracker.local", Uuid::new_v4());
-    let user = users::create(&pool, "Report Test", &email, "hash", UserRole::Employee, None)
-        .await
-        .expect("create temp user");
+    let user = users::create(
+        &pool,
+        "Report Test",
+        &email,
+        "hash",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .expect("create temp user");
     let day = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
     let job = sampler::create_daily_job(&pool, user.id, day)
         .await
@@ -83,14 +90,22 @@ async fn upsert_get_and_unique_per_user_day() {
     second.not_aligned_count = 0;
     second.alignment_score = 100.0;
     second.summary_text = "Fully aligned.".into();
-    let updated = analysis_reports::upsert(&pool, &second).await.expect("upsert update");
+    let updated = analysis_reports::upsert(&pool, &second)
+        .await
+        .expect("upsert update");
     assert_eq!(updated.id, created.id, "same row updated in place");
     assert_eq!(updated.total_analyzed, 4);
     assert_eq!(updated.aligned_count, 4);
     assert!((updated.alignment_score - 100.0).abs() < 1e-9);
 
-    let list = analysis_reports::list_for_user(&pool, user.id).await.expect("list");
-    assert_eq!(list.len(), 1, "UNIQUE(user_id, day) must prevent duplicates");
+    let list = analysis_reports::list_for_user(&pool, user.id)
+        .await
+        .expect("list");
+    assert_eq!(
+        list.len(),
+        1,
+        "UNIQUE(user_id, day) must prevent duplicates"
+    );
 
     // Cleanup (cascades the report + job). The temp user performed no audited
     // actions, so deletion is unaffected by the audit-log FK.
@@ -117,15 +132,30 @@ async fn build_report_computes_score_from_results() {
     };
 
     let email = format!("build-report-{}@timetracker.local", Uuid::new_v4());
-    let user = users::create(&pool, "Build Report", &email, "hash", UserRole::Employee, None)
-        .await
-        .expect("create temp user");
+    let user = users::create(
+        &pool,
+        "Build Report",
+        &email,
+        "hash",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .expect("create temp user");
     let day = NaiveDate::from_ymd_opt(2026, 6, 2).unwrap();
-    let job = sampler::create_daily_job(&pool, user.id, day).await.expect("job");
+    let job = sampler::create_daily_job(&pool, user.id, day)
+        .await
+        .expect("job");
 
     // Verdicts: aligned, aligned, partially_aligned, not_aligned, inconclusive
     // → weighted (1+1+0.5+0)=2.5 over scored=4 → 62.5; inconclusive excluded.
-    let verdicts = ["aligned", "aligned", "partially_aligned", "not_aligned", "inconclusive"];
+    let verdicts = [
+        "aligned",
+        "aligned",
+        "partially_aligned",
+        "not_aligned",
+        "inconclusive",
+    ];
     for (i, verdict) in verdicts.iter().enumerate() {
         let sid = screenshots::insert(
             &pool,
@@ -154,7 +184,11 @@ async fn build_report_computes_score_from_results() {
     assert_eq!(report.partially_count, 1);
     assert_eq!(report.not_aligned_count, 1);
     assert_eq!(report.inconclusive_count, 1);
-    assert!((report.alignment_score - 62.5).abs() < 1e-9, "score was {}", report.alignment_score);
+    assert!(
+        (report.alignment_score - 62.5).abs() < 1e-9,
+        "score was {}",
+        report.alignment_score
+    );
     assert_eq!(report.model, "claude-haiku-4-5-20251001");
 
     users::delete(&pool, user.id).await.expect("cleanup user");
@@ -172,29 +206,59 @@ async fn list_for_day_scopes_to_manager_team() {
     let tag = Uuid::new_v4();
 
     let pm = users::create(
-        &pool, "PM", &format!("pm-{tag}@t.local"), "h", UserRole::ProjectManager, None,
-    ).await.unwrap();
+        &pool,
+        "PM",
+        &format!("pm-{tag}@t.local"),
+        "h",
+        UserRole::ProjectManager,
+        None,
+    )
+    .await
+    .unwrap();
     let on_team = users::create(
-        &pool, "On Team", &format!("on-{tag}@t.local"), "h", UserRole::Employee, Some(pm.id),
-    ).await.unwrap();
+        &pool,
+        "On Team",
+        &format!("on-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        Some(pm.id),
+    )
+    .await
+    .unwrap();
     let off_team = users::create(
-        &pool, "Off Team", &format!("off-{tag}@t.local"), "h", UserRole::Employee, None,
-    ).await.unwrap();
+        &pool,
+        "Off Team",
+        &format!("off-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
 
     for u in [&on_team, &off_team] {
         let job = sampler::create_daily_job(&pool, u.id, day).await.unwrap();
-        analysis_reports::upsert(&pool, &input(u.id, day, job.id)).await.unwrap();
+        analysis_reports::upsert(&pool, &input(u.id, day, job.id))
+            .await
+            .unwrap();
     }
 
     // PM scope → only their team member.
-    let pm_view = analysis_reports::list_for_day(&pool, Some(pm.id), day).await.unwrap();
+    let pm_view = analysis_reports::list_for_day(&pool, Some(pm.id), day)
+        .await
+        .unwrap();
     assert_eq!(pm_view.len(), 1, "PM sees only their team");
     assert_eq!(pm_view[0].user_id, on_team.id);
 
     // HR scope (None) → both employees on that day.
-    let hr_view = analysis_reports::list_for_day(&pool, None, day).await.unwrap();
+    let hr_view = analysis_reports::list_for_day(&pool, None, day)
+        .await
+        .unwrap();
     let ids: Vec<Uuid> = hr_view.iter().map(|r| r.user_id).collect();
-    assert!(ids.contains(&on_team.id) && ids.contains(&off_team.id), "HR sees all");
+    assert!(
+        ids.contains(&on_team.id) && ids.contains(&off_team.id),
+        "HR sees all"
+    );
 
     for u in [on_team, off_team, pm] {
         users::delete(&pool, u.id).await.expect("cleanup");

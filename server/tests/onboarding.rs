@@ -10,7 +10,11 @@ use server::role::UserRole;
 
 async fn pool() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
-    PgPoolOptions::new().max_connections(2).connect(&url).await.ok()
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .ok()
 }
 
 #[tokio::test]
@@ -21,8 +25,15 @@ async fn onboarding_pipeline_roundtrip() {
     };
     let tag = Uuid::new_v4();
     let hr = users::create(
-        &pool, "HR", &format!("hr-onb-{tag}@t.local"), "h", UserRole::Hr, None,
-    ).await.unwrap();
+        &pool,
+        "HR",
+        &format!("hr-onb-{tag}@t.local"),
+        "h",
+        UserRole::Hr,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Stages are seeded by the migration; the pipeline must be non-empty.
     let stages = onboarding::list_stages(&pool).await.unwrap();
@@ -51,31 +62,46 @@ async fn onboarding_pipeline_roundtrip() {
     assert!(listed.iter().any(|c| c.id == cand.id));
 
     // Stage transition.
-    assert!(onboarding::set_stage(&pool, cand.id, second.id).await.unwrap());
+    assert!(onboarding::set_stage(&pool, cand.id, second.id)
+        .await
+        .unwrap());
     let moved = onboarding::get(&pool, cand.id).await.unwrap().unwrap();
     assert_eq!(moved.stage_id, second.id);
     assert_eq!(moved.stage_name, second.name);
 
     // Update fields (COALESCE leaves email untouched).
-    assert!(onboarding::update(&pool, cand.id, Some("Ada L."), None, None).await.unwrap());
+    assert!(
+        onboarding::update(&pool, cand.id, Some("Ada L."), None, None)
+            .await
+            .unwrap()
+    );
     let updated = onboarding::get(&pool, cand.id).await.unwrap().unwrap();
     assert_eq!(updated.name, "Ada L.");
     assert_eq!(updated.email, cand.email);
 
     // Checklist task: create -> toggle done -> delete.
-    let task = onboarding::create_task(&pool, cand.id, "Sign offer letter").await.unwrap();
+    let task = onboarding::create_task(&pool, cand.id, "Sign offer letter")
+        .await
+        .unwrap();
     assert!(!task.done);
-    assert!(onboarding::set_task_done(&pool, task.id, true).await.unwrap());
+    assert!(onboarding::set_task_done(&pool, task.id, true)
+        .await
+        .unwrap());
     let tasks = onboarding::list_tasks(&pool, cand.id).await.unwrap();
     assert_eq!(tasks.len(), 1);
     assert!(tasks[0].done);
     assert!(tasks[0].done_at.is_some());
     assert!(onboarding::delete_task(&pool, task.id).await.unwrap());
-    assert!(onboarding::list_tasks(&pool, cand.id).await.unwrap().is_empty());
+    assert!(onboarding::list_tasks(&pool, cand.id)
+        .await
+        .unwrap()
+        .is_empty());
 
     // Document metadata.
     let key = format!("candidates/{}/{}-resume.pdf", cand.id, Uuid::new_v4());
-    let doc = onboarding::add_document(&pool, cand.id, "resume", &key).await.unwrap();
+    let doc = onboarding::add_document(&pool, cand.id, "resume", &key)
+        .await
+        .unwrap();
     assert_eq!(doc.doc_type, "resume");
     let docs = onboarding::list_documents(&pool, cand.id).await.unwrap();
     assert_eq!(docs.len(), 1);
@@ -93,7 +119,9 @@ async fn onboarding_pipeline_roundtrip() {
     .await
     .unwrap();
     let final_stage = stages.last().unwrap();
-    onboarding::mark_converted(&pool, cand.id, new_user.id, final_stage.id).await.unwrap();
+    onboarding::mark_converted(&pool, cand.id, new_user.id, final_stage.id)
+        .await
+        .unwrap();
     let hired = onboarding::get(&pool, cand.id).await.unwrap().unwrap();
     assert_eq!(hired.status, "hired");
     assert_eq!(hired.converted_user_id, Some(new_user.id));

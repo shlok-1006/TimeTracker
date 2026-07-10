@@ -10,13 +10,17 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use server::attendance_service;
-use server::db::{attendance, intervals, leave, users};
 use server::db::intervals::IntervalDto;
+use server::db::{attendance, intervals, leave, users};
 use server::role::UserRole;
 
 async fn pool() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
-    PgPoolOptions::new().max_connections(2).connect(&url).await.ok()
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .ok()
 }
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -40,8 +44,15 @@ async fn attendance_rollup_derives_all_statuses() {
     };
     let tag = Uuid::new_v4();
     let emp = users::create(
-        &pool, "Att Emp", &format!("att-{tag}@t.local"), "h", UserRole::Employee, None,
-    ).await.unwrap();
+        &pool,
+        "Att Emp",
+        &format!("att-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Pick a clear weekday (Mon) and weekend (Sat) in 2020 (past → fillable).
     let monday = next_weekday(d(2020, 3, 2), Weekday::Mon);
@@ -65,42 +76,62 @@ async fn attendance_rollup_derives_all_statuses() {
     )
     .await
     .unwrap();
-    let present = attendance_service::rollup_day(&pool, emp.id, monday).await.unwrap();
+    let present = attendance_service::rollup_day(&pool, emp.id, monday)
+        .await
+        .unwrap();
     assert_eq!(present.status, "present");
     assert_eq!(present.worked_seconds, 7 * 3600);
     assert!(present.first_in_utc.is_some() && present.last_out_utc.is_some());
 
     // LEAVE: an approved leave request covering Tuesday.
-    let lt = leave::create_type(&pool, &format!("Annual-{tag}"), true, 20.0).await.unwrap();
+    let lt = leave::create_type(&pool, &format!("Annual-{tag}"), true, 20.0)
+        .await
+        .unwrap();
     let req = leave::create_request(&pool, emp.id, lt.id, tuesday, tuesday, 1.0, "vacation")
         .await
         .unwrap();
     assert!(leave::decide(&pool, req, "approved", emp.id).await.unwrap());
-    let on_leave = attendance_service::rollup_day(&pool, emp.id, tuesday).await.unwrap();
+    let on_leave = attendance_service::rollup_day(&pool, emp.id, tuesday)
+        .await
+        .unwrap();
     assert_eq!(on_leave.status, "leave");
     assert_eq!(on_leave.note, lt.name);
 
     // HOLIDAY: a company holiday on Wednesday, no work.
-    leave::create_holiday(&pool, wednesday, "Test Holiday").await.unwrap();
-    let holiday = attendance_service::rollup_day(&pool, emp.id, wednesday).await.unwrap();
+    leave::create_holiday(&pool, wednesday, "Test Holiday")
+        .await
+        .unwrap();
+    let holiday = attendance_service::rollup_day(&pool, emp.id, wednesday)
+        .await
+        .unwrap();
     assert_eq!(holiday.status, "holiday");
     assert_eq!(holiday.note, "Test Holiday");
 
     // ABSENT: a plain weekday with no work / leave / holiday.
-    let absent = attendance_service::rollup_day(&pool, emp.id, thursday).await.unwrap();
+    let absent = attendance_service::rollup_day(&pool, emp.id, thursday)
+        .await
+        .unwrap();
     assert_eq!(absent.status, "absent");
     assert_eq!(absent.worked_seconds, 0);
 
     // WEEKEND: Saturday, no work.
-    let weekend = attendance_service::rollup_day(&pool, emp.id, saturday).await.unwrap();
+    let weekend = attendance_service::rollup_day(&pool, emp.id, saturday)
+        .await
+        .unwrap();
     assert_eq!(weekend.status, "weekend");
 
     // ensure_range fills the whole span and the report counts line up.
-    attendance_service::ensure_range(&pool, emp.id, monday, saturday).await.unwrap();
-    let rows = attendance::list_range(&pool, emp.id, monday, saturday).await.unwrap();
+    attendance_service::ensure_range(&pool, emp.id, monday, saturday)
+        .await
+        .unwrap();
+    let rows = attendance::list_range(&pool, emp.id, monday, saturday)
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 6); // Mon..Sat inclusive
 
-    let report = attendance::report(&pool, monday, saturday, None).await.unwrap();
+    let report = attendance::report(&pool, monday, saturday, None)
+        .await
+        .unwrap();
     let mine = report.into_iter().find(|r| r.user_id == emp.id).unwrap();
     assert_eq!(mine.present, 1);
     assert_eq!(mine.leave, 1);
@@ -111,6 +142,14 @@ async fn attendance_rollup_derives_all_statuses() {
 
     // Cleanup (attendance + intervals + leave_requests cascade on user delete).
     users::delete(&pool, emp.id).await.unwrap();
-    sqlx::query("DELETE FROM holidays WHERE day = $1").bind(wednesday).execute(&pool).await.unwrap();
-    sqlx::query("DELETE FROM leave_types WHERE id = $1").bind(lt.id).execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM holidays WHERE day = $1")
+        .bind(wednesday)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM leave_types WHERE id = $1")
+        .bind(lt.id)
+        .execute(&pool)
+        .await
+        .unwrap();
 }

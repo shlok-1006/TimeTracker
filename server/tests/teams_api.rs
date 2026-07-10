@@ -38,7 +38,9 @@ fn lazy_app() -> Router {
 }
 
 fn token(role: UserRole) -> String {
-    JwtKeys::new(SECRET, 900).issue(Uuid::new_v4(), role, None).unwrap()
+    JwtKeys::new(SECRET, 900)
+        .issue(Uuid::new_v4(), role, None)
+        .unwrap()
 }
 
 async fn send(
@@ -62,28 +64,57 @@ async fn send(
     let resp = app.oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let v = if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(Value::Null) };
+    let v = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
     (status, v)
 }
 
 async fn real_pool() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
-    PgPoolOptions::new().max_connections(2).connect(&url).await.ok()
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .ok()
 }
 
 #[tokio::test]
 async fn team_management_is_hr_only() {
     // No token → 401.
-    let (s, _) = send(lazy_app(), "POST", "/teams", None, Some(json!({ "name": "X" }))).await;
+    let (s, _) = send(
+        lazy_app(),
+        "POST",
+        "/teams",
+        None,
+        Some(json!({ "name": "X" })),
+    )
+    .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
 
     // Employee and project manager → 403 (HR only).
     for role in [UserRole::Employee, UserRole::ProjectManager] {
         let t = token(role);
-        let (s, _) = send(lazy_app(), "POST", "/teams", Some(&t), Some(json!({ "name": "X" }))).await;
+        let (s, _) = send(
+            lazy_app(),
+            "POST",
+            "/teams",
+            Some(&t),
+            Some(json!({ "name": "X" })),
+        )
+        .await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{role:?} must be forbidden");
         let id = Uuid::new_v4();
-        let (s2, _) = send(lazy_app(), "DELETE", &format!("/teams/{id}"), Some(&t), None).await;
+        let (s2, _) = send(
+            lazy_app(),
+            "DELETE",
+            &format!("/teams/{id}"),
+            Some(&t),
+            None,
+        )
+        .await;
         assert_eq!(s2, StatusCode::FORBIDDEN);
     }
 }
@@ -99,52 +130,85 @@ async fn team_management_roundtrip_over_http() {
 
     // A temp employee to add as a member.
     let emp = users::create(
-        &pool, "Team API Emp", &format!("teamapi-{tag}@t.local"), "h", UserRole::Employee, None,
-    ).await.unwrap();
+        &pool,
+        "Team API Emp",
+        &format!("teamapi-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Create.
     let (s, body) = send(
-        app_with(pool.clone()), "POST", "/teams", Some(&hr),
+        app_with(pool.clone()),
+        "POST",
+        "/teams",
+        Some(&hr),
         Some(json!({ "name": format!("Squad-{tag}"), "description": "first" })),
-    ).await;
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "create: {body}");
     let team_id = body["id"].as_str().unwrap().to_string();
 
     // Patch (rename only; description preserved).
     let (s, body) = send(
-        app_with(pool.clone()), "PATCH", &format!("/teams/{team_id}"), Some(&hr),
+        app_with(pool.clone()),
+        "PATCH",
+        &format!("/teams/{team_id}"),
+        Some(&hr),
         Some(json!({ "name": format!("Squad-{tag}-renamed") })),
-    ).await;
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["name"], format!("Squad-{tag}-renamed"));
     assert_eq!(body["description"], "first", "PATCH preserves unset fields");
 
     // Add member.
     let (s, _) = send(
-        app_with(pool.clone()), "POST", &format!("/teams/{team_id}/members"), Some(&hr),
+        app_with(pool.clone()),
+        "POST",
+        &format!("/teams/{team_id}/members"),
+        Some(&hr),
         Some(json!({ "user_id": emp.id })),
-    ).await;
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
 
     // List members → the employee is there.
     let (s, body) = send(
-        app_with(pool.clone()), "GET", &format!("/teams/{team_id}/members"), Some(&hr), None,
-    ).await;
+        app_with(pool.clone()),
+        "GET",
+        &format!("/teams/{team_id}/members"),
+        Some(&hr),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body.as_array().unwrap().len(), 1);
     assert_eq!(body[0]["id"], emp.id.to_string());
 
     // Patch a missing team → 404.
     let (s, _) = send(
-        app_with(pool.clone()), "PATCH", &format!("/teams/{}", Uuid::new_v4()), Some(&hr),
+        app_with(pool.clone()),
+        "PATCH",
+        &format!("/teams/{}", Uuid::new_v4()),
+        Some(&hr),
         Some(json!({ "name": "nope" })),
-    ).await;
+    )
+    .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 
     // Delete (cascades membership).
     let (s, _) = send(
-        app_with(pool.clone()), "DELETE", &format!("/teams/{team_id}"), Some(&hr), None,
-    ).await;
+        app_with(pool.clone()),
+        "DELETE",
+        &format!("/teams/{team_id}"),
+        Some(&hr),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
 
     users::delete(&pool, emp.id).await.unwrap();

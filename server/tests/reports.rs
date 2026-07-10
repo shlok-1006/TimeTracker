@@ -59,7 +59,11 @@ async fn admin_reports_forbidden_for_employee() {
     );
     let id = Uuid::new_v4();
     assert_eq!(
-        status(&format!("/admin/users/{id}/report"), Some(UserRole::Employee)).await,
+        status(
+            &format!("/admin/users/{id}/report"),
+            Some(UserRole::Employee)
+        )
+        .await,
         StatusCode::FORBIDDEN
     );
 }

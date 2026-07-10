@@ -38,10 +38,18 @@ fn lazy_app() -> Router {
 }
 
 fn token(role: UserRole) -> String {
-    JwtKeys::new(SECRET, 900).issue(Uuid::new_v4(), role, None).unwrap()
+    JwtKeys::new(SECRET, 900)
+        .issue(Uuid::new_v4(), role, None)
+        .unwrap()
 }
 
-async fn send(app: Router, method: &str, path: &str, tok: Option<&str>, body: Option<Value>) -> (StatusCode, Value) {
+async fn send(
+    app: Router,
+    method: &str,
+    path: &str,
+    tok: Option<&str>,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let mut b = Request::builder().method(method).uri(path);
     if let Some(t) = tok {
         b = b.header("authorization", format!("Bearer {t}"));
@@ -56,13 +64,21 @@ async fn send(app: Router, method: &str, path: &str, tok: Option<&str>, body: Op
     let resp = app.oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let v = if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(Value::Null) };
+    let v = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
     (status, v)
 }
 
 async fn real_pool() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
-    PgPoolOptions::new().max_connections(2).connect(&url).await.ok()
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .ok()
 }
 
 #[tokio::test]
@@ -70,14 +86,35 @@ async fn task_management_is_hr_only() {
     let uid = Uuid::new_v4();
     let path = format!("/admin/users/{uid}/tasks");
     // No token → 401.
-    let (s, _) = send(lazy_app(), "POST", &path, None, Some(json!({ "title": "X" }))).await;
+    let (s, _) = send(
+        lazy_app(),
+        "POST",
+        &path,
+        None,
+        Some(json!({ "title": "X" })),
+    )
+    .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     // Employee + project manager → 403 (HR only).
     for role in [UserRole::Employee, UserRole::ProjectManager] {
         let t = token(role);
-        let (s, _) = send(lazy_app(), "POST", &path, Some(&t), Some(json!({ "title": "X" }))).await;
+        let (s, _) = send(
+            lazy_app(),
+            "POST",
+            &path,
+            Some(&t),
+            Some(json!({ "title": "X" })),
+        )
+        .await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{role:?} must be forbidden");
-        let (s2, _) = send(lazy_app(), "DELETE", &format!("/admin/tasks/{}", Uuid::new_v4()), Some(&t), None).await;
+        let (s2, _) = send(
+            lazy_app(),
+            "DELETE",
+            &format!("/admin/tasks/{}", Uuid::new_v4()),
+            Some(&t),
+            None,
+        )
+        .await;
         assert_eq!(s2, StatusCode::FORBIDDEN);
     }
 }
@@ -91,9 +128,13 @@ async fn task_crud_and_audit_over_http() {
 
     // Log in as the seed HR so created_by + audit reference a real user.
     let (s, login) = send(
-        app_with(pool.clone()), "POST", "/auth/login", None,
+        app_with(pool.clone()),
+        "POST",
+        "/auth/login",
+        None,
         Some(json!({ "email": "hr@timetracker.local", "password": "ChangeMe!HR1" })),
-    ).await;
+    )
+    .await;
     if s != StatusCode::OK {
         eprintln!("skipping: seed HR login failed ({s})");
         return;
@@ -101,41 +142,75 @@ async fn task_crud_and_audit_over_http() {
     let hr = login["access_token"].as_str().unwrap().to_string();
 
     let tag = Uuid::new_v4();
-    let emp = users::create(&pool, "Task Emp", &format!("taskemp-{tag}@t.local"), "h", UserRole::Employee, None)
-        .await.unwrap();
+    let emp = users::create(
+        &pool,
+        "Task Emp",
+        &format!("taskemp-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Create.
     let (s, body) = send(
-        app_with(pool.clone()), "POST", &format!("/admin/users/{}/tasks", emp.id), Some(&hr),
+        app_with(pool.clone()),
+        "POST",
+        &format!("/admin/users/{}/tasks", emp.id),
+        Some(&hr),
         Some(json!({ "title": "Fix the gateway", "description": "retry logic" })),
-    ).await;
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "create: {body}");
     let task_id = body["id"].as_str().unwrap().to_string();
     assert_eq!(body["status"], "open");
 
     // List.
-    let (s, body) = send(app_with(pool.clone()), "GET", &format!("/admin/users/{}/tasks", emp.id), Some(&hr), None).await;
+    let (s, body) = send(
+        app_with(pool.clone()),
+        "GET",
+        &format!("/admin/users/{}/tasks", emp.id),
+        Some(&hr),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body.as_array().unwrap().len(), 1);
 
     // Update: mark done (title preserved).
     let (s, body) = send(
-        app_with(pool.clone()), "PATCH", &format!("/admin/tasks/{task_id}"), Some(&hr),
+        app_with(pool.clone()),
+        "PATCH",
+        &format!("/admin/tasks/{task_id}"),
+        Some(&hr),
         Some(json!({ "status": "done" })),
-    ).await;
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["status"], "done");
     assert_eq!(body["title"], "Fix the gateway");
 
     // Invalid status → 400.
     let (s, _) = send(
-        app_with(pool.clone()), "PATCH", &format!("/admin/tasks/{task_id}"), Some(&hr),
+        app_with(pool.clone()),
+        "PATCH",
+        &format!("/admin/tasks/{task_id}"),
+        Some(&hr),
         Some(json!({ "status": "closed" })),
-    ).await;
+    )
+    .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 
     // Delete.
-    let (s, _) = send(app_with(pool.clone()), "DELETE", &format!("/admin/tasks/{task_id}"), Some(&hr), None).await;
+    let (s, _) = send(
+        app_with(pool.clone()),
+        "DELETE",
+        &format!("/admin/tasks/{task_id}"),
+        Some(&hr),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
 
     // Audit: create + update + delete were all logged for this task.

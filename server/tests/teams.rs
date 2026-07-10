@@ -11,7 +11,11 @@ use server::role::UserRole;
 
 async fn pool() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
-    PgPoolOptions::new().max_connections(2).connect(&url).await.ok()
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .ok()
 }
 
 #[tokio::test]
@@ -23,15 +27,28 @@ async fn teams_membership_roundtrip() {
 
     let tag = Uuid::new_v4();
     let emp = users::create(
-        &pool, "Team Emp", &format!("teamemp-{tag}@t.local"), "h", UserRole::Employee, None,
-    ).await.unwrap();
+        &pool,
+        "Team Emp",
+        &format!("teamemp-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Two teams; the employee joins BOTH (multi-team).
-    let alpha = teams::create(&pool, &format!("Alpha-{tag}"), "Alpha squad").await.unwrap();
-    let beta = teams::create(&pool, &format!("Beta-{tag}"), "Beta squad").await.unwrap();
+    let alpha = teams::create(&pool, &format!("Alpha-{tag}"), "Alpha squad")
+        .await
+        .unwrap();
+    let beta = teams::create(&pool, &format!("Beta-{tag}"), "Beta squad")
+        .await
+        .unwrap();
 
     // Duplicate name is rejected.
-    assert!(teams::create(&pool, &format!("Alpha-{tag}"), "dup").await.is_err());
+    assert!(teams::create(&pool, &format!("Alpha-{tag}"), "dup")
+        .await
+        .is_err());
 
     teams::add_member(&pool, emp.id, alpha.id).await.unwrap();
     teams::add_member(&pool, emp.id, beta.id).await.unwrap();

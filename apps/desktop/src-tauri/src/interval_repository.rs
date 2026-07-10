@@ -142,8 +142,12 @@ mod tests {
         Interval {
             id: Uuid::new_v4(),
             user_id: user,
-            start_utc: DateTime::parse_from_rfc3339(start).unwrap().with_timezone(&Utc),
-            end_utc: DateTime::parse_from_rfc3339(end).unwrap().with_timezone(&Utc),
+            start_utc: DateTime::parse_from_rfc3339(start)
+                .unwrap()
+                .with_timezone(&Utc),
+            end_utc: DateTime::parse_from_rfc3339(end)
+                .unwrap()
+                .with_timezone(&Utc),
             kind: kind.to_string(),
             team_id: None,
         }
@@ -166,9 +170,12 @@ mod tests {
         let pool = db::connect_in_memory().await.unwrap();
         db::migrate(&pool).await.unwrap();
         let u = Uuid::new_v4();
-        insert(&pool, &interval(u, "2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z", "meeting"))
-            .await
-            .unwrap();
+        insert(
+            &pool,
+            &interval(u, "2026-01-01T00:00:00Z", "2026-01-01T00:30:00Z", "meeting"),
+        )
+        .await
+        .unwrap();
         let loaded = for_user(&pool, u).await.unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].kind, "meeting");

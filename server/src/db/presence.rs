@@ -52,7 +52,10 @@ pub async fn heartbeat(
 /// Team roster with live, server-derived statuses.
 ///
 /// `manager_id = Some(id)` scopes to that manager's team; `None` (HR/admin)
-/// returns all employees. A stale heartbeat or missing row => `not_logged_in`.
+/// returns everyone. Employees are always listed; HR/PM accounts appear only
+/// once they've actually used the tracker (have a presence row), so
+/// portal-only admins don't show up as permanently "not logged in".
+/// A stale heartbeat or missing row => `not_logged_in`.
 pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMember>, AppError> {
     let rows = sqlx::query!(
         r#"
@@ -67,7 +70,8 @@ pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMem
                                 AND i.start_utc >= date_trunc('day', now())), 0) AS BIGINT) AS "today_seconds!"
         FROM users u
         LEFT JOIN presence p ON p.user_id = u.id
-        WHERE u.role = 'employee' AND ($1::uuid IS NULL OR u.manager_id = $1)
+        WHERE (u.role = 'employee' OR p.user_id IS NOT NULL)
+          AND ($1::uuid IS NULL OR u.manager_id = $1)
         ORDER BY u.name
         "#,
         manager_id,

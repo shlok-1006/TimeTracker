@@ -16,6 +16,12 @@ import { RecordingIndicator } from "@/components/recording-indicator";
 
 type View = "dashboard" | "myday" | "work" | "leave" | "attendance";
 
+const ROLE_LABEL: Record<string, string> = {
+  employee: "Employee",
+  project_manager: "Project manager",
+  hr: "HR",
+};
+
 const NAV: { key: View; label: string }[] = [
   { key: "dashboard", label: "Dashboard" },
   { key: "myday", label: "My Day" },
@@ -48,7 +54,7 @@ export default function DashboardPage() {
       <aside className="flex h-screen w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
         <div className="border-b border-slate-200 px-5 py-5 dark:border-slate-800">
           <h1 className="text-lg font-bold">TimeTracker</h1>
-          <p className="text-xs text-slate-500">Employee</p>
+          <p className="text-xs text-slate-500">{ROLE_LABEL[session.role] ?? session.role}</p>
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">

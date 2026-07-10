@@ -138,9 +138,11 @@ pub async fn ensure_range(
     Ok(())
 }
 
-/// Roll up a single day for every employee (the nightly batch).
+/// Roll up a single day for every employee — plus any HR/PM who tracked time
+/// that day (the desktop app accepts all roles) — the nightly batch.
 pub async fn rollup_all_for_day(pool: &PgPool, day: NaiveDate) -> Result<usize, AppError> {
-    let ids = crate::db::users::employee_ids(pool).await?;
+    let (start, end) = day_bounds(day);
+    let ids = crate::db::users::attendance_rollup_ids(pool, start, end).await?;
     let mut done = 0;
     for user_id in ids {
         match rollup_day(pool, user_id, day).await {

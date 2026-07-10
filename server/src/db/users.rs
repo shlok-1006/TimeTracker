@@ -189,6 +189,29 @@ pub async fn employee_ids(pool: &PgPool) -> Result<Vec<Uuid>, AppError> {
     Ok(rows.into_iter().map(|r| r.id).collect())
 }
 
+/// IDs to roll attendance up for on a given day window: every employee, plus
+/// any HR/PM who actually tracked time that day (they may use the desktop app
+/// too). Portal-only admins are excluded so they don't accrue "absent" rows.
+pub async fn attendance_rollup_ids(
+    pool: &PgPool,
+    day_start: chrono::DateTime<chrono::Utc>,
+    day_end: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<Uuid>, AppError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id AS "id!" FROM users WHERE role = 'employee'::user_role
+        UNION
+        SELECT DISTINCT i.user_id AS "id!" FROM intervals i
+        WHERE i.start_utc >= $1 AND i.start_utc < $2
+        "#,
+        day_start,
+        day_end
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.id).collect())
+}
+
 /// `(name, email)` of every user with the given role — used to fan out
 /// notifications (e.g. all HR recipients for the weekly hours warning).
 pub async fn contacts_with_role(

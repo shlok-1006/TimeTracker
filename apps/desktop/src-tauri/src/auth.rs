@@ -1,5 +1,7 @@
-//! Desktop authentication: log in against the API, enforce employee-only access,
-//! and persist tokens in the OS keychain (Rule 6 — never plaintext on disk).
+//! Desktop authentication: log in against the API and persist tokens in the OS
+//! keychain (Rule 6 — never plaintext on disk). All roles may log in and track
+//! their time here (employee, project_manager, hr) — role only affects who can
+//! use the admin dashboard, not the tracker.
 //!
 //! Stores BOTH the short-lived access token and the long-lived refresh token.
 //! `http.rs` transparently rotates them when the access token expires.
@@ -119,7 +121,8 @@ pub struct EmployeeSession {
     pub role: String,
 }
 
-/// Log in. Employees only; stores both tokens on success.
+/// Log in (any role — HR and project managers can track their time too);
+/// stores both tokens on success.
 #[tauri::command]
 pub async fn login(email: String, password: String) -> Result<EmployeeSession, String> {
     let resp = reqwest::Client::new()
@@ -144,10 +147,6 @@ pub async fn login(email: String, password: String) -> Result<EmployeeSession, S
         .await
         .map_err(|e| format!("unexpected server response: {e}"))?;
 
-    if body.user.role != "employee" {
-        return Err("This application is for employees only.".to_string());
-    }
-
     store_tokens(&body.access_token, &body.refresh_token)?;
     Ok(EmployeeSession {
         id: body.user.id,
@@ -158,7 +157,7 @@ pub async fn login(email: String, password: String) -> Result<EmployeeSession, S
 }
 
 /// Change the password (verifying the current one) and log in with the new one.
-/// Employees only; stores both tokens on success. Used from the login screen.
+/// Any role; stores both tokens on success. Used from the login screen.
 #[tauri::command]
 pub async fn change_password(
     email: String,
@@ -196,10 +195,6 @@ pub async fn change_password(
         .json()
         .await
         .map_err(|e| format!("unexpected server response: {e}"))?;
-
-    if body.user.role != "employee" {
-        return Err("This application is for employees only.".to_string());
-    }
 
     store_tokens(&body.access_token, &body.refresh_token)?;
     Ok(EmployeeSession {

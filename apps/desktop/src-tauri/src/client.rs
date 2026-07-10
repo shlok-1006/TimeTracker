@@ -116,7 +116,11 @@ pub async fn request_leave(
 /// `POST /me/leave/requests/:id/cancel` — cancel a still-pending request.
 #[tauri::command]
 pub async fn cancel_leave(id: String) -> Result<Value, String> {
-    http::post_json(&format!("/me/leave/requests/{id}/cancel"), serde_json::json!({})).await
+    http::post_json(
+        &format!("/me/leave/requests/{id}/cancel"),
+        serde_json::json!({}),
+    )
+    .await
 }
 
 /// `GET /me/tickets/requests` — manual ticket access requests + statuses.
@@ -128,5 +132,9 @@ pub async fn my_ticket_requests() -> Result<Value, String> {
 /// `POST /me/tickets/request` — request access to a ticket by id/identifier.
 #[tauri::command]
 pub async fn request_ticket(ticket: String) -> Result<Value, String> {
-    http::post_json("/me/tickets/request", serde_json::json!({ "ticket": ticket })).await
+    http::post_json(
+        "/me/tickets/request",
+        serde_json::json!({ "ticket": ticket }),
+    )
+    .await
 }

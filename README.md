@@ -55,11 +55,11 @@ Cloudflare ─► Nginx ─┬─► API server (Rust / Axum / SQLx) ─► Supa
 
 ## Roles
 
-| Role              | Access                                                        |
-| ----------------- | ------------------------------------------------------------- |
-| `employee`        | Desktop app + employee portal; own data only                  |
-| `project_manager` | Admin dashboard; own team only                                |
-| `hr`              | Admin dashboard; all employees, user management, audit logs   |
+| Role              | Access                                                                |
+| ----------------- | --------------------------------------------------------------------- |
+| `employee`        | Desktop app + employee portal; own data only                          |
+| `project_manager` | Admin dashboard (own team only); may also track time in the desktop app |
+| `hr`              | Admin dashboard (everyone, user management, audit logs); may also track time in the desktop app |
 
 ## Local development
 

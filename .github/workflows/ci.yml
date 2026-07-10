@@ -67,7 +67,7 @@ jobs:
             libx11-dev libxcb1-dev libxrandr-dev libdbus-1-dev \
             libxss-dev libxtst-dev libxi-dev libxinerama-dev libxcursor-dev \
             libxfixes-dev libxext-dev libudev-dev libinput-dev \
-            libpipewire-0.3-dev libspa-0.2-dev
+            libpipewire-0.3-dev libspa-0.2-dev libgbm-dev libdrm-dev
       - name: Build desktop frontend (needed by tauri context)
         run: |
           pnpm install --frozen-lockfile

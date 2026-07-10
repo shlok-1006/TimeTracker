@@ -17,10 +17,10 @@ jobs:
       matrix:
         include:
           - platform: windows-latest
-          - platform: macos-latest # Apple Silicon
-            args: --target aarch64-apple-darwin
-          - platform: macos-13 # Intel
-            args: --target x86_64-apple-darwin
+          # One universal binary covers Apple Silicon AND Intel. (The old
+          # macos-13 Intel runners are retired — jobs queue forever.)
+          - platform: macos-latest
+            args: --target universal-apple-darwin
           - platform: ubuntu-latest
     runs-on: ${{ matrix.platform }}
     steps:
@@ -30,8 +30,11 @@ jobs:
         if: matrix.platform == 'ubuntu-latest'
         run: |
           sudo apt-get update
+          # libx11-dev + friends: needed by the xcap screenshot crate; the
+          # runner image stopped shipping X11 dev headers by default.
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libgtk-3-dev libxdo-dev
+            librsvg2-dev patchelf libgtk-3-dev libxdo-dev \
+            libx11-dev libxcb1-dev libxrandr-dev libdbus-1-dev
 
       # pnpm version comes from the "packageManager" field in package.json —
       # specifying it here too makes pnpm/action-setup fail on the conflict.
@@ -43,7 +46,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || matrix.platform == 'macos-13' && 'x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target

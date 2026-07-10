@@ -138,6 +138,71 @@ pub async fn list_for_day(
         .collect())
 }
 
+/// How many screenshots a user has in `[from, to)`, total and working-only.
+/// Drives the admin range-analysis preview (count + cost estimate before running).
+pub struct RangeCounts {
+    pub total: i64,
+    pub working: i64,
+}
+
+pub async fn count_in_range(
+    pool: &PgPool,
+    user_id: Uuid,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<RangeCounts, AppError> {
+    let row = sqlx::query!(
+        r#"
+        SELECT COUNT(*) AS "total!",
+               COUNT(*) FILTER (WHERE captured_status = 'working') AS "working!"
+        FROM screenshots
+        WHERE user_id = $1 AND taken_at >= $2 AND taken_at < $3
+        "#,
+        user_id,
+        from,
+        to
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(RangeCounts { total: row.total, working: row.working })
+}
+
+/// Every *working* screenshot a user captured in `[from, to)`, oldest first.
+/// Unlike the sampler (4–5 per day) this is exhaustive — the admin range
+/// analysis verifies each one. Served by idx_screenshots_taken (user_id, taken_at).
+pub async fn list_working_in_range(
+    pool: &PgPool,
+    user_id: Uuid,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<ScreenshotRow>, AppError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id, storage_key, taken_at, interval_id, captured_status
+        FROM screenshots
+        WHERE user_id = $1 AND captured_status = 'working'
+              AND taken_at >= $2 AND taken_at < $3
+        ORDER BY taken_at
+        "#,
+        user_id,
+        from,
+        to
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| ScreenshotRow {
+            id: r.id,
+            storage_key: r.storage_key,
+            taken_at: r.taken_at,
+            interval_id: r.interval_id,
+            captured_status: r.captured_status,
+        })
+        .collect())
+}
+
 /// Distinct users who captured *working* screenshots on `day` (UTC). Used by the
 /// nightly scheduler to know whose reports to build.
 pub async fn working_user_ids_on_day(

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE analysis_range_runs\n        SET analyzed = analyzed + $2, skipped = skipped + $3, failed = failed + $4\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b46856aec8de1135f09cf071e7f423770b9ca10dafaa580540d2d5baa694ee88"
+}

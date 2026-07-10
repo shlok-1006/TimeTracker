@@ -212,6 +212,72 @@ export async function fetchUserDayScreenshots(userId: string, day: string): Prom
     .parse(await authedGetJson(`/admin/users/${userId}/screenshots?day=${day}`));
 }
 
+// ---- Range analysis: verify every screenshot in a time window ----
+
+const rangePreviewSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  total: z.number(),
+  analyzable: z.number(),
+  cap: z.number(),
+  claude_configured: z.boolean(),
+  model: z.string(),
+});
+export type RangePreview = z.infer<typeof rangePreviewSchema>;
+
+/** Count the screenshots in a window before committing to analyze them
+ *  (`GET /admin/users/:id/analyze-range/preview?from=&to=`). ISO timestamps. */
+export async function previewAnalyzeRange(
+  userId: string,
+  fromIso: string,
+  toIso: string,
+): Promise<RangePreview> {
+  const qs = `from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`;
+  return rangePreviewSchema.parse(
+    await authedGetJson(`/admin/users/${userId}/analyze-range/preview?${qs}`),
+  );
+}
+
+const rangeStartSchema = z.object({
+  run_id: z.string(),
+  total: z.number(),
+  model: z.string(),
+});
+
+/** Start analyzing EVERY working screenshot in the window
+ *  (`POST /admin/users/:id/analyze-range?from=&to=`). Returns a run id to poll. */
+export async function startAnalyzeRange(
+  userId: string,
+  fromIso: string,
+  toIso: string,
+): Promise<{ run_id: string; total: number; model: string }> {
+  const qs = `from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`;
+  return rangeStartSchema.parse(
+    await authedJson("POST", `/admin/users/${userId}/analyze-range?${qs}`),
+  );
+}
+
+const analysisRunSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  from_utc: z.string(),
+  to_utc: z.string(),
+  status: z.enum(["running", "completed", "failed"]),
+  total: z.number(),
+  analyzed: z.number(),
+  skipped: z.number(),
+  failed: z.number(),
+  error: z.string().nullable(),
+  created_at: z.string(),
+  finished_at: z.string().nullable(),
+});
+export type AnalysisRun = z.infer<typeof analysisRunSchema>;
+
+/** Live progress of a range run (`GET /admin/analysis-runs/:id`). */
+export async function fetchAnalysisRun(runId: string): Promise<AnalysisRun> {
+  return analysisRunSchema.parse(await authedGetJson(`/admin/analysis-runs/${runId}`));
+}
+
 // ---- Teams + summary (Feature 4) ----
 
 const teamWithCountSchema = z.object({

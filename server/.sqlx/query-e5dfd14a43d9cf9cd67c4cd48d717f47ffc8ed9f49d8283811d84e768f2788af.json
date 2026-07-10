@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, storage_key, taken_at, interval_id, captured_status\n        FROM screenshots\n        WHERE user_id = $1 AND captured_status = 'working'\n              AND taken_at >= $2 AND taken_at < $3\n        ORDER BY taken_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "taken_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "interval_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "captured_status",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e5dfd14a43d9cf9cd67c4cd48d717f47ffc8ed9f49d8283811d84e768f2788af"
+}

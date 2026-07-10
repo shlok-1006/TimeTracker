@@ -17,7 +17,8 @@ use uuid::Uuid;
 
 use crate::auth;
 use crate::db::{
-    alumni, analysis_results, audit, intervals, presence, refresh_tokens, screenshots, users,
+    alumni, analysis_results, analysis_runs, audit, intervals, presence, refresh_tokens,
+    screenshots, users,
 };
 use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
@@ -213,6 +214,139 @@ async fn analyze_day(
     })))
 }
 
+// ---- Range analysis (Feature: verify every screenshot in a time range) ----
+
+/// Hard ceiling on screenshots per range run unless overridden via
+/// `TIMETRACKER_ANALYZE_RANGE_CAP`. Each analyzed shot is one Claude vision
+/// call, so an unbounded range is an unbounded bill.
+const DEFAULT_RANGE_CAP: i64 = 500;
+
+/// Longest selectable window. Wide enough for a month-in-review, narrow enough
+/// that a typo'd year doesn't schedule 10⁵ screenshots.
+const MAX_RANGE_DAYS: i64 = 31;
+
+fn range_cap() -> i64 {
+    std::env::var("TIMETRACKER_ANALYZE_RANGE_CAP")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .filter(|c| *c > 0)
+        .unwrap_or(DEFAULT_RANGE_CAP)
+}
+
+#[derive(Deserialize)]
+struct RangeQuery {
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+}
+
+fn validate_range(q: &RangeQuery) -> Result<(), AppError> {
+    if q.to <= q.from {
+        return Err(AppError::BadRequest("'to' must be after 'from'".into()));
+    }
+    if q.to - q.from > chrono::Duration::days(MAX_RANGE_DAYS) {
+        return Err(AppError::BadRequest(format!(
+            "range must be at most {MAX_RANGE_DAYS} days"
+        )));
+    }
+    Ok(())
+}
+
+/// `GET /admin/users/:id/analyze-range/preview?from=&to=` — how many
+/// screenshots the window holds (total + analyzable working shots) plus the
+/// per-run cap, so the UI can show a count/cost confirmation before starting.
+async fn analyze_range_preview(
+    State(state): State<AppState>,
+    RequireAdmin(user): RequireAdmin,
+    Path(target): Path<Uuid>,
+    Query(q): Query<RangeQuery>,
+) -> Result<Json<Value>, AppError> {
+    authorize_view(&state, &user, target).await?;
+    validate_range(&q)?;
+    let counts = screenshots::count_in_range(&state.db, target, q.from, q.to).await?;
+    Ok(Json(json!({
+        "from": q.from,
+        "to": q.to,
+        "total": counts.total,
+        "analyzable": counts.working,
+        "cap": range_cap(),
+        "claude_configured": state.claude.is_configured(),
+        "model": state.claude.model(),
+    })))
+}
+
+/// `POST /admin/users/:id/analyze-range?from=&to=` — verify EVERY working
+/// screenshot in the window. Long-running (one vision call per shot), so it
+/// runs as a spawned background task and this returns immediately with a
+/// `run_id` the UI polls via `GET /admin/analysis-runs/:id`.
+async fn analyze_range(
+    State(state): State<AppState>,
+    RequireAdmin(user): RequireAdmin,
+    Path(target): Path<Uuid>,
+    Query(q): Query<RangeQuery>,
+) -> Result<Json<Value>, AppError> {
+    authorize_view(&state, &user, target).await?;
+    validate_range(&q)?;
+    if !state.claude.is_configured() {
+        return Err(AppError::BadRequest(
+            "Vision AI is not configured (set ANTHROPIC_API_KEY)".into(),
+        ));
+    }
+
+    let counts = screenshots::count_in_range(&state.db, target, q.from, q.to).await?;
+    if counts.working == 0 {
+        return Err(AppError::BadRequest(
+            "no working screenshots in the selected range".into(),
+        ));
+    }
+    let cap = range_cap();
+    if counts.working > cap {
+        return Err(AppError::BadRequest(format!(
+            "range holds {} analyzable screenshots, above the per-run cap of {cap}; narrow the range",
+            counts.working
+        )));
+    }
+    // One live run per employee: a double-click must not double-bill.
+    if analysis_runs::has_running_for_user(&state.db, target).await? {
+        return Err(AppError::BadRequest(
+            "an analysis run is already in progress for this employee".into(),
+        ));
+    }
+
+    let run_id =
+        analysis_runs::create(&state.db, target, user.id, q.from, q.to, counts.working as i32)
+            .await?;
+
+    tokio::spawn(crate::analysis_service::run_range_analysis(
+        state.db.clone(),
+        state.storage.clone(),
+        state.claude.clone(),
+        state.linear.clone(),
+        target,
+        q.from,
+        q.to,
+        run_id,
+    ));
+
+    audit::log(&state.db, user.id, "screenshot.analyze_range", "user", Some(target)).await;
+    Ok(Json(json!({
+        "run_id": run_id,
+        "total": counts.working,
+        "model": state.claude.model(),
+    })))
+}
+
+/// `GET /admin/analysis-runs/:id` — live progress of a range run (polled by
+/// the admin UI). PMs can only see runs for their own team members.
+async fn analysis_run_status(
+    State(state): State<AppState>,
+    RequireAdmin(user): RequireAdmin,
+    Path(run_id): Path<Uuid>,
+) -> Result<Json<Value>, AppError> {
+    let run = analysis_runs::get(&state.db, run_id).await?.ok_or(AppError::NotFound)?;
+    authorize_view(&state, &user, run.user_id).await?;
+    Ok(Json(json!(run)))
+}
+
 /// `GET /admin/users/:id/analysis?day=YYYY-MM-DD` — stored analysis results.
 async fn analysis_for_day(
     State(state): State<AppState>,
@@ -387,4 +521,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/users/:id/sample", axum::routing::post(sample_day))
         .route("/admin/users/:id/analyze", axum::routing::post(analyze_day))
         .route("/admin/users/:id/analysis", get(analysis_for_day))
+        .route("/admin/users/:id/analyze-range/preview", get(analyze_range_preview))
+        .route("/admin/users/:id/analyze-range", axum::routing::post(analyze_range))
+        .route("/admin/analysis-runs/:id", get(analysis_run_status))
 }

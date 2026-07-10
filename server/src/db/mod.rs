@@ -7,6 +7,7 @@
 pub mod alumni;
 pub mod analysis_reports;
 pub mod analysis_results;
+pub mod analysis_runs;
 pub mod attendance;
 pub mod audit;
 pub mod intervals;

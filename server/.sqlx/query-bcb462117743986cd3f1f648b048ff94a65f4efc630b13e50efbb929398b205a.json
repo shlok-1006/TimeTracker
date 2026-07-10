@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, user_id, from_utc, to_utc, status, total, analyzed, skipped,\n               failed, error, created_at, finished_at\n        FROM analysis_range_runs WHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "from_utc",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "to_utc",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "total",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "skipped",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "failed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "finished_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "bcb462117743986cd3f1f648b048ff94a65f4efc630b13e50efbb929398b205a"
+}

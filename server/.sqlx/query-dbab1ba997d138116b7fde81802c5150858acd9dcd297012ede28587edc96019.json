@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*) AS \"total!\",\n               COUNT(*) FILTER (WHERE captured_status = 'working') AS \"working!\"\n        FROM screenshots\n        WHERE user_id = $1 AND taken_at >= $2 AND taken_at < $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "working!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "dbab1ba997d138116b7fde81802c5150858acd9dcd297012ede28587edc96019"
+}

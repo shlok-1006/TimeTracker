@@ -18,6 +18,7 @@ const NAV: NavItem[] = [
   { href: "/teams", label: "Teams" },
   { href: "/leave", label: "Leave" },
   { href: "/attendance", label: "Attendance" },
+  { href: "/analyze", label: "Analyze screenshots" },
   { href: "/manage", label: "Manage users", hrOnly: true },
   { href: "/alumni", label: "Alumni", hrOnly: true },
 ];

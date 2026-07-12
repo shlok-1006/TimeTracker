@@ -4,6 +4,7 @@
 //! Repositories (users, hours, screenshots, …) are added in later steps under
 //! this module.
 
+pub mod activity;
 pub mod alumni;
 pub mod analysis_reports;
 pub mod analysis_results;

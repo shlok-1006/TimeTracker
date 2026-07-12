@@ -22,6 +22,10 @@ type HoursSummary = {
   idle_seconds: number;
 };
 type DayBucket = { date: string; worked_seconds: number; idle_seconds: number };
+type ActivitySummary = {
+  activity_pct: number | null;
+  apps: { app_name: string; seconds: number }[];
+};
 
 function Card({ label, value }: { label: string; value: string }) {
   return (
@@ -53,6 +57,11 @@ export function Dashboard({ userId }: { userId: string }) {
   const serverHours = useQuery({
     queryKey: ["me_hours"],
     queryFn: async () => (await invoker())<HoursSummary>("me_hours"),
+    refetchInterval: 30000,
+  });
+  const activity = useQuery({
+    queryKey: ["activity_today"],
+    queryFn: async () => (await invoker())<ActivitySummary>("activity_today"),
     refetchInterval: 30000,
   });
 
@@ -134,6 +143,49 @@ export function Dashboard({ userId }: { userId: string }) {
             </ResponsiveContainer>
           </div>
         </div>
+      </div>
+
+      {/* Activity: what the app collects about you, shown to you (app names
+          only — window titles and keystrokes are never recorded). */}
+      <div className="rounded-lg border border-slate-200 p-5 dark:border-slate-800">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-semibold">Today&apos;s activity</h3>
+          <span className="text-2xl font-semibold tabular-nums">
+            {activity.data?.activity_pct != null
+              ? `${Math.round(activity.data.activity_pct)}%`
+              : "—"}
+          </span>
+        </div>
+        {activity.data && activity.data.apps.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {activity.data.apps.slice(0, 6).map((a) => {
+              const max = activity.data!.apps[0].seconds || 1;
+              return (
+                <div key={a.app_name} className="flex items-center gap-3 text-sm">
+                  <span className="w-40 truncate" title={a.app_name}>
+                    {a.app_name}
+                  </span>
+                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                    <div
+                      className="h-full rounded-full bg-purple-600"
+                      style={{ width: `${(a.seconds / max) * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-20 text-right tabular-nums text-slate-500">
+                    {fmtHms(a.seconds)}
+                  </span>
+                </div>
+              );
+            })}
+            <p className="mt-1 text-xs text-slate-400">
+              App names only — window titles and keystrokes are never recorded.
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">
+            No activity recorded yet today — data appears while you track.
+          </p>
+        )}
       </div>
     </div>
   );

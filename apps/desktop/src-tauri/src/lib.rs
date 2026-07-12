@@ -6,6 +6,7 @@
 //!   * `timer`               — start/stop tracking (monotonic clock)
 //!   * `sync_worker`         — background push to the API (Rule 4)
 
+mod activity_tracker;
 mod auth;
 mod client;
 mod db;
@@ -57,6 +58,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(timer::run_recorder(state.clone()));
                 tauri::async_runtime::spawn(sync_worker::run(state.clone()));
                 tauri::async_runtime::spawn(presence::run(state.clone()));
+                tauri::async_runtime::spawn(activity_tracker::run(state.clone()));
                 tauri::async_runtime::spawn(screenshot::run(state));
             });
             Ok(())
@@ -96,6 +98,7 @@ pub fn run() {
             client::cancel_leave,
             client::my_ticket_requests,
             client::request_ticket,
+            activity_tracker::activity_today,
             screenshot::check_capture
         ])
         .run(tauri::generate_context!())

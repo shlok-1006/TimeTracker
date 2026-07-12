@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   analyzeUserDay,
+  fetchUserActivity,
   fetchUserHours,
   fetchUserReport,
   fetchUserDayScreenshots,
@@ -13,6 +14,7 @@ import {
   fetchUserTimeline,
 } from "@/lib/api";
 import { useAdminSession } from "@/components/use-admin-session";
+import { ActivityCard } from "@/components/activity-card";
 import { DayGallery } from "@/components/day-gallery";
 import { ReportCard } from "@/components/report-card";
 import { UserTasks } from "@/components/user-tasks";
@@ -67,6 +69,12 @@ export default function UserDetailPage() {
     queryKey: ["user_teams", id],
     queryFn: () => fetchUserTeams(id),
     enabled: ready && !!id,
+  });
+  const activity = useQuery({
+    queryKey: ["user_activity", id, date],
+    queryFn: () => fetchUserActivity(id, date),
+    enabled: ready && !!id,
+    refetchInterval: 60_000,
   });
   const shots = useQuery({
     queryKey: ["user_day_screenshots", id, date],
@@ -176,6 +184,16 @@ export default function UserDetailPage() {
         {report.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
         {report.error && <p className="text-red-600">{(report.error as Error).message}</p>}
         {report.data !== undefined && <ReportCard report={report.data} />}
+      </section>
+
+      <section className="rounded-lg border bg-card p-6 text-card-foreground">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Activity</h2>
+          <span className="text-xs text-muted-foreground">{date}</span>
+        </div>
+        {activity.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {activity.error && <p className="text-red-600">{(activity.error as Error).message}</p>}
+        {activity.data && <ActivityCard activity={activity.data} />}
       </section>
 
       <UserTasks userId={id} />

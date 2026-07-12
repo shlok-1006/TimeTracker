@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO activity_blocks (user_id, block_start, active_seconds, total_seconds)\n        VALUES ($1, $2, $3, $4)\n        ON CONFLICT (user_id, block_start)\n        DO UPDATE SET active_seconds = GREATEST(activity_blocks.active_seconds, EXCLUDED.active_seconds),\n                      total_seconds  = GREATEST(activity_blocks.total_seconds,  EXCLUDED.total_seconds),\n                      updated_at = now()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ec453616e602c10c252710c55b5c7b094f19cc7cf690656b0c38c2fcaa970e13"
+}

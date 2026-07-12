@@ -278,6 +278,29 @@ export async function fetchAnalysisRun(runId: string): Promise<AnalysisRun> {
   return analysisRunSchema.parse(await authedGetJson(`/admin/analysis-runs/${runId}`));
 }
 
+// ---- Activity (app usage + input-activity levels) ----
+
+const activitySchema = z.object({
+  day: z.string(),
+  activity_pct: z.number().nullable(),
+  apps: z.array(z.object({ app_name: z.string(), seconds: z.number() })),
+  blocks: z.array(
+    z.object({
+      block_start: z.string(),
+      active_seconds: z.number(),
+      total_seconds: z.number(),
+    }),
+  ),
+});
+export type UserActivity = z.infer<typeof activitySchema>;
+
+/** One employee's activity breakdown for a day (`GET /admin/users/:id/activity?day=`). */
+export async function fetchUserActivity(userId: string, day: string): Promise<UserActivity> {
+  return activitySchema.parse(
+    await authedGetJson(`/admin/users/${userId}/activity?day=${day}`),
+  );
+}
+
 // ---- Teams + summary (Feature 4) ----
 
 const teamWithCountSchema = z.object({

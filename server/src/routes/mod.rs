@@ -5,6 +5,7 @@
 //!   * public    — no auth (`/health`, `/ready`, `/auth/login`)
 //!   * protected — `auth_middleware` validates the JWT; handlers add role guards
 
+pub mod activity;
 pub mod admin;
 pub mod attendance;
 pub mod auth;
@@ -115,6 +116,7 @@ pub fn build(state: AppState) -> Router {
         .merge(tasks::router())
         .merge(onboarding::router())
         .merge(attendance::router())
+        .merge(activity::router())
         .merge(admin::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

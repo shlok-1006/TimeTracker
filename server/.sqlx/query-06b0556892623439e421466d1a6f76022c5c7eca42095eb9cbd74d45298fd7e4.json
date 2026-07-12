@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT app_name, CAST(seconds AS BIGINT) AS \"seconds!\"\n        FROM app_usage\n        WHERE user_id = $1 AND day = $2\n        ORDER BY seconds DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "app_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "seconds!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "06b0556892623439e421466d1a6f76022c5c7eca42095eb9cbd74d45298fd7e4"
+}

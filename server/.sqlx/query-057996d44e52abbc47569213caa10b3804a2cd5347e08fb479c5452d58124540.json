@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO app_usage (user_id, day, app_name, seconds)\n        VALUES ($1, $2, $3, $4)\n        ON CONFLICT (user_id, day, app_name)\n        DO UPDATE SET seconds = GREATEST(app_usage.seconds, EXCLUDED.seconds),\n                      updated_at = now()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "057996d44e52abbc47569213caa10b3804a2cd5347e08fb479c5452d58124540"
+}

@@ -4,3 +4,7 @@
 *.jpg binary
 *.ico binary
 *.icns binary
+
+# SQL migrations must stay LF everywhere: sqlx embeds them and validates
+# checksums against the applied DB; a CRLF checkout breaks every migrate run.
+*.sql text eol=lf

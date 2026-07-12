@@ -40,6 +40,7 @@ user-idle = "0.6"
 # version xcap depends on (^0.25) so RgbaImage types unify.
 xcap = "0.9"
 image = "0.25"
+active-win-pos-rs = "0.11.0"
 
 # Secure token storage in the OS keychain (Rule 6).
 # keyring v3 makes the platform backend OPT-IN — without a native feature it

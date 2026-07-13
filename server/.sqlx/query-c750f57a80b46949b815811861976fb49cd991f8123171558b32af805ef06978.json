@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT u.id AS user_id, u.name, u.email,\n          COUNT(ad.*) FILTER (WHERE ad.status = 'present') AS \"present!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'partial') AS \"partial!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'absent')  AS \"absent!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'leave')   AS \"leave!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'holiday') AS \"holiday!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'weekend') AS \"weekend!\",\n          CAST(COALESCE(SUM(ad.worked_seconds), 0) AS BIGINT) AS \"worked!\"\n        FROM users u\n        LEFT JOIN attendance_days ad\n               ON ad.user_id = u.id AND ad.day >= $1 AND ad.day <= $2\n        WHERE (u.role = 'employee'::user_role\n               OR EXISTS (SELECT 1 FROM attendance_days x\n                          WHERE x.user_id = u.id AND x.day >= $1 AND x.day <= $2))\n          AND ($3::uuid IS NULL OR u.manager_id = $3)\n        GROUP BY u.id, u.name, u.email\n        ORDER BY u.name\n        ",
+  "query": "\n        SELECT u.id AS user_id, u.name, u.email,\n          COUNT(ad.*) FILTER (WHERE ad.status = 'present') AS \"present!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'partial') AS \"partial!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'absent')  AS \"absent!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'leave')   AS \"leave!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'holiday') AS \"holiday!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'weekend') AS \"weekend!\",\n          CAST(COALESCE(SUM(ad.worked_seconds), 0) AS BIGINT) AS \"worked!\"\n        FROM users u\n        LEFT JOIN attendance_days ad\n               ON ad.user_id = u.id AND ad.day >= $1 AND ad.day <= $2\n        WHERE (u.role = 'employee'::user_role\n               OR EXISTS (SELECT 1 FROM attendance_days x\n                          WHERE x.user_id = u.id AND x.day >= $1 AND x.day <= $2))\n          AND ($3::uuid IS NULL\n               OR EXISTS (SELECT 1 FROM user_managers um\n                          WHERE um.user_id = u.id AND um.manager_id = $3))\n        GROUP BY u.id, u.name, u.email\n        ORDER BY u.name\n        ",
   "describe": {
     "columns": [
       {
@@ -74,5 +74,5 @@
       null
     ]
   },
-  "hash": "509c3fd64fe599916ccd0705979860cf2b5f12b841661058413f6de10d822829"
+  "hash": "c750f57a80b46949b815811861976fb49cd991f8123171558b32af805ef06978"
 }

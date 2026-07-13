@@ -278,6 +278,24 @@ export async function fetchAnalysisRun(runId: string): Promise<AnalysisRun> {
   return analysisRunSchema.parse(await authedGetJson(`/admin/analysis-runs/${runId}`));
 }
 
+// ---- Manager assignment (multi-manager; HR only) ----
+
+const managerSchema = z.object({ id: z.string(), name: z.string(), email: z.string() });
+export type Manager = z.infer<typeof managerSchema>;
+
+/** A user's assigned managers (`GET /admin/users/:id/managers`). */
+export async function fetchUserManagers(userId: string): Promise<Manager[]> {
+  return z.array(managerSchema).parse(await authedGetJson(`/admin/users/${userId}/managers`));
+}
+
+/** Replace a user's manager set — any number of PMs, or none
+ *  (`PUT /admin/users/:id/managers`). Returns the new set. */
+export async function setUserManagers(userId: string, managerIds: string[]): Promise<Manager[]> {
+  return z
+    .array(managerSchema)
+    .parse(await authedJson("PUT", `/admin/users/${userId}/managers`, { manager_ids: managerIds }));
+}
+
 // ---- Activity (app usage + input-activity levels) ----
 
 const activitySchema = z.object({

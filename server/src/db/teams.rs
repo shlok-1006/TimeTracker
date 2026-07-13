@@ -240,13 +240,16 @@ pub async fn list_with_counts(
 ) -> Result<Vec<TeamWithCount>, AppError> {
     let rows = sqlx::query!(
         r#"SELECT t.id, t.name, t.description, t.created_at,
-                  CAST(COUNT(u.id) FILTER (WHERE $1::uuid IS NULL OR u.manager_id = $1) AS BIGINT) AS "member_count!"
+                  CAST(COUNT(u.id) FILTER (WHERE $1::uuid IS NULL
+                       OR EXISTS (SELECT 1 FROM user_managers um
+                                  WHERE um.user_id = u.id AND um.manager_id = $1)) AS BIGINT) AS "member_count!"
            FROM teams t
            LEFT JOIN user_teams ut ON ut.team_id = t.id
            LEFT JOIN users u ON u.id = ut.user_id
            GROUP BY t.id, t.name, t.description, t.created_at
            HAVING $1::uuid IS NULL
-               OR COUNT(u.id) FILTER (WHERE u.manager_id = $1) > 0
+               OR COUNT(u.id) FILTER (WHERE EXISTS (SELECT 1 FROM user_managers um
+                                                    WHERE um.user_id = u.id AND um.manager_id = $1)) > 0
            ORDER BY t.name"#,
         manager_id
     )
@@ -280,7 +283,10 @@ pub async fn status_breakdown(
              CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind='break'),0) AS BIGINT) AS "brk!"
            FROM intervals i
            JOIN users u ON u.id = i.user_id
-           WHERE i.team_id = $1 AND ($2::uuid IS NULL OR u.manager_id = $2)"#,
+           WHERE i.team_id = $1
+             AND ($2::uuid IS NULL
+                  OR EXISTS (SELECT 1 FROM user_managers um
+                             WHERE um.user_id = u.id AND um.manager_id = $2))"#,
         team_id,
         manager_id
     )
@@ -308,7 +314,9 @@ pub async fn member_totals(
            FROM users u
            JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = $1
            LEFT JOIN intervals i ON i.user_id = u.id AND i.team_id = $1
-           WHERE $2::uuid IS NULL OR u.manager_id = $2
+           WHERE $2::uuid IS NULL
+              OR EXISTS (SELECT 1 FROM user_managers um
+                         WHERE um.user_id = u.id AND um.manager_id = $2)
            GROUP BY u.id, u.name, u.email
            ORDER BY 4 DESC, u.name"#,
         team_id,

@@ -1,8 +1,9 @@
 //! Admin/dashboard routes (require HR or project-manager — `RequireAdmin`).
 //!
-//! Scope (CLAUDE.md): HR sees everyone; a project manager sees only their own
-//! team (`users.manager_id = <pm>`). Enforced on the team list (query filter)
-//! and on every drill-down (explicit `authorize_view`).
+//! Scope (CLAUDE.md): HR sees everyone; a project manager sees only users they
+//! manage (the `user_managers` join table — an employee can have several
+//! managers, one, or none). Enforced on the team list (query filter) and on
+//! every drill-down (explicit `authorize_view`).
 
 use axum::{
     extract::{Path, Query, State},
@@ -37,18 +38,20 @@ pub(crate) fn team_scope(user: &AuthUser) -> Option<Uuid> {
     }
 }
 
-/// Authorize a drill-down on `target`. HR: anyone. PM: only their team.
+/// Authorize a drill-down on `target`. HR: anyone. PM: only users they manage
+/// (via `user_managers` — an employee may have several managers) or themselves.
 pub(crate) async fn authorize_view(
     state: &AppState,
     viewer: &AuthUser,
     target: Uuid,
 ) -> Result<(), AppError> {
-    if viewer.role == UserRole::Hr {
+    if viewer.role == UserRole::Hr || viewer.id == target {
         return Ok(());
     }
-    match users::manager_id_of(&state.db, target).await? {
-        Some(mgr) if mgr == viewer.id => Ok(()),
-        _ => Err(AppError::Forbidden),
+    if users::is_manager_of(&state.db, viewer.id, target).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
     }
 }
 
@@ -445,7 +448,6 @@ async fn create_user(
         body.manager_id,
     )
     .await?;
-
     audit::log(&state.db, hr.id, "user.create", "user", Some(user.id)).await;
 
     // Best-effort: email the new user their credentials + download link + setup
@@ -545,6 +547,75 @@ async fn reset_password(
     Ok(Json(json!({ "password": password })))
 }
 
+// ---- Manager assignment (HR only; an employee may have 0..N managers) ----
+
+fn managers_json(managers: Vec<(Uuid, String, String)>) -> Value {
+    Value::Array(
+        managers
+            .into_iter()
+            .map(|(id, name, email)| json!({ "id": id, "name": name, "email": email }))
+            .collect(),
+    )
+}
+
+/// `GET /admin/users/:id/managers` (HR) — the user's assigned managers.
+async fn get_managers(
+    State(state): State<AppState>,
+    RequireHr(_hr): RequireHr,
+    Path(target): Path<Uuid>,
+) -> Result<Json<Value>, AppError> {
+    if users::find_by_id(&state.db, target).await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(managers_json(
+        users::managers_of(&state.db, target).await?,
+    )))
+}
+
+#[derive(Deserialize)]
+struct SetManagersBody {
+    manager_ids: Vec<Uuid>,
+}
+
+/// `PUT /admin/users/:id/managers` (HR) — replace the user's manager set with
+/// any combination of project managers (empty list = no manager). Logged.
+async fn set_managers(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Path(target): Path<Uuid>,
+    Json(body): Json<SetManagersBody>,
+) -> Result<Json<Value>, AppError> {
+    if users::find_by_id(&state.db, target).await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+
+    let mut ids = body.manager_ids;
+    ids.sort();
+    ids.dedup();
+    for mid in &ids {
+        if *mid == target {
+            return Err(AppError::BadRequest(
+                "a user cannot manage themselves".into(),
+            ));
+        }
+        match users::find_by_id(&state.db, *mid).await? {
+            Some(m) if m.role == UserRole::ProjectManager => {}
+            Some(_) => {
+                return Err(AppError::BadRequest(
+                    "managers must have the project_manager role".into(),
+                ))
+            }
+            None => return Err(AppError::BadRequest("unknown manager id".into())),
+        }
+    }
+
+    users::set_managers(&state.db, target, &ids).await?;
+    audit::log(&state.db, hr.id, "user.set_managers", "user", Some(target)).await;
+    Ok(Json(managers_json(
+        users::managers_of(&state.db, target).await?,
+    )))
+}
+
 /// `GET /admin/alumni` (HR only) — former employees, most recently removed first.
 async fn list_alumni(
     State(state): State<AppState>,
@@ -562,6 +633,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/admin/users/:id/reset-password",
             axum::routing::post(reset_password),
+        )
+        .route(
+            "/admin/users/:id/managers",
+            get(get_managers).put(set_managers),
         )
         .route("/admin/users/:id/hours", get(user_hours))
         .route("/admin/users/:id/screenshots", get(user_screenshots))

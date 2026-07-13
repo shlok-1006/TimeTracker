@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT lr.id, lr.user_id, u.name AS employee_name, u.email AS employee_email,\n                  lt.name AS leave_type_name, lr.start_date, lr.end_date, lr.days,\n                  lr.reason, lr.created_at\n           FROM leave_requests lr\n           JOIN users u       ON u.id = lr.user_id\n           JOIN leave_types lt ON lt.id = lr.leave_type_id\n           WHERE lr.status = 'pending'\n             AND ($1::uuid IS NULL OR u.manager_id = $1)\n           ORDER BY lr.created_at",
+  "query": "SELECT lr.id, lr.user_id, u.name AS employee_name, u.email AS employee_email,\n                  lt.name AS leave_type_name, lr.start_date, lr.end_date, lr.days,\n                  lr.reason, lr.created_at\n           FROM leave_requests lr\n           JOIN users u       ON u.id = lr.user_id\n           JOIN leave_types lt ON lt.id = lr.leave_type_id\n           WHERE lr.status = 'pending'\n             AND ($1::uuid IS NULL\n                  OR EXISTS (SELECT 1 FROM user_managers um\n                             WHERE um.user_id = u.id AND um.manager_id = $1))\n           ORDER BY lr.created_at",
   "describe": {
     "columns": [
       {
@@ -72,5 +72,5 @@
       false
     ]
   },
-  "hash": "6cf67e5b5408cab288519872d546aaa2ca6ac9f7ad1ec422decbc2614629da44"
+  "hash": "25876d2ac004d40eea214eb3019b047517d967a312ce3c514aea426521569140"
 }

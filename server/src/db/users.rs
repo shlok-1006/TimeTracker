@@ -38,12 +38,79 @@ pub struct User {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The manager assigned to `user_id`, if any (used for PM scope checks).
-pub async fn manager_id_of(pool: &PgPool, user_id: Uuid) -> Result<Option<Uuid>, AppError> {
-    let row = sqlx::query!("SELECT manager_id FROM users WHERE id = $1", user_id)
-        .fetch_optional(pool)
+// NOTE: users.manager_id is deprecated — every scope/notification decision now
+// reads the user_managers join table (an employee may have several managers).
+// (The old manager_id_of() helper is gone with it.)
+
+/// Is `manager` one of `user`'s managers? (PM scope checks — user_managers.)
+pub async fn is_manager_of(pool: &PgPool, manager: Uuid, user: Uuid) -> Result<bool, AppError> {
+    let row = sqlx::query!(
+        r#"SELECT COUNT(*) AS "count!" FROM user_managers
+           WHERE manager_id = $1 AND user_id = $2"#,
+        manager,
+        user
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.count > 0)
+}
+
+/// Identity of every manager assigned to a user (an employee can have several,
+/// one, or none). Used to fan out PM notifications and for the manager editor.
+pub async fn managers_of(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<(Uuid, String, String)>, AppError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT u.id, u.name, u.email
+        FROM user_managers um
+        JOIN users u ON u.id = um.manager_id
+        WHERE um.user_id = $1
+        ORDER BY u.name
+        "#,
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.name, r.email)).collect())
+}
+
+/// Add a single manager link (used on user creation). Idempotent.
+pub async fn add_manager(pool: &PgPool, user_id: Uuid, manager_id: Uuid) -> Result<(), AppError> {
+    sqlx::query!(
+        "INSERT INTO user_managers (user_id, manager_id) VALUES ($1, $2)
+         ON CONFLICT DO NOTHING",
+        user_id,
+        manager_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Replace a user's manager set atomically (empty = no managers).
+pub async fn set_managers(
+    pool: &PgPool,
+    user_id: Uuid,
+    manager_ids: &[Uuid],
+) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query!("DELETE FROM user_managers WHERE user_id = $1", user_id)
+        .execute(&mut *tx)
         .await?;
-    Ok(row.and_then(|r| r.manager_id))
+    for mid in manager_ids {
+        sqlx::query!(
+            "INSERT INTO user_managers (user_id, manager_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+            user_id,
+            mid
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 fn parse_role(s: &str) -> Result<UserRole, AppError> {
@@ -256,15 +323,25 @@ pub async fn create(
     .await;
 
     match result {
-        Ok(r) => Ok(UserSummary {
-            id: r.id,
-            name: r.name,
-            email: r.email,
-            role: parse_role(&r.role)?,
-            manager_id: r.manager_id,
-            team_id: r.team_id,
-            created_at: r.created_at,
-        }),
+        Ok(r) => {
+            // Manager assignment lives in user_managers (multi-manager capable);
+            // the legacy users.manager_id written above is deprecated. Linking
+            // here keeps every creation path (routes, seed, tests) consistent.
+            if let Some(mid) = manager_id {
+                if mid != r.id {
+                    add_manager(pool, r.id, mid).await?;
+                }
+            }
+            Ok(UserSummary {
+                id: r.id,
+                name: r.name,
+                email: r.email,
+                role: parse_role(&r.role)?,
+                manager_id: r.manager_id,
+                team_id: r.team_id,
+                created_at: r.created_at,
+            })
+        }
         Err(sqlx::Error::Database(db)) if db.is_unique_violation() => Err(AppError::BadRequest(
             "a user with that email already exists".into(),
         )),

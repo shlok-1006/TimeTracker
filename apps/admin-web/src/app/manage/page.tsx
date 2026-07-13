@@ -3,8 +3,98 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listUsers, createUser, deleteUser, resetPassword, type ManagedUser } from "@/lib/api";
+import {
+  listUsers,
+  createUser,
+  deleteUser,
+  resetPassword,
+  fetchUserManagers,
+  setUserManagers,
+  type ManagedUser,
+} from "@/lib/api";
 import { useAdminSession } from "@/components/use-admin-session";
+
+/** Per-employee manager editor: shows the current managers as chips and lets
+ *  HR assign any set of project managers (several, one, or none). */
+function ManagersCell({ userId, pms }: { userId: string; pms: ManagedUser[] }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+
+  const current = useQuery({
+    queryKey: ["user_managers", userId],
+    queryFn: () => fetchUserManagers(userId),
+  });
+
+  const save = useMutation({
+    mutationFn: () => setUserManagers(userId, selected),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["user_managers", userId] });
+      setEditing(false);
+    },
+  });
+
+  if (!editing) {
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        {(current.data ?? []).map((m) => (
+          <span key={m.id} className="rounded-full bg-secondary px-2 py-0.5 text-xs">
+            {m.name}
+          </span>
+        ))}
+        {current.data && current.data.length === 0 && (
+          <span className="text-xs text-muted-foreground">no manager</span>
+        )}
+        <button
+          onClick={() => {
+            setSelected((current.data ?? []).map((m) => m.id));
+            setEditing(true);
+          }}
+          className="ml-1 text-xs underline hover:opacity-80"
+        >
+          Edit
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {pms.length === 0 && (
+        <span className="text-xs text-muted-foreground">No project managers exist yet.</span>
+      )}
+      {pms.map((pm) => (
+        <label key={pm.id} className="inline-flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={selected.includes(pm.id)}
+            onChange={(e) =>
+              setSelected((s) =>
+                e.target.checked ? [...s, pm.id] : s.filter((id) => id !== pm.id),
+              )
+            }
+          />
+          {pm.name}
+        </label>
+      ))}
+      <div className="flex gap-2">
+        <button
+          onClick={() => save.mutate()}
+          disabled={save.isPending}
+          className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          {save.isPending ? "Saving…" : "Save"}
+        </button>
+        <button onClick={() => setEditing(false)} className="text-xs underline">
+          Cancel
+        </button>
+      </div>
+      {save.isError && (
+        <span className="text-xs text-red-600">{(save.error as Error).message}</span>
+      )}
+    </div>
+  );
+}
 
 const ROLE_LABEL: Record<string, string> = {
   employee: "Employee",
@@ -169,6 +259,7 @@ export default function ManageUsersPage() {
               <tr className="border-b text-left text-muted-foreground">
                 <th className="py-2 font-medium">Name</th>
                 <th className="py-2 font-medium">Role</th>
+                <th className="py-2 font-medium">Managers</th>
                 <th className="py-2 font-medium" />
               </tr>
             </thead>
@@ -180,6 +271,13 @@ export default function ManageUsersPage() {
                     <div className="text-xs text-muted-foreground">{u.email}</div>
                   </td>
                   <td className="py-2">{ROLE_LABEL[u.role] ?? u.role}</td>
+                  <td className="py-2">
+                    {u.role === "employee" ? (
+                      <ManagersCell userId={u.id} pms={managers} />
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </td>
                   <td className="py-2">
                     <div className="flex justify-end gap-2">
                       <button

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO user_managers (user_id, manager_id) VALUES ($1, $2)\n         ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8d1f1d5eb52468e7fba6f6be39b6dfc9171e5683ebf395bd58a74b26e4d637aa"
+}

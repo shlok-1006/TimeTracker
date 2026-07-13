@@ -71,7 +71,14 @@ export default function DashboardPage() {
                     className="cursor-pointer border-b last:border-0 hover:bg-muted/50"
                   >
                     <td className="py-2">
-                      <div className="font-medium">{m.user.name}</div>
+                      <div className="flex items-center gap-2 font-medium">
+                        {m.user.name}
+                        {m.user.role !== "employee" && (
+                          <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {m.user.role === "hr" ? "HR" : "PM"}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-muted-foreground">{m.user.email}</div>
                     </td>
                     <td className="py-2">

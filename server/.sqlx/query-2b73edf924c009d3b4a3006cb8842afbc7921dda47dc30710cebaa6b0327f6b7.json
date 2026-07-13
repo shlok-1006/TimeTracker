@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT r.user_id, u.name AS employee_name, u.email AS employee_email, r.day,\n                  r.total_analyzed, r.aligned_count, r.partially_count, r.not_aligned_count,\n                  r.inconclusive_count, r.alignment_score, r.summary_text, r.model, r.created_at\n           FROM analysis_reports r\n           JOIN users u ON u.id = r.user_id\n           WHERE r.day = $1 AND ($2::uuid IS NULL OR u.manager_id = $2)\n           ORDER BY u.name",
+  "query": "SELECT r.user_id, u.name AS employee_name, u.email AS employee_email, r.day,\n                  r.total_analyzed, r.aligned_count, r.partially_count, r.not_aligned_count,\n                  r.inconclusive_count, r.alignment_score, r.summary_text, r.model, r.created_at\n           FROM analysis_reports r\n           JOIN users u ON u.id = r.user_id\n           WHERE r.day = $1\n             AND ($2::uuid IS NULL\n                  OR EXISTS (SELECT 1 FROM user_managers um\n                             WHERE um.user_id = u.id AND um.manager_id = $2))\n           ORDER BY u.name",
   "describe": {
     "columns": [
       {
@@ -91,5 +91,5 @@
       false
     ]
   },
-  "hash": "08a7ee108d5cca3834bc5c477627a74e23a80a4c541ed19b2bcd185d340d944e"
+  "hash": "2b73edf924c009d3b4a3006cb8842afbc7921dda47dc30710cebaa6b0327f6b7"
 }

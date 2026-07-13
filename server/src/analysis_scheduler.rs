@@ -119,7 +119,8 @@ async fn maybe_alert_low_score(state: &AppState, report: &AnalysisReport) {
         }
     };
 
-    // Recipients: all HR + the employee's project manager (CC'd).
+    // Recipients: all HR + every project manager assigned to the employee
+    // (an employee may have several managers, one, or none).
     let mut recipients: Vec<String> = match users::contacts_with_role(&state.db, UserRole::Hr).await
     {
         Ok(hr) => hr.into_iter().map(|(_, email)| email).collect(),
@@ -128,13 +129,10 @@ async fn maybe_alert_low_score(state: &AppState, report: &AnalysisReport) {
             return;
         }
     };
-    if let Some(mid) = employee.manager_id {
-        match users::find_by_id(&state.db, mid).await {
-            Ok(Some(pm)) => recipients.push(pm.email),
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(user_id = %report.user_id, "low-score alert: PM lookup failed: {e}")
-            }
+    match users::managers_of(&state.db, report.user_id).await {
+        Ok(managers) => recipients.extend(managers.into_iter().map(|(_, _, email)| email)),
+        Err(e) => {
+            tracing::warn!(user_id = %report.user_id, "low-score alert: PM lookup failed: {e}")
         }
     }
     recipients.sort();

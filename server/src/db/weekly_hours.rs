@@ -19,7 +19,6 @@ pub struct EmployeeWeek {
     pub user_id: Uuid,
     pub name: String,
     pub email: String,
-    pub manager_id: Option<Uuid>,
     pub working_days: i64,
     pub worked_seconds: i64,
 }
@@ -42,7 +41,7 @@ pub async fn week_activity(
 ) -> Result<Vec<EmployeeWeek>, AppError> {
     let rows = sqlx::query!(
         r#"
-        SELECT u.id AS user_id, u.name, u.email, u.manager_id,
+        SELECT u.id AS user_id, u.name, u.email,
           COUNT(ad.*) FILTER (
               WHERE ad.status IN ('present','partial','absent')
                 AND EXTRACT(ISODOW FROM ad.day) < 6
@@ -52,7 +51,7 @@ pub async fn week_activity(
         LEFT JOIN attendance_days ad
                ON ad.user_id = u.id AND ad.day >= $1 AND ad.day <= $2
         WHERE u.role = 'employee'::user_role
-        GROUP BY u.id, u.name, u.email, u.manager_id
+        GROUP BY u.id, u.name, u.email
         ORDER BY u.name
         "#,
         from,
@@ -67,7 +66,6 @@ pub async fn week_activity(
             user_id: r.user_id,
             name: r.name,
             email: r.email,
-            manager_id: r.manager_id,
             working_days: r.working_days,
             worked_seconds: r.worked,
         })

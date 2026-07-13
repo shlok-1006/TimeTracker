@@ -197,7 +197,10 @@ pub async fn list_for_day(
                   r.inconclusive_count, r.alignment_score, r.summary_text, r.model, r.created_at
            FROM analysis_reports r
            JOIN users u ON u.id = r.user_id
-           WHERE r.day = $1 AND ($2::uuid IS NULL OR u.manager_id = $2)
+           WHERE r.day = $1
+             AND ($2::uuid IS NULL
+                  OR EXISTS (SELECT 1 FROM user_managers um
+                             WHERE um.user_id = u.id AND um.manager_id = $2))
            ORDER BY u.name"#,
         day,
         manager_id

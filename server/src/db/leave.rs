@@ -334,7 +334,9 @@ pub async fn list_pending(
            JOIN users u       ON u.id = lr.user_id
            JOIN leave_types lt ON lt.id = lr.leave_type_id
            WHERE lr.status = 'pending'
-             AND ($1::uuid IS NULL OR u.manager_id = $1)
+             AND ($1::uuid IS NULL
+                  OR EXISTS (SELECT 1 FROM user_managers um
+                             WHERE um.user_id = u.id AND um.manager_id = $1))
            ORDER BY lr.created_at"#,
         manager_id
     )

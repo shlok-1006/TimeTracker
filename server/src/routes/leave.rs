@@ -101,7 +101,8 @@ async fn cancel_leave(
 
 // ---- Approver (HR / project manager) ----
 
-/// Ensure the caller may act on `target`'s request: HR anyone; PM only own team.
+/// Ensure the caller may act on `target`'s request: HR anyone; PM only users
+/// they manage (user_managers — an employee may have several managers).
 async fn authorize_approver(
     state: &AppState,
     approver: &AuthUser,
@@ -110,9 +111,10 @@ async fn authorize_approver(
     if approver.role == UserRole::Hr {
         return Ok(());
     }
-    match users::manager_id_of(&state.db, target).await? {
-        Some(m) if m == approver.id => Ok(()),
-        _ => Err(AppError::Forbidden),
+    if users::is_manager_of(&state.db, approver.id, target).await? {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
     }
 }
 

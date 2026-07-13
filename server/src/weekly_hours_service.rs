@@ -130,14 +130,16 @@ pub async fn run_for_week(
             continue;
         }
 
-        // Recipients: all HR + the employee's project manager (if assigned).
+        // Recipients: all HR + every manager assigned to the employee (an
+        // employee may have several managers, one, or none — user_managers).
         let mut recipients: Vec<String> =
             hr_contacts.iter().map(|(_, email)| email.clone()).collect();
-        if let Some(mid) = ew.manager_id {
-            if let Some(pm) = users::find_by_id(pool, mid).await? {
-                recipients.push(pm.email);
-            }
-        }
+        recipients.extend(
+            users::managers_of(pool, ew.user_id)
+                .await?
+                .into_iter()
+                .map(|(_, _, email)| email),
+        );
         recipients.sort();
         recipients.dedup();
 

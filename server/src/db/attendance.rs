@@ -224,7 +224,9 @@ pub async fn report(
         WHERE (u.role = 'employee'::user_role
                OR EXISTS (SELECT 1 FROM attendance_days x
                           WHERE x.user_id = u.id AND x.day >= $1 AND x.day <= $2))
-          AND ($3::uuid IS NULL OR u.manager_id = $3)
+          AND ($3::uuid IS NULL
+               OR EXISTS (SELECT 1 FROM user_managers um
+                          WHERE um.user_id = u.id AND um.manager_id = $3))
         GROUP BY u.id, u.name, u.email
         ORDER BY u.name
         "#,

@@ -39,6 +39,17 @@ impl IdleHandle {
     /// unsupported platform we report zero, so the user is treated as **active**
     /// rather than being falsely marked idle.
     pub fn idle_for(&self) -> Duration {
+        // Headless Linux guard: with no display server, the X11 screensaver
+        // query inside `user-idle` can SIGSEGV in native code (a crashed C call
+        // never becomes an Err). No display => nothing to observe => active.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            if std::env::var_os("DISPLAY").is_none()
+                && std::env::var_os("WAYLAND_DISPLAY").is_none()
+            {
+                return Duration::ZERO;
+            }
+        }
         match UserIdle::get_time() {
             Ok(t) => Duration::from_secs(t.as_seconds()),
             Err(e) => {

@@ -120,7 +120,7 @@ export function Controls({ userId }: { userId: string }) {
             onClick={() => run((i) => i("stop_tracking"))}
             className="rounded-md bg-red-600 px-4 py-2 font-medium text-white hover:bg-red-700 disabled:opacity-50"
           >
-            Stop tracking
+            End My Day
           </button>
           <div className="flex gap-3">
             <button

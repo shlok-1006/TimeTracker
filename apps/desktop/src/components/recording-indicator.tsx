@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoker } from "@/lib/tauri";
 
 /**
@@ -19,15 +19,30 @@ export function RecordingIndicator() {
     refetchInterval: 60000,
   });
 
+  const qc = useQueryClient();
+  const requestPermission = useMutation({
+    mutationFn: async () => (await invoker())<boolean>("request_capture_permission"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["check_capture"] }),
+  });
+
   const recording = status.data === "working"; // screenshots are taken only while working
   const permissionMissing = capture.data === false;
 
   return (
     <>
       {permissionMissing && (
-        <div className="fixed inset-x-0 top-0 z-[60] bg-red-600 py-1.5 text-center text-sm font-medium text-white">
-          Screen-recording permission is not granted — screenshots cannot be captured.
-          Enable it in your OS privacy settings.
+        <div className="fixed inset-x-0 top-0 z-[60] bg-red-600 px-4 py-1.5 text-center text-sm font-medium text-white">
+          Screen recording is not permitted — screenshots will miss your work.{" "}
+          <span className="font-normal">
+            macOS: System Settings → Privacy &amp; Security → Screen Recording →
+            enable TimeTracker, then reopen the app.
+          </span>{" "}
+          <button
+            onClick={() => requestPermission.mutate()}
+            className="ml-2 rounded bg-white/20 px-2 py-0.5 text-xs font-semibold hover:bg-white/30"
+          >
+            Grant permission
+          </button>
         </div>
       )}
       {recording && (

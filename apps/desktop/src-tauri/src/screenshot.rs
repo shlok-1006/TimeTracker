@@ -99,12 +99,58 @@ pub fn capture_primary_jpeg(quality: u8) -> anyhow::Result<Vec<u8>> {
     encode_jpeg(&frame, quality)
 }
 
-/// Probe whether screen capture works (screen-recording permission granted).
-/// Used by the UI to warn on macOS/Wayland when permission is missing.
+/// macOS Screen Recording (TCC) permission, asked the honest way. Without it,
+/// capture still "succeeds" but silently returns only the wallpaper + our own
+/// windows — so probing by capturing cannot detect the problem. CoreGraphics
+/// exposes the real answer.
+#[cfg(target_os = "macos")]
+mod macos_permission {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        // Boolean (unsigned char) in C — map as u8, compare against 0.
+        fn CGPreflightScreenCaptureAccess() -> u8;
+        fn CGRequestScreenCaptureAccess() -> u8;
+    }
+
+    /// Is Screen Recording permission currently granted?
+    pub fn granted() -> bool {
+        unsafe { CGPreflightScreenCaptureAccess() != 0 }
+    }
+
+    /// Ask macOS for the permission. Shows the system prompt the first time
+    /// (afterwards the user must enable it in System Settings by hand).
+    pub fn request() -> bool {
+        unsafe { CGRequestScreenCaptureAccess() != 0 }
+    }
+}
+
+/// Probe whether screen capture will produce a USEFUL image.
+/// macOS: ask TCC directly — a capture "succeeding" proves nothing there (see
+/// `macos_permission`). Elsewhere: probe by capturing (covers Wayland etc.).
 #[tauri::command]
 pub async fn check_capture() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if !macos_permission::granted() {
+            return Ok(false);
+        }
+    }
     let res = tokio::task::spawn_blocking(|| capture_primary_jpeg(JPEG_QUALITY)).await;
     Ok(matches!(res, Ok(Ok(_))))
+}
+
+/// Trigger the OS permission flow (macOS: system prompt / Settings listing).
+/// Returns the resulting permission state. No-op elsewhere.
+#[tauri::command]
+pub async fn request_capture_permission() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(macos_permission::request())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(true)
+    }
 }
 
 /// Background worker: after each randomized delay, capture + upload if Working.

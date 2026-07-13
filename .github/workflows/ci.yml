@@ -73,7 +73,12 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --filter desktop build
       - name: Test desktop crate
-        run: cargo test -p timetracker-desktop --lib
+        # Single-threaded with backtraces: the suite is fast, and when a native
+        # dependency crashes the process this pins WHICH test triggered it
+        # (parallel output hides the culprit).
+        env:
+          RUST_BACKTRACE: full
+        run: cargo test -p timetracker-desktop --lib -- --test-threads=1
 
   frontend:
     name: Frontend (typecheck + build)

@@ -64,6 +64,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Desktop API base for production builds (override per environment).
           TIMETRACKER_API_BASE_URL: ${{ vars.TIMETRACKER_API_BASE_URL || 'http://localhost:8090' }}
+          # macOS code signing with a STABLE self-signed cert (no Apple program).
+          # A constant signing identity keeps the app's designated requirement
+          # stable across releases, so the Screen Recording (TCC) grant survives
+          # updates instead of resetting every build. Empty on non-macOS runners
+          # (the bundler ignores them there). Does NOT notarize — Gatekeeper's
+          # "unidentified developer" prompt is unchanged (that needs the paid ID).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}

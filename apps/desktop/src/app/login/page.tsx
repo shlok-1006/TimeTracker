@@ -57,8 +57,8 @@ export default function LoginPage() {
       const result = changing
         ? await invoke<EmployeeSession>("change_password", {
             email,
-            current_password: password,
-            new_password: newPassword,
+            currentPassword: password,
+            newPassword,
           })
         : await invoke<EmployeeSession>("login", { email, password });
       setSession(result);

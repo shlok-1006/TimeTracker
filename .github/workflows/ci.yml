@@ -80,6 +80,28 @@ jobs:
           RUST_BACKTRACE: full
         run: cargo test -p timetracker-desktop --lib -- --test-threads=1
 
+  desktop-macos:
+    # The macOS-only code (TCC permission handling in screenshot.rs) is cfg'd
+    # out everywhere else, so without this job it first compiles at release
+    # time. A check-only pass keeps it honest on every PR.
+    name: Desktop crate (macOS check)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build desktop frontend (needed by tauri context)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter desktop build
+      - name: Check desktop crate
+        run: cargo check -p timetracker-desktop
+
   frontend:
     name: Frontend (typecheck + build)
     runs-on: ubuntu-latest

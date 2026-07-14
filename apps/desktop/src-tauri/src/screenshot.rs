@@ -169,6 +169,18 @@ pub async fn run(state: DesktopState) {
         if !should_capture(status) {
             continue;
         }
+        // Without the TCC grant, capturing only yields wallpaper + our own
+        // windows AND makes macOS re-show its permission prompt every cycle.
+        // Skip entirely; the UI banner is the one allowed to ask.
+        #[cfg(target_os = "macos")]
+        {
+            if !macos_permission::granted() {
+                tracing::warn!(
+                    "skipping screenshot: macOS Screen Recording permission not granted"
+                );
+                continue;
+            }
+        }
         // Tag the upload with the status that authorized the capture (Feature 2).
         if let Err(e) = capture_and_upload(&client, status).await {
             tracing::warn!("screenshot capture/upload failed (will retry): {e}");

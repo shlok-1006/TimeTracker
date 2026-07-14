@@ -24,6 +24,13 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 # Local SQLite source-of-truth (Rule 1). Wired into a real db module in a later step.
 sqlx = { workspace = true }
+# SHA-384 of migration SQL variants — self-heal for line-ending-only checksum
+# drift in _sqlx_migrations (pre-.gitattributes builds embedded CRLF).
+sha2 = { workspace = true }
+# Native message box so startup failures are visible instead of a silent crash
+# loop (the release binary is windowed — panics have no console). gtk3 backend
+# on Linux matches the GTK stack Tauri already links.
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 # HTTP client to talk to the API server.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 thiserror = { workspace = true }

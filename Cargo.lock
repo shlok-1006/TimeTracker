@@ -5254,7 +5254,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "argon2",
@@ -6202,11 +6202,12 @@ dependencies = [
 
 [[package]]
 name = "timetracker-desktop"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "active-win-pos-rs",
  "anyhow",
  "chrono",
+ "iana-time-zone",
  "image",
  "keyring",
  "rand 0.8.6",

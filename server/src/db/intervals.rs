@@ -73,19 +73,37 @@ pub struct HoursSummary {
 }
 
 pub async fn hours_summary(pool: &PgPool, user_id: Uuid) -> Result<HoursSummary, AppError> {
+    // "Today"/"this week" use a 04:00 LOCAL business-day boundary in the user's
+    // own timezone (reported by the desktop; falls back to UTC), so late-night
+    // work counts toward the day it began and this figure matches the desktop's
+    // local one. The 4 AM shift: subtract 4h, truncate to day/week, add 4h back,
+    // then interpret that wall time in the user's zone (DST-correct). Bound as
+    // $2::text so `AT TIME ZONE` uses the text-zone (not interval) overload.
+    let tz = sqlx::query!(
+        r#"SELECT COALESCE(timezone, 'UTC') AS "z!" FROM users WHERE id = $1"#,
+        user_id
+    )
+    .fetch_optional(pool)
+    .await?
+    .map(|r| r.z)
+    .unwrap_or_else(|| "UTC".to_string());
+
     let r = sqlx::query!(
         r#"
         SELECT
           CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting')),0) AS BIGINT) AS "total!",
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting') AND start_utc >= date_trunc('day', now())),0) AS BIGINT) AS "today!",
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting') AND start_utc >= date_trunc('week', now())),0) AS BIGINT) AS "week!",
+          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting')
+              AND start_utc >= ((date_trunc('day', (now() AT TIME ZONE $2::text) - interval '4 hours') + interval '4 hours') AT TIME ZONE $2::text)),0) AS BIGINT) AS "today!",
+          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','meeting')
+              AND start_utc >= ((date_trunc('week', (now() AT TIME ZONE $2::text) - interval '4 hours') + interval '4 hours') AT TIME ZONE $2::text)),0) AS BIGINT) AS "week!",
           CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='active'),0) AS BIGINT) AS "active!",
           CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='idle'),0) AS BIGINT) AS "idle!",
           CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='meeting'),0) AS BIGINT) AS "meeting!",
           CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='break'),0) AS BIGINT) AS "brk!"
         FROM intervals WHERE user_id = $1
         "#,
-        user_id
+        user_id,
+        tz
     )
     .fetch_one(pool)
     .await?;

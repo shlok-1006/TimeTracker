@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET timezone = $2, updated_at = now()\n         WHERE id = $1 AND timezone IS DISTINCT FROM $2\n           AND EXISTS (SELECT 1 FROM pg_timezone_names WHERE name = $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e29886548127b57dac534a792a4303ccb995bd099ff3e8ada9062092ab0d394a"
+}

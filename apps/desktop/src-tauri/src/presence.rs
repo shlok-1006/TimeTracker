@@ -105,9 +105,16 @@ async fn send_heartbeat(state: &DesktopState) -> anyhow::Result<()> {
     let tracking = state.tracker.lock().await.is_some();
     let status = derive_status(on_break, in_meeting, tracking, state.idle.is_idle());
 
-    http::post_json("/presence", serde_json::json!({ "status": status }))
-        .await
-        .map_err(|e| anyhow::anyhow!(e))?;
+    // Report the machine's IANA timezone so the server can bucket the hours
+    // display at this employee's local 4 AM boundary (matches the desktop's own
+    // local figure). Falls back to UTC if detection fails.
+    let timezone = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
+    http::post_json(
+        "/presence",
+        serde_json::json!({ "status": status, "timezone": timezone }),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!(e))?;
     Ok(())
 }
 

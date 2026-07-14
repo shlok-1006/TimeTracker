@@ -42,6 +42,27 @@ pub struct User {
 // reads the user_managers join table (an employee may have several managers).
 // (The old manager_id_of() helper is gone with it.)
 
+/// Store the user's IANA timezone (reported by the desktop), used only to
+/// bucket the hours display at a 4 AM local boundary. Only accepts zones
+/// Postgres recognizes — an unknown name would break `AT TIME ZONE` in
+/// `hours_summary`, so it's ignored (the window falls back to UTC). Writes only
+/// when the value actually changes (the heartbeat calls this every ~45s).
+pub async fn set_timezone(pool: &PgPool, user_id: Uuid, tz: &str) -> Result<(), AppError> {
+    if tz.is_empty() {
+        return Ok(());
+    }
+    sqlx::query!(
+        "UPDATE users SET timezone = $2, updated_at = now()
+         WHERE id = $1 AND timezone IS DISTINCT FROM $2
+           AND EXISTS (SELECT 1 FROM pg_timezone_names WHERE name = $2)",
+        user_id,
+        tz
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Is `manager` one of `user`'s managers? (PM scope checks — user_managers.)
 pub async fn is_manager_of(pool: &PgPool, manager: Uuid, user: Uuid) -> Result<bool, AppError> {
     let row = sqlx::query!(

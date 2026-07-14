@@ -9,6 +9,10 @@ use uuid::Uuid;
 use crate::interval_repository::{self, Interval};
 use crate::timer::DesktopState;
 
+/// The work day starts at 04:00 local — late-night work counts toward the day
+/// it began. Must match the server's hours-summary boundary.
+const BUSINESS_DAY_START_HOUR: i64 = 4;
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct HoursSummary {
     pub total_seconds: i64,
@@ -29,9 +33,15 @@ fn secs(iv: &Interval) -> i64 {
     (iv.end_utc - iv.start_utc).num_seconds().max(0)
 }
 
-/// Summarize worked/idle time for today, this week, and all-time (local dates).
+/// Summarize worked/idle time for today, this week, and all-time. Days use a
+/// 04:00 LOCAL business-day boundary (BUSINESS_DAY_START_HOUR): late-night work
+/// counts toward the day it began, and this matches the server's per-user
+/// windowing so the desktop and admin "today" figures agree.
 pub fn summarize(intervals: &[Interval], now: DateTime<Local>) -> HoursSummary {
-    let today = now.date_naive();
+    // Shift back 4h before taking the date, so 00:00–03:59 local belongs to the
+    // previous day and a new day starts at 04:00.
+    let biz_day = |t: DateTime<Local>| (t - Duration::hours(BUSINESS_DAY_START_HOUR)).date_naive();
+    let today = biz_day(now);
     let week_start = today - Duration::days(today.weekday().num_days_from_monday() as i64);
 
     let mut s = HoursSummary {
@@ -42,7 +52,7 @@ pub fn summarize(intervals: &[Interval], now: DateTime<Local>) -> HoursSummary {
         idle_seconds: 0,
     };
     for iv in intervals {
-        let d = iv.start_utc.with_timezone(&Local).date_naive();
+        let d = biz_day(iv.start_utc.with_timezone(&Local));
         let n = secs(iv);
         match iv.kind.as_str() {
             "idle" => s.idle_seconds += n,

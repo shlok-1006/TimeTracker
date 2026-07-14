@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::db::presence;
+use crate::db::{presence, users};
 use crate::error::AppError;
 use crate::middleware::AuthUser;
 use crate::presence::PresenceStatus;
@@ -17,6 +17,10 @@ struct HeartbeatBody {
     status: PresenceStatus,
     #[serde(default)]
     current_interval_id: Option<Uuid>,
+    /// The desktop's IANA timezone (e.g. "Asia/Kolkata"), for the 4 AM local
+    /// business-day boundary on the hours display. Optional; validated + stored.
+    #[serde(default)]
+    timezone: Option<String>,
 }
 
 /// `POST /presence` — record a heartbeat for the authenticated user.
@@ -30,6 +34,9 @@ async fn heartbeat(
         return Err(AppError::BadRequest("invalid status".into()));
     }
     presence::heartbeat(&state.db, user.id, body.status, body.current_interval_id).await?;
+    if let Some(tz) = body.timezone.as_deref() {
+        users::set_timezone(&state.db, user.id, tz).await?;
+    }
     Ok(Json(json!({ "ok": true })))
 }
 

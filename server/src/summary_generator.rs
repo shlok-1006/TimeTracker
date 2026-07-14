@@ -113,7 +113,7 @@ pub async fn generate_summary(
     }
     if !provider.is_configured() {
         return Err(AppError::BadRequest(
-            "summary AI is not configured (set ANTHROPIC_API_KEY)".into(),
+            "summary AI is not configured (set XAI_API_KEY or ANTHROPIC_API_KEY)".into(),
         ));
     }
 

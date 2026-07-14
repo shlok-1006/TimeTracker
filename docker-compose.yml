@@ -161,6 +161,10 @@ services:
       LINEAR_API_KEY: ${LINEAR_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      # Vision AI can use xAI Grok instead of Claude — set XAI_API_KEY and it
+      # takes precedence (model via XAI_MODEL, default grok-4.5).
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      XAI_MODEL: ${XAI_MODEL:-}
       RUST_LOG: ${RUST_LOG:-info,server=info,sqlx=warn}
     ports:
       # SEC-04/SEC-21: bind to loopback so the API is reachable only via nginx,

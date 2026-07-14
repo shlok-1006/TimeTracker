@@ -204,8 +204,8 @@ export default function AnalyzePage() {
                 )}
                 {!p.claude_configured && (
                   <p className="text-amber-600">
-                    Vision AI is not configured on the server (ANTHROPIC_API_KEY) — analysis
-                    cannot run yet.
+                    Vision AI is not configured on the server (set XAI_API_KEY or
+                    ANTHROPIC_API_KEY) — analysis cannot run yet.
                   </p>
                 )}
               </div>

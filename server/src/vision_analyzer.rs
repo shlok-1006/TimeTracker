@@ -207,7 +207,7 @@ pub async fn analyze_screenshot(
 
     if !claude.is_configured() {
         return Err(AppError::BadRequest(
-            "Vision AI is not configured (set ANTHROPIC_API_KEY)".into(),
+            "Vision AI is not configured (set XAI_API_KEY or ANTHROPIC_API_KEY)".into(),
         ));
     }
 

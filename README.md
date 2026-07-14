@@ -120,7 +120,7 @@ Key environment variables (see `.env.example` for the full list):
 | `DATABASE_URL`          | Postgres connection (Supabase session pooler)    |
 | `GCS_SA_KEY_BASE64`     | Service-account key for GCS V4 URL signing       |
 | `S3_BUCKET`             | Screenshot bucket name                           |
-| `ANTHROPIC_API_KEY`     | Enables AI screenshot analysis (Claude)          |
+| `XAI_API_KEY` / `ANTHROPIC_API_KEY` | Enables AI screenshot analysis (xAI Grok, or Claude) |
 | `LINEAR_API_KEY`        | Enables Linear ticket integration                |
 | `SMTP_*`                | Welcome emails and low-score alerts              |
 

@@ -298,9 +298,9 @@ pub async fn refresh(state: &AppState, req: RefreshRequest) -> Result<TokenPair,
             // Racing/stale replays stay quiet: no mass revocation, no audit spam,
             // no scary warning (which previously repeated on every retry).
             if let Some(info) = refresh_tokens::replay_info(&state.db, &hash).await? {
-                let within_grace = info
-                    .revoked_at
-                    .is_some_and(|t| Utc::now() - t < Duration::seconds(REFRESH_REUSE_GRACE_SECONDS));
+                let within_grace = info.revoked_at.is_some_and(|t| {
+                    Utc::now() - t < Duration::seconds(REFRESH_REUSE_GRACE_SECONDS)
+                });
                 if is_genuine_reuse(info.family_live, within_grace) {
                     refresh_tokens::revoke_all_for_user(&state.db, info.user_id).await?;
                     audit::log(

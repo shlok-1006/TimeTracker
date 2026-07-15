@@ -38,7 +38,9 @@ function tryRefresh(): Promise<boolean> {
 }
 
 async function doRefresh(): Promise<boolean> {
-  const rt = useAuthStore.getState().refreshToken;
+  // Start from the freshest token — another tab may have rotated it since we
+  // last touched in-memory state. localStorage is the cross-tab source of truth.
+  const rt = useAuthStore.getState().adoptFromStorage();
   if (!rt) return false;
   try {
     const res = await fetch(`${API_BASE}/auth/refresh`, {
@@ -46,15 +48,20 @@ async function doRefresh(): Promise<boolean> {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ refresh_token: rt }),
     });
-    if (!res.ok) {
+    if (res.status === 401) {
+      // The token was rejected. If a sibling tab rotated in the meantime, adopt
+      // its token and let the caller retry instead of logging every tab out.
+      const latest = useAuthStore.getState().adoptFromStorage();
+      if (latest && latest !== rt) return true;
       useAuthStore.getState().clear();
       return false;
     }
+    if (!res.ok) return false; // transient (5xx/network) — keep the session
     const data = (await res.json()) as { access_token: string; refresh_token: string };
     useAuthStore.getState().setTokens(data.access_token, data.refresh_token);
     return true;
   } catch {
-    return false;
+    return false; // network error — keep the session, don't force a re-login
   }
 }
 

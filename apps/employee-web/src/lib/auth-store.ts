@@ -26,6 +26,10 @@ type AuthState = {
   setSession: (token: string, refreshToken: string, user: PortalUser) => void;
   /** Update just the token pair (used after a refresh rotation). */
   setTokens: (token: string, refreshToken: string) => void;
+  /** Re-read tokens from localStorage (the cross-tab source of truth) in case
+   *  another tab rotated them, and return the current refresh token. Prevents
+   *  refreshing with a token a sibling tab already consumed. */
+  adoptFromStorage: () => string | null;
   clear: () => void;
   hydrate: () => void;
 };
@@ -58,6 +62,20 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   setTokens: (token, refreshToken) => {
     persist({ token, refreshToken, user: get().user });
     set({ token, refreshToken });
+  },
+  adoptFromStorage: () => {
+    if (typeof window === "undefined") return get().refreshToken;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      try {
+        const p = JSON.parse(raw) as Persisted;
+        set({ token: p.token, refreshToken: p.refreshToken, user: p.user });
+        return p.refreshToken;
+      } catch {
+        /* fall through to current state */
+      }
+    }
+    return get().refreshToken;
   },
   clear: () => {
     persist({ token: null, refreshToken: null, user: null });

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n          t.user_id AS user_id,\n          t.revoked_at AS revoked_at,\n          EXISTS (\n            SELECT 1 FROM refresh_tokens f\n            WHERE f.user_id = t.user_id\n              AND f.revoked_at IS NULL\n              AND f.expires_at > now()\n          ) AS \"family_live!\"\n        FROM refresh_tokens t\n        WHERE t.token_hash = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "family_live!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "17391f11dc3d314db1268df5899c8a547a07ee005eef76f615d5e3a6cbe5de1c"
+}

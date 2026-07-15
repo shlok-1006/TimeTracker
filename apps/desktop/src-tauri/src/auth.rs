@@ -207,6 +207,13 @@ pub async fn change_password(
 
 /// Rotate the refresh token for a fresh access token. Returns Err if there is
 /// no refresh token or the server rejects it (user must log in again).
+///
+/// On a definitive rejection (HTTP 401) the stored tokens are DELETED so we stop
+/// re-presenting a dead token on every poll — otherwise the app's timers (hours,
+/// activity, heartbeat, sync) hammer `/auth/refresh` with the same revoked token
+/// forever, which the server logs as repeated "reuse detected" and which never
+/// prompts the user to log back in. Transient failures (network, 5xx) keep the
+/// tokens so a blip doesn't force a re-login.
 pub async fn do_refresh() -> Result<(), String> {
     let refresh = stored_refresh().ok_or_else(|| "no refresh token".to_string())?;
     let resp = reqwest::Client::new()
@@ -218,6 +225,13 @@ pub async fn do_refresh() -> Result<(), String> {
         .await
         .map_err(|e| format!("refresh request failed: {e}"))?;
     if !resp.status().is_success() {
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            // The refresh token is dead (rotated, revoked, or expired). Clear it
+            // so we don't loop; the UI's session check will send the user to log
+            // in again.
+            delete(ACCOUNT_ACCESS);
+            delete(ACCOUNT_REFRESH);
+        }
         return Err(format!("refresh rejected ({})", resp.status()));
     }
     let pair: ApiTokenPair = resp.json().await.map_err(|e| e.to_string())?;

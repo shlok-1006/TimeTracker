@@ -57,16 +57,45 @@ pub async fn consume(pool: &PgPool, token_hash: &str) -> Result<Option<(Uuid, Uu
     Ok(row.map(|r| (r.id, r.user_id)))
 }
 
-/// The owner of a token hash regardless of its state (revoked/expired/valid).
-/// Used to detect replay of an already-consumed token (SEC-17).
-pub async fn user_for_hash(pool: &PgPool, token_hash: &str) -> Result<Option<Uuid>, AppError> {
+/// State of a presented-but-not-consumable token, used to classify a replay
+/// (SEC-17). `revoked_at` tells us how long ago it was invalidated (to tell a
+/// benign concurrent-refresh race from a genuine stolen-token replay), and
+/// `family_live` says whether the owner still has any live session (if not, the
+/// family was already revoked and this replay is just stale — not a new
+/// incident, so we must not re-revoke or re-audit it on every retry).
+pub struct ReplayInfo {
+    pub user_id: Uuid,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub family_live: bool,
+}
+
+/// Look up a token hash regardless of its state, with the context needed to
+/// decide whether a replay is a real theft signal. Returns `None` if the hash
+/// was never issued.
+pub async fn replay_info(pool: &PgPool, token_hash: &str) -> Result<Option<ReplayInfo>, AppError> {
     let row = sqlx::query!(
-        "SELECT user_id FROM refresh_tokens WHERE token_hash = $1",
+        r#"
+        SELECT
+          t.user_id AS user_id,
+          t.revoked_at AS revoked_at,
+          EXISTS (
+            SELECT 1 FROM refresh_tokens f
+            WHERE f.user_id = t.user_id
+              AND f.revoked_at IS NULL
+              AND f.expires_at > now()
+          ) AS "family_live!"
+        FROM refresh_tokens t
+        WHERE t.token_hash = $1
+        "#,
         token_hash
     )
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|r| r.user_id))
+    Ok(row.map(|r| ReplayInfo {
+        user_id: r.user_id,
+        revoked_at: r.revoked_at,
+        family_live: r.family_live,
+    }))
 }
 
 /// Revoke a token by id (used on rotation and logout).

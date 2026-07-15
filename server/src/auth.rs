@@ -254,6 +254,25 @@ pub async fn change_password(
     })
 }
 
+/// How recently a rotated token may be replayed before we treat the replay as a
+/// stolen-token signal. Within this window a re-presented token is assumed to be
+/// a benign concurrent-refresh race (multiple tabs/devices of the same user), so
+/// we don't revoke the whole family. Kept short to preserve theft detection.
+const REFRESH_REUSE_GRACE_SECONDS: i64 = 30;
+
+/// Decide whether replaying a non-consumable refresh token is a genuine
+/// stolen-token signal (→ revoke every session) or a benign event to ignore.
+///
+/// It's real reuse only when the family is STILL live (a valid successor token
+/// exists, so this old one was truly superseded) AND the replay is outside the
+/// grace window (not a just-now concurrent-refresh race). If the family is
+/// already fully revoked, this is a stale replay of an incident we've handled —
+/// ignoring it stops the retry storm (repeated revoke/audit/warn on every poll).
+/// Split out so the policy is unit-tested without a database.
+fn is_genuine_reuse(family_live: bool, within_grace: bool) -> bool {
+    family_live && !within_grace
+}
+
 /// Exchange a valid refresh token for a new access token + a NEW refresh token
 /// (rotation: the presented token is revoked immediately).
 pub async fn refresh(state: &AppState, req: RefreshRequest) -> Result<TokenPair, AppError> {
@@ -264,20 +283,43 @@ pub async fn refresh(state: &AppState, req: RefreshRequest) -> Result<TokenPair,
     let user_id = match refresh_tokens::consume(&state.db, &hash).await? {
         Some((_id, user_id)) => user_id,
         None => {
-            // The token wasn't valid. If the hash is nonetheless *known*, this is
-            // a replay of an already-consumed token — the classic stolen-token
-            // signal. Revoke the whole family and flag it (SEC-17).
-            if let Some(compromised) = refresh_tokens::user_for_hash(&state.db, &hash).await? {
-                refresh_tokens::revoke_all_for_user(&state.db, compromised).await?;
-                audit::log(
-                    &state.db,
-                    compromised,
-                    "auth.refresh_reuse_detected",
-                    "user",
-                    Some(compromised),
-                )
-                .await;
-                tracing::warn!(user_id = %compromised, "refresh token reuse detected — revoked all sessions");
+            // The token wasn't consumable (missing, revoked, or expired). If the
+            // hash is known, classify the replay before crying theft (SEC-17):
+            //
+            //  * within the grace window  -> a benign concurrent-refresh race
+            //    (two tabs/devices of the same user refreshed at once; only one
+            //    wins the atomic consume). The token was rotated moments ago.
+            //  * family already fully revoked (no live token) -> a stale replay
+            //    of an already-handled revocation (e.g. a client still polling
+            //    with a dead token). Not a new incident.
+            //
+            // Only a token that was rotated LONG ago while the family is STILL
+            // live is the real stolen-token signal — that revokes everything.
+            // Racing/stale replays stay quiet: no mass revocation, no audit spam,
+            // no scary warning (which previously repeated on every retry).
+            if let Some(info) = refresh_tokens::replay_info(&state.db, &hash).await? {
+                let within_grace = info
+                    .revoked_at
+                    .is_some_and(|t| Utc::now() - t < Duration::seconds(REFRESH_REUSE_GRACE_SECONDS));
+                if is_genuine_reuse(info.family_live, within_grace) {
+                    refresh_tokens::revoke_all_for_user(&state.db, info.user_id).await?;
+                    audit::log(
+                        &state.db,
+                        info.user_id,
+                        "auth.refresh_reuse_detected",
+                        "user",
+                        Some(info.user_id),
+                    )
+                    .await;
+                    tracing::warn!(user_id = %info.user_id, "refresh token reuse detected — revoked all sessions");
+                } else {
+                    tracing::debug!(
+                        user_id = %info.user_id,
+                        within_grace,
+                        family_live = info.family_live,
+                        "ignoring racing/stale refresh token replay"
+                    );
+                }
             }
             return Err(AppError::Unauthorized);
         }
@@ -349,5 +391,21 @@ mod tests {
         assert_eq!(hash_refresh_token(&a), hash_refresh_token(&a));
         assert_ne!(hash_refresh_token(&a), hash_refresh_token(&b));
         assert_ne!(hash_refresh_token(&a), a); // never store plaintext
+    }
+
+    #[test]
+    fn genuine_reuse_only_when_family_live_and_outside_grace() {
+        // Real stolen-token replay: an old token used again while a valid
+        // successor still exists, long after it was rotated.
+        assert!(is_genuine_reuse(true, false));
+
+        // Benign concurrent-refresh race: rotated moments ago (within grace).
+        assert!(!is_genuine_reuse(true, true));
+
+        // Stale replay after the family was already revoked — not a new
+        // incident, so we must stay quiet (this is what stopped the retry storm
+        // of repeated "reuse detected — revoked all sessions" log lines).
+        assert!(!is_genuine_reuse(false, false));
+        assert!(!is_genuine_reuse(false, true));
     }
 }

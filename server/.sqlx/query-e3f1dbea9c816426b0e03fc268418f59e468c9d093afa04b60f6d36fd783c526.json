@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH b AS (\n          SELECT\n            ((date_trunc('day',  (now() AT TIME ZONE $2::text) - interval '4 hours') + interval '4 hours') AT TIME ZONE $2::text) AS day_start,\n            ((date_trunc('week', (now() AT TIME ZONE $2::text) - interval '4 hours') + interval '4 hours') AT TIME ZONE $2::text) AS week_start\n        )\n        SELECT\n          -- Today (active+idle+meeting) + breakdown\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','idle','meeting') AND start_utc >= b.day_start),0) AS BIGINT) AS \"today!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='active'  AND start_utc >= b.day_start),0) AS BIGINT) AS \"today_active!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='idle'    AND start_utc >= b.day_start),0) AS BIGINT) AS \"today_idle!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='meeting' AND start_utc >= b.day_start),0) AS BIGINT) AS \"today_meeting!\",\n          -- This week (active+idle+meeting) + breakdown\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','idle','meeting') AND start_utc >= b.week_start),0) AS BIGINT) AS \"week!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='active'  AND start_utc >= b.week_start),0) AS BIGINT) AS \"week_active!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='idle'    AND start_utc >= b.week_start),0) AS BIGINT) AS \"week_idle!\",\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='meeting' AND start_utc >= b.week_start),0) AS BIGINT) AS \"week_meeting!\",\n          -- All-time worked (reconcile line)\n          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','idle','meeting')),0) AS BIGINT) AS \"total!\"\n        FROM intervals, b WHERE user_id = $1\n        GROUP BY b.day_start, b.week_start\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "today!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "today_active!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "today_idle!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "today_meeting!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "week!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "week_active!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "week_idle!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "week_meeting!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "total!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e3f1dbea9c816426b0e03fc268418f59e468c9d093afa04b60f6d36fd783c526"
+}

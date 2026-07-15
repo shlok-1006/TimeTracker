@@ -84,11 +84,15 @@ async fn user_hours(
     authorize_view(&state, &user, target).await?;
     let s = intervals::hours_summary(&state.db, target).await?;
     Ok(Json(json!({
-        "total_seconds": s.total_seconds,
         "today_seconds": s.today_seconds,
+        "today_active_seconds": s.today_active_seconds,
+        "today_idle_seconds": s.today_idle_seconds,
+        "today_meeting_seconds": s.today_meeting_seconds,
         "week_seconds": s.week_seconds,
-        "active_seconds": s.active_seconds,
-        "idle_seconds": s.idle_seconds,
+        "week_active_seconds": s.week_active_seconds,
+        "week_idle_seconds": s.week_idle_seconds,
+        "week_meeting_seconds": s.week_meeting_seconds,
+        "total_seconds": s.total_seconds,
     })))
 }
 

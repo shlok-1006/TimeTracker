@@ -35,8 +35,9 @@ export default function DashboardPage() {
 
   const h = hours.data;
   const pieData = [
-    { name: "Active", value: h?.active_seconds ?? 0, color: "#22c55e" },
-    { name: "Idle", value: h?.idle_seconds ?? 0, color: "#f59e0b" },
+    { name: "Active", value: h?.today_active_seconds ?? 0, color: "#22c55e" },
+    { name: "Idle", value: h?.today_idle_seconds ?? 0, color: "#f59e0b" },
+    { name: "Meeting", value: h?.today_meeting_seconds ?? 0, color: "#6366f1" },
   ];
 
   return (
@@ -57,7 +58,7 @@ export default function DashboardPage() {
           </div>
 
           <section className="rounded-lg border bg-card p-6 text-card-foreground">
-            <h2 className="mb-3 text-lg font-semibold">Active vs Idle (all time)</h2>
+            <h2 className="mb-3 text-lg font-semibold">Today: Active / Idle / Meeting</h2>
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -70,14 +71,18 @@ export default function DashboardPage() {
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div className="flex justify-center gap-6 text-sm">
+            <div className="flex flex-wrap justify-center gap-x-6 gap-y-1 text-sm">
               <span className="inline-flex items-center gap-2">
                 <span className="h-2.5 w-2.5 rounded-full bg-green-500" /> Active{" "}
-                {fmtHms(h.active_seconds)}
+                {fmtHms(h.today_active_seconds)}
               </span>
               <span className="inline-flex items-center gap-2">
                 <span className="h-2.5 w-2.5 rounded-full bg-amber-500" /> Idle{" "}
-                {fmtHms(h.idle_seconds)}
+                {fmtHms(h.today_idle_seconds)}
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-indigo-500" /> Meeting{" "}
+                {fmtHms(h.today_meeting_seconds)}
               </span>
             </div>
           </section>

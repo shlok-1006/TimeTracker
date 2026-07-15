@@ -125,14 +125,35 @@ export default function UserDetailPage() {
       </section>
 
       <section className="rounded-lg border bg-card p-6 text-card-foreground">
-        <h2 className="mb-3 text-lg font-semibold">Hours</h2>
+        <h2 className="mb-1 text-lg font-semibold">Hours</h2>
+        <p className="mb-4 text-xs text-muted-foreground">
+          A day&apos;s work counts active, idle, and meeting time; breaks are excluded.
+        </p>
         {hours.isLoading && <p className="text-muted-foreground">Loading…</p>}
         {hours.data && (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat label="Today" value={fmtHms(hours.data.today_seconds)} />
-            <Stat label="This week" value={fmtHms(hours.data.week_seconds)} />
-            <Stat label="Active" value={fmtHms(hours.data.active_seconds)} />
-            <Stat label="Idle" value={fmtHms(hours.data.idle_seconds)} />
+          <div className="space-y-5">
+            <div>
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Today
+              </p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat label="Total" value={fmtHms(hours.data.today_seconds)} />
+                <Stat label="Active" value={fmtHms(hours.data.today_active_seconds)} />
+                <Stat label="Idle" value={fmtHms(hours.data.today_idle_seconds)} />
+                <Stat label="Meeting" value={fmtHms(hours.data.today_meeting_seconds)} />
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                This week
+              </p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat label="Total" value={fmtHms(hours.data.week_seconds)} />
+                <Stat label="Active" value={fmtHms(hours.data.week_active_seconds)} />
+                <Stat label="Idle" value={fmtHms(hours.data.week_idle_seconds)} />
+                <Stat label="Meeting" value={fmtHms(hours.data.week_meeting_seconds)} />
+              </div>
+            </div>
           </div>
         )}
       </section>

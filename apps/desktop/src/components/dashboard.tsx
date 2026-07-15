@@ -15,11 +15,15 @@ import {
 import { invoker, fmtHms, STATUS_LABEL } from "@/lib/tauri";
 
 type HoursSummary = {
-  total_seconds: number;
   today_seconds: number;
+  today_active_seconds: number;
+  today_idle_seconds: number;
+  today_meeting_seconds: number;
   week_seconds: number;
-  active_seconds: number;
-  idle_seconds: number;
+  week_active_seconds: number;
+  week_idle_seconds: number;
+  week_meeting_seconds: number;
+  total_seconds: number;
 };
 type DayBucket = { date: string; worked_seconds: number; idle_seconds: number };
 type ActivitySummary = {
@@ -73,8 +77,9 @@ export function Dashboard({ userId }: { userId: string }) {
   };
 
   const pieData = [
-    { name: "Active", value: s?.active_seconds ?? 0, color: "#22c55e" },
-    { name: "Idle", value: s?.idle_seconds ?? 0, color: "#f59e0b" },
+    { name: "Active", value: s?.today_active_seconds ?? 0, color: "#22c55e" },
+    { name: "Idle", value: s?.today_idle_seconds ?? 0, color: "#f59e0b" },
+    { name: "Meeting", value: s?.today_meeting_seconds ?? 0, color: "#6366f1" },
   ];
   const barData =
     timeline.data?.map((d) => ({
@@ -105,7 +110,7 @@ export function Dashboard({ userId }: { userId: string }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-slate-200 p-5 dark:border-slate-800">
-          <h3 className="mb-3 font-semibold">Active vs Idle</h3>
+          <h3 className="mb-3 font-semibold">Today: Active / Idle / Meeting</h3>
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -118,14 +123,18 @@ export function Dashboard({ userId }: { userId: string }) {
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="flex justify-center gap-6 text-sm">
+          <div className="flex flex-wrap justify-center gap-x-6 gap-y-1 text-sm">
             <span className="inline-flex items-center gap-2">
               <span className="h-2.5 w-2.5 rounded-full bg-green-500" /> Active{" "}
-              {fmtHms(s?.active_seconds ?? 0)}
+              {fmtHms(s?.today_active_seconds ?? 0)}
             </span>
             <span className="inline-flex items-center gap-2">
               <span className="h-2.5 w-2.5 rounded-full bg-amber-500" /> Idle{" "}
-              {fmtHms(s?.idle_seconds ?? 0)}
+              {fmtHms(s?.today_idle_seconds ?? 0)}
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-indigo-500" /> Meeting{" "}
+              {fmtHms(s?.today_meeting_seconds ?? 0)}
             </span>
           </div>
         </div>

@@ -114,12 +114,19 @@ export async function login(email: string, password: string): Promise<LoginRespo
 
 // ---- Hours (own) ----
 
+// A "day's work" = active + idle + meeting (only Break is excluded). today/week
+// are period-scoped totals of that, each broken out so idle and meeting show on
+// their own. total_seconds is all-time worked.
 const hoursSummarySchema = z.object({
-  total_seconds: z.number(),
   today_seconds: z.number(),
+  today_active_seconds: z.number(),
+  today_idle_seconds: z.number(),
+  today_meeting_seconds: z.number(),
   week_seconds: z.number(),
-  active_seconds: z.number(),
-  idle_seconds: z.number(),
+  week_active_seconds: z.number(),
+  week_idle_seconds: z.number(),
+  week_meeting_seconds: z.number(),
+  total_seconds: z.number(),
 });
 export type HoursSummary = z.infer<typeof hoursSummarySchema>;
 

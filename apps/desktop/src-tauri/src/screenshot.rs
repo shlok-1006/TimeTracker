@@ -172,6 +172,43 @@ pub fn relaunch_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+/// One-time macOS repair for the unsigned→signed transition.
+///
+/// macOS ties a Screen Recording grant to the app's code signature. Machines
+/// that ran an earlier UNSIGNED build kept a grant that doesn't apply to this
+/// Developer ID–signed build — it can even still look "on" in the list while
+/// capture stays blocked, so the user is stuck no matter how many times they
+/// re-grant. This clears that stale entry once and re-registers the app with
+/// TCC (so it reappears in the Screen Recording list under the new signature)
+/// and the user's next grant sticks.
+///
+/// Safe by construction: runs only when permission is currently MISSING (a
+/// fresh process reads the true TCC state, so there is no valid grant to lose)
+/// and only ONCE per machine (marker file) — it never resets a working grant
+/// or re-prompts on later launches. No-op off macOS and for fresh installs
+/// (nothing to reset). Signed→signed updates from here never need this.
+pub fn repair_stale_grant_if_needed(data_dir: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let marker = data_dir.join(".tcc_repaired");
+        if marker.exists() || macos_permission::granted() {
+            return;
+        }
+        let _ = std::process::Command::new("tccutil")
+            .args(["reset", "ScreenCapture", "com.timetracker.desktop"])
+            .status();
+        let _ = std::fs::write(&marker, b"1");
+        // Re-register with TCC so the app reappears in the Screen Recording list
+        // (tied to the new signature) and the user gets a fresh prompt.
+        let _ = macos_permission::request();
+        tracing::info!("reset a stale Screen Recording grant from a prior build (one-time)");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = data_dir; // no-op off macOS
+    }
+}
+
 /// Background worker: after each randomized delay, capture + upload if Working.
 pub async fn run(state: DesktopState) {
     let client = reqwest::Client::new();

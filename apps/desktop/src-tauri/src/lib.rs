@@ -48,6 +48,11 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     let pool = db::connect(&db_path).await.context("open local database")?;
     db::migrate(&pool).await.context("run local migrations")?;
 
+    // One-time repair for machines upgrading from an earlier unsigned build:
+    // clear a stale Screen Recording grant that no longer matches this signed
+    // build so the user's fresh grant takes effect (see the function's docs).
+    screenshot::repair_stale_grant_if_needed(&data_dir);
+
     // Idle detection (configurable threshold) + background workers.
     // Idle is now read from the OS on demand (no sampler thread).
     let idle = idle::IdleHandle::from_env();

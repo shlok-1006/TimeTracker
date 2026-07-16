@@ -1,7 +1,15 @@
 name: Release (desktop installers)
 
-# Build signed-ready installers for Windows, macOS, and Linux.
-# Trigger by pushing a tag like `v0.1.0`, or run manually.
+# Build signed + notarized installers for Windows, macOS, and Linux, then
+# publish them to the PUBLIC downloads repo (source stays private).
+#
+#   build            -> tauri-action builds/signs/notarizes each platform and
+#                       uploads them to a DRAFT release on THIS (private) repo.
+#   publish-downloads -> copies those installers to the public downloads repo as
+#                        a published release, so employees can download them.
+#
+# Trigger by pushing a tag like `v0.1.0`. (workflow_dispatch builds only — the
+# publish step is skipped unless a tag is pushed.)
 on:
   push:
     tags: ["v*"]
@@ -58,7 +66,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # tauri-action builds the frontend (beforeBuildCommand) and bundles the
-      # platform installer (.msi/.exe, .dmg/.app, .deb/.AppImage), then uploads.
+      # platform installer (.msi/.exe, .dmg/.app, .deb/.AppImage), signs +
+      # notarizes it (macOS), then uploads it to a DRAFT release on this repo.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -85,3 +94,95 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+  # Copy the finished installers from this repo's draft release to the PUBLIC
+  # downloads repo, published, so employees can download without repo access.
+  # The source stays private; only the built binaries are mirrored.
+  publish-downloads:
+    name: Publish to downloads repo
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read this repo's draft release via the built-in token
+    steps:
+      - name: Mirror installers to the public downloads repo
+        env:
+          # Built-in token reads THIS (private) repo's draft release + assets.
+          SRC_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A fine-grained PAT scoped to the downloads repo (Contents: R/W).
+          DST_TOKEN: ${{ secrets.DOWNLOADS_TOKEN }}
+          DST_REPO: shlok-1006/TimeTracker-Download
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 <<'PY'
+          import os, json, base64, urllib.request, urllib.error
+          src_tok = os.environ["SRC_TOKEN"]; dst_tok = os.environ["DST_TOKEN"]
+          src = os.environ["GITHUB_REPOSITORY"]; dst = os.environ["DST_REPO"]
+          tag = os.environ["TAG"]
+          API = "https://api.github.com"; UP = "https://uploads.github.com"
+
+          def call(url, token, method="GET", data=None, raw=False,
+                   accept="application/vnd.github+json", ctype="application/json"):
+              body = data if raw else (json.dumps(data).encode() if data is not None else None)
+              r = urllib.request.Request(url, data=body, method=method, headers={
+                  "Authorization": "Bearer " + token, "Accept": accept, "Content-Type": ctype})
+              try:
+                  resp = urllib.request.urlopen(r); return resp.status, resp.read()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read()
+
+          # 1) locate this repo's release for the tag (drafts included)
+          _, b = call(f"{API}/repos/{src}/releases?per_page=50", src_tok)
+          rel = next((r for r in json.loads(b) if r["tag_name"] == tag and r["assets"]), None)
+          if not rel:
+              raise SystemExit(f"no source release with assets for {tag}")
+          assets = rel["assets"]; notes = rel.get("body") or ""
+          print(f"source release {rel['id']} ({len(assets)} assets)")
+
+          # 2) ensure the downloads repo has an initial commit (README) to tag
+          s, _ = call(f"{API}/repos/{dst}/contents/README.md", dst_tok)
+          if s == 404:
+              c = base64.b64encode(b"# TimeTracker Downloads\n\nOfficial installers. Source is private.\n").decode()
+              call(f"{API}/repos/{dst}/contents/README.md", dst_tok, "PUT",
+                   {"message": "Add README", "content": c})
+
+          # 3) get or create the published release on the downloads repo
+          s, b = call(f"{API}/repos/{dst}/releases/tags/{tag}", dst_tok)
+          if s == 200:
+              drel = json.loads(b)
+          else:
+              _, rb = call(f"{API}/repos/{dst}", dst_tok)
+              defb = json.loads(rb).get("default_branch", "main")
+              s, b = call(f"{API}/repos/{dst}/releases", dst_tok, "POST",
+                          {"tag_name": tag, "target_commitish": defb,
+                           "name": f"TimeTracker {tag}", "body": notes,
+                           "draft": False, "make_latest": "true"})
+              if s >= 300:
+                  raise SystemExit(f"create public release failed: {s} {b[:300]}")
+              drel = json.loads(b)
+          rid = drel["id"]; have = {a["name"] for a in drel.get("assets", [])}
+          print(f"downloads release {rid}: {drel.get('html_url')}")
+
+          # 4) copy each installer across (skip any already present)
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *a): return None
+          opener = urllib.request.build_opener(NoRedirect)
+          for a in assets:
+              name = a["name"]
+              if name in have:
+                  print("skip (exists):", name); continue
+              dl = urllib.request.Request(f"{API}/repos/{src}/releases/assets/{a['id']}",
+                  headers={"Authorization": "Bearer " + src_tok, "Accept": "application/octet-stream"})
+              try:
+                  data = opener.open(dl).read()
+              except urllib.error.HTTPError as e:
+                  if e.code in (301, 302, 303, 307):
+                      data = urllib.request.urlopen(e.headers["Location"]).read()
+                  else:
+                      print("download FAILED:", name, e.code); continue
+              s, _ = call(f"{UP}/repos/{dst}/releases/{rid}/assets?name={name}", dst_tok,
+                          "POST", data=data, raw=True, ctype="application/octet-stream")
+              print(f"uploaded {name} ({len(data)//1024} KB) -> {s}")
+          print("mirror complete")
+          PY

@@ -37,10 +37,14 @@ pub async fn insert_batch(
 
     for item in items {
         let idle = item.kind == "idle";
+        // Coerce a stale/deleted team reference to NULL rather than letting the
+        // FK violation abort the whole batch. A time entry must never be lost
+        // because the team it was tagged with was later removed — the interval
+        // still records; only the (secondary) team attribution drops.
         let res = sqlx::query!(
             r#"
             INSERT INTO intervals (id, user_id, start_utc, end_utc, idle, kind, team_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, (SELECT id FROM teams WHERE id = $7))
             ON CONFLICT (id) DO NOTHING
             "#,
             item.id,

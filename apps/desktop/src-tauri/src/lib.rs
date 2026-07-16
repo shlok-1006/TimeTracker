@@ -118,7 +118,8 @@ pub fn run() {
             client::request_ticket,
             activity_tracker::activity_today,
             screenshot::check_capture,
-            screenshot::request_capture_permission
+            screenshot::request_capture_permission,
+            screenshot::relaunch_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTracker desktop application");

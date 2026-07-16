@@ -145,12 +145,31 @@ pub async fn check_capture() -> Result<bool, String> {
 pub async fn request_capture_permission() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        Ok(macos_permission::request())
+        // `CGRequestScreenCaptureAccess` shows the native prompt only the FIRST
+        // time; once the app has been decided it silently no-ops. So when we're
+        // still not granted, also deep-link straight to the Screen Recording
+        // pane so the user can toggle TimeTracker on.
+        let granted = macos_permission::request();
+        if !granted {
+            let _ = std::process::Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                .spawn();
+        }
+        Ok(granted)
     }
     #[cfg(not(target_os = "macos"))]
     {
         Ok(true)
     }
+}
+
+/// Relaunch the app. Needed after granting Screen Recording: macOS caches the
+/// permission decision for the life of the process, so the running app keeps
+/// seeing "denied" until it restarts. This lets the user apply the grant from
+/// inside the app instead of manually quitting and reopening.
+#[tauri::command]
+pub fn relaunch_app(app: tauri::AppHandle) {
+    app.restart();
 }
 
 /// Background worker: after each randomized delay, capture + upload if Working.

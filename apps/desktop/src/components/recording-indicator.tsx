@@ -24,6 +24,12 @@ export function RecordingIndicator() {
     mutationFn: async () => (await invoker())<boolean>("request_capture_permission"),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["check_capture"] }),
   });
+  // macOS caches the permission decision per process, so enabling it in
+  // Settings only takes effect after the app restarts. This applies the grant
+  // without the user having to manually quit and reopen.
+  const relaunch = useMutation({
+    mutationFn: async () => (await invoker())<void>("relaunch_app"),
+  });
 
   const recording = status.data === "working"; // screenshots are taken only while working
   const permissionMissing = capture.data === false;
@@ -31,17 +37,23 @@ export function RecordingIndicator() {
   return (
     <>
       {permissionMissing && (
-        <div className="fixed inset-x-0 top-0 z-[60] bg-red-600 px-4 py-1.5 text-center text-sm font-medium text-white">
+        <div className="fixed inset-x-0 top-0 z-[60] bg-red-600 px-4 py-2 text-center text-sm font-medium text-white">
           Screen recording is not permitted — screenshots will miss your work.{" "}
           <span className="font-normal">
-            macOS: System Settings → Privacy &amp; Security → Screen Recording →
-            enable TimeTracker, then reopen the app.
+            Step 1: click <b>Open settings</b> and enable <b>TimeTracker</b> under Screen
+            Recording. Step 2: click <b>Restart app</b> to apply it.
           </span>{" "}
           <button
             onClick={() => requestPermission.mutate()}
             className="ml-2 rounded bg-white/20 px-2 py-0.5 text-xs font-semibold hover:bg-white/30"
           >
-            Grant permission
+            Open settings
+          </button>
+          <button
+            onClick={() => relaunch.mutate()}
+            className="ml-2 rounded bg-white/20 px-2 py-0.5 text-xs font-semibold hover:bg-white/30"
+          >
+            Restart app
           </button>
         </div>
       )}

@@ -25,43 +25,51 @@ pub struct IntervalDto {
     pub team_id: Option<Uuid>,
 }
 
-/// Insert a batch of intervals for `user_id` in a single transaction.
+/// Insert a batch of intervals for `user_id` in a SINGLE bulk statement.
 /// Idempotent (`ON CONFLICT (id) DO NOTHING`). Returns rows inserted.
+///
+/// Uses `UNNEST` so the whole batch is one round-trip instead of one INSERT per
+/// row in a transaction — critical when a client drains a large offline backlog
+/// (the old per-row loop was slow enough to time out, so those users' time
+/// never synced). A stale/deleted `team_id` is coerced to NULL per row so a
+/// removed team can't abort the batch.
 pub async fn insert_batch(
     pool: &PgPool,
     user_id: Uuid,
     items: &[IntervalDto],
 ) -> Result<u64, AppError> {
-    let mut tx = pool.begin().await?;
-    let mut inserted = 0u64;
-
-    for item in items {
-        let idle = item.kind == "idle";
-        // Coerce a stale/deleted team reference to NULL rather than letting the
-        // FK violation abort the whole batch. A time entry must never be lost
-        // because the team it was tagged with was later removed — the interval
-        // still records; only the (secondary) team attribution drops.
-        let res = sqlx::query!(
-            r#"
-            INSERT INTO intervals (id, user_id, start_utc, end_utc, idle, kind, team_id)
-            VALUES ($1, $2, $3, $4, $5, $6, (SELECT id FROM teams WHERE id = $7))
-            ON CONFLICT (id) DO NOTHING
-            "#,
-            item.id,
-            user_id,
-            item.start_utc,
-            item.end_utc,
-            idle,
-            item.kind,
-            item.team_id
-        )
-        .execute(&mut *tx)
-        .await?;
-        inserted += res.rows_affected();
+    if items.is_empty() {
+        return Ok(0);
     }
+    let ids: Vec<Uuid> = items.iter().map(|i| i.id).collect();
+    let starts: Vec<DateTime<Utc>> = items.iter().map(|i| i.start_utc).collect();
+    let ends: Vec<DateTime<Utc>> = items.iter().map(|i| i.end_utc).collect();
+    let idles: Vec<bool> = items.iter().map(|i| i.kind == "idle").collect();
+    let kinds: Vec<String> = items.iter().map(|i| i.kind.clone()).collect();
+    let team_ids: Vec<Option<Uuid>> = items.iter().map(|i| i.team_id).collect();
 
-    tx.commit().await?;
-    Ok(inserted)
+    let res = sqlx::query!(
+        r#"
+        INSERT INTO intervals (id, user_id, start_utc, end_utc, idle, kind, team_id)
+        SELECT t.id, $2, t.start_utc, t.end_utc, t.idle, t.kind,
+               (SELECT id FROM teams WHERE id = t.team_id)
+        FROM UNNEST($1::uuid[], $3::timestamptz[], $4::timestamptz[],
+                    $5::bool[], $6::text[], $7::uuid[])
+             AS t(id, start_utc, end_utc, idle, kind, team_id)
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        &ids,
+        user_id,
+        &starts,
+        &ends,
+        &idles,
+        &kinds,
+        &team_ids as &[Option<Uuid>],
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(res.rows_affected())
 }
 
 /// Dashboard hours summary (computed from intervals; Rule 2).

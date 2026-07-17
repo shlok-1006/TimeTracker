@@ -15,6 +15,10 @@ use crate::interval_repository::{self, Interval};
 use crate::timer::DesktopState;
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(15);
+/// Max intervals per POST. A large offline backlog is drained in bounded chunks
+/// so request bodies stay small and each insert is fast — one giant request
+/// could time out or exceed the server's body limit and then never get acked.
+const SYNC_CHUNK: usize = 500;
 
 #[derive(Serialize)]
 struct IntervalPayload {
@@ -55,13 +59,18 @@ async fn sync_once(state: &DesktopState) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let payload: Vec<IntervalPayload> = pending.iter().map(IntervalPayload::from).collect();
-    http::post_json("/intervals", serde_json::to_value(&payload)?)
-        .await
-        .map_err(|e| anyhow::anyhow!(e))?;
+    // Drain in bounded chunks. Each chunk is acked (marked synced) on its own,
+    // so a large backlog makes steady progress and a failure only retries the
+    // un-acked remainder rather than the whole pile.
+    for chunk in pending.chunks(SYNC_CHUNK) {
+        let payload: Vec<IntervalPayload> = chunk.iter().map(IntervalPayload::from).collect();
+        http::post_json("/intervals", serde_json::to_value(&payload)?)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
 
-    let ids: Vec<Uuid> = pending.iter().map(|i| i.id).collect();
-    interval_repository::mark_synced(&state.pool, &ids).await?;
-    tracing::info!("synced {} interval(s)", ids.len());
+        let ids: Vec<Uuid> = chunk.iter().map(|i| i.id).collect();
+        interval_repository::mark_synced(&state.pool, &ids).await?;
+        tracing::info!("synced {} interval(s)", ids.len());
+    }
     Ok(())
 }

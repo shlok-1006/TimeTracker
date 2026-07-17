@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO intervals (id, user_id, start_utc, end_utc, idle, kind, team_id)\n        SELECT t.id, $2, t.start_utc, t.end_utc, t.idle, t.kind,\n               (SELECT id FROM teams WHERE id = t.team_id)\n        FROM UNNEST($1::uuid[], $3::timestamptz[], $4::timestamptz[],\n                    $5::bool[], $6::text[], $7::uuid[])\n             AS t(id, start_utc, end_utc, idle, kind, team_id)\n        ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid",
+        "TimestamptzArray",
+        "TimestamptzArray",
+        "BoolArray",
+        "TextArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ef52038ad583a6a93e607993352237600a82980c60521b021e56186494e94d6e"
+}

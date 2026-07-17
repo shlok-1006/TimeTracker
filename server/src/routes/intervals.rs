@@ -1,5 +1,6 @@
 //! Interval sync + hours routes (protected by `auth_middleware`).
 
+use axum::extract::DefaultBodyLimit;
 use axum::{extract::State, routing::get, routing::post, Json, Router};
 use serde_json::{json, Value};
 
@@ -40,6 +41,12 @@ async fn my_hours(State(state): State<AppState>, user: AuthUser) -> Result<Json<
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/intervals", post(create_intervals))
+        // Raise the body limit well above Axum's 2 MB default: a client draining
+        // a large offline backlog can POST many thousands of intervals at once,
+        // and a 413 here would stall its sync forever (never acked → retried).
+        .route(
+            "/intervals",
+            post(create_intervals).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .route("/me/hours", get(my_hours))
 }

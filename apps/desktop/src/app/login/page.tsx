@@ -7,7 +7,7 @@ import { useSession } from "@/lib/session";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { session, hydrated, hydrate, setSession } = useSession();
+  const { session, hydrated, hydrate, setSession, expired } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [changing, setChanging] = useState(false);
@@ -88,6 +88,11 @@ export default function LoginPage() {
           {changing ? "Change your password" : "Employee sign in"}
         </p>
       </header>
+      {expired && !changing && (
+        <p className="rounded-md bg-amber-100 px-3 py-2 text-sm text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+          Your session expired. Please sign in again to keep your time tracking.
+        </p>
+      )}
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <label className="flex flex-col gap-1 text-sm">
           Email

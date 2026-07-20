@@ -270,6 +270,37 @@ pub async fn restore_session() -> Result<Option<EmployeeSession>, String> {
     }
 }
 
+/// Definitive session-health check for the UI's periodic re-verification.
+///
+/// `Ok(true)`  — authenticated (token valid, or refreshed successfully).
+/// `Ok(false)` — signed out: the refresh token was rejected and the stored
+///               tokens have been cleared. The UI must return to the login
+///               screen so the user re-signs in and tracking resumes syncing.
+/// `Err(_)`    — transient (network / server unreachable). The UI must NOT log
+///               the user out on this — the session is presumed still valid.
+///
+/// This is what lets us catch a user who is "working" locally but whose session
+/// has quietly died: instead of silently failing to sync, the app surfaces it.
+#[tauri::command]
+pub async fn session_alive() -> Result<bool, String> {
+    if stored_refresh().is_none() {
+        return Ok(false); // already signed out (no credentials at all)
+    }
+    match crate::http::get_json("/me").await {
+        Ok(_) => Ok(true),
+        // `http` refreshes on 401; a rejected refresh token makes `do_refresh`
+        // delete the stored tokens. Tokens gone now => definitively signed out;
+        // still present => the failure was transient, keep the session.
+        Err(e) => {
+            if stored_refresh().is_none() {
+                Ok(false)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 /// Log out: revoke the refresh token server-side (best effort) and clear the keychain.
 #[tauri::command]
 pub async fn logout() -> Result<(), String> {

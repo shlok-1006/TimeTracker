@@ -51,6 +51,10 @@ pub(crate) fn day_item(storage: &StorageClient, s: &DayScreenshot, now: DateTime
 /// `POST /uploads/presign` — get a short-lived presigned PUT URL + storage key.
 async fn presign(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, AppError> {
     let p = upload_service::presign_screenshot(&state.storage, user.id, Utc::now());
+    // Pipeline observability: a presign means the desktop is attempting a
+    // capture (it asks for the URL before capturing). Pair with the "saved"
+    // log below to see where a user's screenshots stop.
+    tracing::info!(user_id = %user.id, "screenshot pipeline: presign issued");
     Ok(Json(json!({
         "url": p.url,
         "method": p.method,
@@ -85,11 +89,15 @@ async fn save_screenshot(
     // SEC-11: enforce the exact `<user_id>/<yyyymmdd>/<uuid>.jpg` shape — a
     // prefix check alone allows `<user>/../<victim>/...` traversal.
     if !upload_service::is_valid_screenshot_key(&body.storage_key, user.id) {
+        tracing::warn!(user_id = %user.id, key = %body.storage_key,
+            "screenshot pipeline: metadata REJECTED (invalid storage key)");
         return Err(AppError::BadRequest(
             "storage_key is not a valid key within your namespace".into(),
         ));
     }
     if !screenshots::is_valid_captured_status(&body.captured_status) {
+        tracing::warn!(user_id = %user.id, status = %body.captured_status,
+            "screenshot pipeline: metadata REJECTED (invalid captured_status)");
         return Err(AppError::BadRequest(format!(
             "invalid captured_status: {:?}",
             body.captured_status
@@ -104,6 +112,7 @@ async fn save_screenshot(
         &body.captured_status,
     )
     .await?;
+    tracing::info!(user_id = %user.id, %id, "screenshot pipeline: metadata saved");
     Ok(Json(json!({ "id": id })))
 }
 

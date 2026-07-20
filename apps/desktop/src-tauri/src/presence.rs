@@ -8,13 +8,16 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_notification::NotificationExt;
 
 use crate::auth;
 use crate::http;
 use crate::timer::DesktopState;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(45);
+/// How often to nudge someone who's still on a break.
+const BREAK_REMINDER_INTERVAL: Duration = Duration::from_secs(600); // 10 minutes
 
 /// Pure status derivation.
 ///
@@ -47,7 +50,27 @@ pub fn derive_status(
 #[tauri::command]
 pub fn set_break(state: State<'_, DesktopState>, on: bool) -> Result<(), String> {
     state.on_break.store(on, Ordering::Relaxed);
+    // Starting a fresh break re-enables reminders — a new break should nudge
+    // again even if the previous one was muted with "Don't remind me".
+    if on {
+        state.break_reminders_muted.store(false, Ordering::Relaxed);
+    }
     Ok(())
+}
+
+/// Silence break reminders for the CURRENT break (the "Don't remind me" action).
+/// The next break re-enables them.
+#[tauri::command]
+pub fn mute_break_reminders(state: State<'_, DesktopState>) -> Result<(), String> {
+    state.break_reminders_muted.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Whether reminders are currently muted (so the UI can hide the button once
+/// the user has opted out for this break).
+#[tauri::command]
+pub fn break_reminders_muted(state: State<'_, DesktopState>) -> Result<bool, String> {
+    Ok(state.break_reminders_muted.load(Ordering::Relaxed))
 }
 
 #[tauri::command]
@@ -83,6 +106,30 @@ pub async fn run(state: DesktopState) {
             tracing::warn!("presence heartbeat failed (will retry): {e}");
         }
         tokio::time::sleep(HEARTBEAT_INTERVAL).await;
+    }
+}
+
+/// Background reminder: while a break is actually in progress (session running
+/// + on break) and the user hasn't muted it, send a native notification every
+/// `BREAK_REMINDER_INTERVAL` nudging them to resume. "Don't remind me" mutes the
+/// current break via `mute_break_reminders`.
+pub async fn run_break_reminders(app: AppHandle, state: DesktopState) {
+    loop {
+        tokio::time::sleep(BREAK_REMINDER_INTERVAL).await;
+        let on_break = state.on_break.load(Ordering::Relaxed);
+        let muted = state.break_reminders_muted.load(Ordering::Relaxed);
+        let tracking = state.tracker.lock().await.is_some();
+        if on_break && tracking && !muted {
+            if let Err(e) = app
+                .notification()
+                .builder()
+                .title("Still on a break?")
+                .body("TimeTracker is paused. Resume when you're back — or pick \"Don't remind me\" in the app to silence this break.")
+                .show()
+            {
+                tracing::warn!("break reminder notification failed: {e}");
+            }
+        }
     }
 }
 

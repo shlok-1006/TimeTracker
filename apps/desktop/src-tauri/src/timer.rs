@@ -49,6 +49,9 @@ pub struct DesktopState {
     pub tracker: Arc<Mutex<Option<ActiveSession>>>,
     pub on_break: Arc<AtomicBool>,
     pub in_meeting: Arc<AtomicBool>,
+    /// Suppress break reminders for the CURRENT break (reset when a new break
+    /// starts). Set by the "Don't remind me" action.
+    pub break_reminders_muted: Arc<AtomicBool>,
     pub idle: IdleHandle,
     segment: Arc<Mutex<Option<RecSegment>>>,
 }
@@ -60,6 +63,7 @@ impl DesktopState {
             tracker: Arc::new(Mutex::new(None)),
             on_break: Arc::new(AtomicBool::new(false)),
             in_meeting: Arc::new(AtomicBool::new(false)),
+            break_reminders_muted: Arc::new(AtomicBool::new(false)),
             idle,
             segment: Arc::new(Mutex::new(None)),
         }

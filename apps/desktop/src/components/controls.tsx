@@ -34,6 +34,12 @@ export function Controls({ userId }: { userId: string }) {
     queryFn: async () => (await invoker())<boolean>("is_in_meeting"),
     refetchInterval: 5000,
   });
+  const { data: remindersMuted } = useQuery({
+    queryKey: ["break_reminders_muted"],
+    queryFn: async () => (await invoker())<boolean>("break_reminders_muted"),
+    refetchInterval: 5000,
+    enabled: !!onBreak,
+  });
   const { data: teamsData } = useQuery({
     queryKey: ["me_teams"],
     queryFn: async () => (await invoker())<Team[]>("me_teams"),
@@ -146,6 +152,22 @@ export function Controls({ userId }: { userId: string }) {
               {inMeeting ? "End meeting" : "Meeting mode"}
             </button>
           </div>
+          {onBreak && (
+            <div className="flex items-center justify-between rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:bg-blue-950/40 dark:text-blue-200">
+              <span>You&apos;re on a break — tracking is paused.</span>
+              {remindersMuted ? (
+                <span className="text-xs text-blue-500 dark:text-blue-400">Reminders off</span>
+              ) : (
+                <button
+                  disabled={busy}
+                  onClick={() => run((i) => i("mute_break_reminders"))}
+                  className="text-xs font-medium underline hover:no-underline disabled:opacity-50"
+                >
+                  Don&apos;t remind me
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
       {error && <p className="text-sm text-red-600">{error}</p>}

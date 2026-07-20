@@ -62,6 +62,7 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     tauri::async_runtime::spawn(timer::run_recorder(state.clone()));
     tauri::async_runtime::spawn(sync_worker::run(state.clone()));
     tauri::async_runtime::spawn(presence::run(state.clone()));
+    tauri::async_runtime::spawn(presence::run_break_reminders(handle.clone(), state.clone()));
     tauri::async_runtime::spawn(activity_tracker::run(state.clone()));
     tauri::async_runtime::spawn(screenshot::run(state));
     Ok(())
@@ -70,6 +71,13 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Native break-reminder notifications.
+        .plugin(tauri_plugin_notification::init())
+        // Launch at system login so tracking resumes when the machine starts.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::block_on(init(handle)).map_err(|err| {
@@ -84,6 +92,14 @@ pub fn run() {
                     .show();
                 err
             })?;
+            // Register the app to launch at login (idempotent). Best-effort — a
+            // failure here shouldn't block startup.
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                if let Err(e) = app.autolaunch().enable() {
+                    tracing::warn!("could not enable launch-at-login: {e}");
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -99,6 +115,8 @@ pub fn run() {
             timer::get_total_seconds,
             presence::set_break,
             presence::is_on_break,
+            presence::mute_break_reminders,
+            presence::break_reminders_muted,
             presence::set_meeting,
             presence::is_in_meeting,
             presence::current_status,

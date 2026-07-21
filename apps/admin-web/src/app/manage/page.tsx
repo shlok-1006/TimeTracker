@@ -10,9 +10,11 @@ import {
   resetPassword,
   fetchUserManagers,
   setUserManagers,
+  setUserEmploymentType,
   type ManagedUser,
 } from "@/lib/api";
 import { useAdminSession } from "@/components/use-admin-session";
+import { EMPLOYMENT_TYPES, EMPLOYMENT_TYPE_LABEL } from "@timetracker/shared";
 
 /** Per-employee manager editor: shows the current managers as chips and lets
  *  HR assign any set of project managers (several, one, or none). */
@@ -96,6 +98,30 @@ function ManagersCell({ userId, pms }: { userId: string; pms: ManagedUser[] }) {
   );
 }
 
+/** Inline employment-type editor: HR changes the classification directly from
+ *  the users table; the change is saved immediately. */
+function EmploymentTypeCell({ user }: { user: ManagedUser }) {
+  const qc = useQueryClient();
+  const save = useMutation({
+    mutationFn: (t: ManagedUser["employment_type"]) => setUserEmploymentType(user.id, t),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+  });
+  return (
+    <select
+      value={user.employment_type}
+      disabled={save.isPending}
+      onChange={(e) => save.mutate(e.target.value as ManagedUser["employment_type"])}
+      className="rounded-md border border-input bg-background px-2 py-1 text-xs disabled:opacity-50"
+    >
+      {EMPLOYMENT_TYPES.map((t) => (
+        <option key={t} value={t}>
+          {EMPLOYMENT_TYPE_LABEL[t]}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 const ROLE_LABEL: Record<string, string> = {
   employee: "Employee",
   project_manager: "Project manager",
@@ -125,6 +151,7 @@ export default function ManageUsersPage() {
     email: "",
     password: "",
     role: "employee" as ManagedUser["role"],
+    employment_type: "employee" as ManagedUser["employment_type"],
     manager_id: "",
   });
   const [formError, setFormError] = useState<string | null>(null);
@@ -136,10 +163,18 @@ export default function ManageUsersPage() {
         email: form.email,
         password: form.password,
         role: form.role,
+        employment_type: form.employment_type,
         manager_id: form.manager_id || null,
       }),
     onSuccess: () => {
-      setForm({ name: "", email: "", password: "", role: "employee", manager_id: "" });
+      setForm({
+        name: "",
+        email: "",
+        password: "",
+        role: "employee",
+        employment_type: "employee",
+        manager_id: "",
+      });
       setFormError(null);
       qc.invalidateQueries({ queryKey: ["users"] });
     },
@@ -222,6 +257,20 @@ export default function ManageUsersPage() {
             <option value="project_manager">Project manager</option>
             <option value="hr">HR</option>
           </select>
+          <select
+            value={form.employment_type}
+            onChange={(e) =>
+              setForm({ ...form, employment_type: e.target.value as ManagedUser["employment_type"] })
+            }
+            className="rounded-md border border-input bg-background px-3 py-2"
+            aria-label="Employment type"
+          >
+            {EMPLOYMENT_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {EMPLOYMENT_TYPE_LABEL[t]}
+              </option>
+            ))}
+          </select>
           {form.role === "employee" && (
             <select
               value={form.manager_id}
@@ -259,6 +308,7 @@ export default function ManageUsersPage() {
               <tr className="border-b text-left text-muted-foreground">
                 <th className="py-2 font-medium">Name</th>
                 <th className="py-2 font-medium">Role</th>
+                <th className="py-2 font-medium">Employment type</th>
                 <th className="py-2 font-medium">Managers</th>
                 <th className="py-2 font-medium" />
               </tr>
@@ -271,6 +321,9 @@ export default function ManageUsersPage() {
                     <div className="text-xs text-muted-foreground">{u.email}</div>
                   </td>
                   <td className="py-2">{ROLE_LABEL[u.role] ?? u.role}</td>
+                  <td className="py-2">
+                    <EmploymentTypeCell user={u} />
+                  </td>
                   <td className="py-2">
                     {u.role === "employee" ? (
                       <ManagersCell userId={u.id} pms={managers} />

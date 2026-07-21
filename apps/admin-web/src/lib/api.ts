@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { roleSchema, type Role } from "@timetracker/shared";
+import {
+  roleSchema,
+  type Role,
+  employmentTypeSchema,
+  type EmploymentType,
+} from "@timetracker/shared";
 import { useAuthStore } from "@/lib/auth-store";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:9000";
@@ -771,6 +776,7 @@ const userSummarySchema = z.object({
   name: z.string(),
   email: z.string(),
   role: roleSchema,
+  employment_type: employmentTypeSchema,
   manager_id: z.string().nullable(),
   team_id: z.string().nullable(),
   created_at: z.string(),
@@ -782,6 +788,7 @@ export type NewUser = {
   email: string;
   password: string;
   role: Role;
+  employment_type: EmploymentType;
   manager_id?: string | null;
 };
 
@@ -795,6 +802,16 @@ export async function createUser(u: NewUser): Promise<ManagedUser> {
 
 export async function deleteUser(id: string): Promise<void> {
   await authedJson("DELETE", `/admin/users/${id}`);
+}
+
+/** Set a user's employment type (`PUT /admin/users/:id/employment-type`, HR). */
+export async function setUserEmploymentType(
+  id: string,
+  employmentType: EmploymentType,
+): Promise<void> {
+  await authedJson("PUT", `/admin/users/${id}/employment-type`, {
+    employment_type: employmentType,
+  });
 }
 
 /** A former employee, retained after removal (Alumni section). */

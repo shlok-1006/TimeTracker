@@ -10,6 +10,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::employment_type::EmploymentType;
 use crate::error::AppError;
 use crate::role::UserRole;
 
@@ -20,6 +21,7 @@ pub struct UserSummary {
     pub name: String,
     pub email: String,
     pub role: UserRole,
+    pub employment_type: EmploymentType,
     pub manager_id: Option<Uuid>,
     pub team_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -32,6 +34,7 @@ pub struct User {
     pub email: String,
     pub password_hash: String,
     pub role: UserRole,
+    pub employment_type: EmploymentType,
     pub manager_id: Option<Uuid>,
     pub team_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -139,11 +142,18 @@ fn parse_role(s: &str) -> Result<UserRole, AppError> {
         .map_err(|e| AppError::Internal(anyhow::anyhow!("invalid role stored in db: {e}")))
 }
 
+fn parse_employment_type(s: &str) -> Result<EmploymentType, AppError> {
+    s.parse::<EmploymentType>().map_err(|e| {
+        AppError::Internal(anyhow::anyhow!("invalid employment_type stored in db: {e}"))
+    })
+}
+
 /// Look up a user by email. Returns `None` if no such user exists.
 pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, AppError> {
     let row = sqlx::query!(
         r#"
         SELECT id, name, email, password_hash, role::text AS "role!",
+               employment_type::text AS "employment_type!",
                manager_id, team_id, created_at, updated_at
         FROM users
         WHERE email = $1
@@ -161,6 +171,7 @@ pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, A
             email: r.email,
             password_hash: r.password_hash,
             role: parse_role(&r.role)?,
+            employment_type: parse_employment_type(&r.employment_type)?,
             manager_id: r.manager_id,
             team_id: r.team_id,
             created_at: r.created_at,
@@ -174,6 +185,7 @@ pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<User>, AppErro
     let row = sqlx::query!(
         r#"
         SELECT id, name, email, password_hash, role::text AS "role!",
+               employment_type::text AS "employment_type!",
                manager_id, team_id, created_at, updated_at
         FROM users
         WHERE id = $1
@@ -191,6 +203,7 @@ pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<User>, AppErro
             email: r.email,
             password_hash: r.password_hash,
             role: parse_role(&r.role)?,
+            employment_type: parse_employment_type(&r.employment_type)?,
             manager_id: r.manager_id,
             team_id: r.team_id,
             created_at: r.created_at,
@@ -221,6 +234,7 @@ pub async fn upsert(
             team_id = EXCLUDED.team_id,
             updated_at = now()
         RETURNING id, name, email, password_hash, role::text AS "role!",
+                  employment_type::text AS "employment_type!",
                   manager_id, team_id, created_at, updated_at
         "#,
         name,
@@ -238,6 +252,7 @@ pub async fn upsert(
         email: r.email,
         password_hash: r.password_hash,
         role: parse_role(&r.role)?,
+        employment_type: parse_employment_type(&r.employment_type)?,
         manager_id: r.manager_id,
         team_id: r.team_id,
         created_at: r.created_at,
@@ -248,7 +263,9 @@ pub async fn upsert(
 /// List all users (admin management view).
 pub async fn list_all(pool: &PgPool) -> Result<Vec<UserSummary>, AppError> {
     let rows = sqlx::query!(
-        r#"SELECT id, name, email, role::text AS "role!", manager_id, team_id, created_at
+        r#"SELECT id, name, email, role::text AS "role!",
+                  employment_type::text AS "employment_type!",
+                  manager_id, team_id, created_at
            FROM users ORDER BY name"#
     )
     .fetch_all(pool)
@@ -261,6 +278,7 @@ pub async fn list_all(pool: &PgPool) -> Result<Vec<UserSummary>, AppError> {
                 name: r.name,
                 email: r.email,
                 role: parse_role(&r.role)?,
+                employment_type: parse_employment_type(&r.employment_type)?,
                 manager_id: r.manager_id,
                 team_id: r.team_id,
                 created_at: r.created_at,
@@ -332,7 +350,9 @@ pub async fn create(
         r#"
         INSERT INTO users (name, email, password_hash, role, manager_id)
         VALUES ($1, $2, $3, $4::text::user_role, $5)
-        RETURNING id, name, email, role::text AS "role!", manager_id, team_id, created_at
+        RETURNING id, name, email, role::text AS "role!",
+                  employment_type::text AS "employment_type!",
+                  manager_id, team_id, created_at
         "#,
         name,
         email,
@@ -358,6 +378,7 @@ pub async fn create(
                 name: r.name,
                 email: r.email,
                 role: parse_role(&r.role)?,
+                employment_type: parse_employment_type(&r.employment_type)?,
                 manager_id: r.manager_id,
                 team_id: r.team_id,
                 created_at: r.created_at,
@@ -385,6 +406,25 @@ pub async fn set_password(pool: &PgPool, id: Uuid, password_hash: &str) -> Resul
         "UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1",
         id,
         password_hash
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Set a user's employment type (HR classification). Returns whether a row was
+/// updated.
+pub async fn set_employment_type(
+    pool: &PgPool,
+    id: Uuid,
+    employment_type: EmploymentType,
+) -> Result<bool, AppError> {
+    let et = employment_type.as_str();
+    let res = sqlx::query!(
+        "UPDATE users SET employment_type = $2::text::employment_type, updated_at = now()
+         WHERE id = $1",
+        id,
+        et
     )
     .execute(pool)
     .await?;

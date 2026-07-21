@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, name, email, role::text AS \"role!\", manager_id, team_id, created_at\n           FROM users ORDER BY name",
+  "query": "SELECT id, name, email, role::text AS \"role!\",\n                  employment_type::text AS \"employment_type!\",\n                  manager_id, team_id, created_at\n           FROM users ORDER BY name",
   "describe": {
     "columns": [
       {
@@ -25,16 +25,21 @@
       },
       {
         "ordinal": 4,
+        "name": "employment_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
         "name": "manager_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "team_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "created_at",
         "type_info": "Timestamptz"
       }
@@ -47,10 +52,11 @@
       false,
       false,
       null,
+      null,
       true,
       true,
       false
     ]
   },
-  "hash": "21f48c535ddf8ea0e58a95ea7a74aa5f949d3a90853f6a686be929c66b554505"
+  "hash": "eea9a0b86c46d79eabab64359fd423eafe9b4f7786c700becb83edf93f436f5f"
 }

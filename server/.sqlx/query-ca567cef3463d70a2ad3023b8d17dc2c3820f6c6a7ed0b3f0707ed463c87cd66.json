@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO users (name, email, password_hash, role, team_id)\n        VALUES ($1, $2, $3, $4::text::user_role, $5)\n        ON CONFLICT (email) DO UPDATE SET\n            name = EXCLUDED.name,\n            password_hash = EXCLUDED.password_hash,\n            role = EXCLUDED.role,\n            team_id = EXCLUDED.team_id,\n            updated_at = now()\n        RETURNING id, name, email, password_hash, role::text AS \"role!\",\n                  manager_id, team_id, created_at, updated_at\n        ",
+  "query": "\n        SELECT id, name, email, password_hash, role::text AS \"role!\",\n               employment_type::text AS \"employment_type!\",\n               manager_id, team_id, created_at, updated_at\n        FROM users\n        WHERE email = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -30,32 +30,33 @@
       },
       {
         "ordinal": 5,
+        "name": "employment_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
         "name": "manager_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "team_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Uuid"
+        "Text"
       ]
     },
     "nullable": [
@@ -64,11 +65,12 @@
       false,
       false,
       null,
+      null,
       true,
       true,
       false,
       false
     ]
   },
-  "hash": "89114c2a3b8685e14c691d8ea95c3391e8f7a0d37ff9ff315bf6d87a3253d02e"
+  "hash": "ca567cef3463d70a2ad3023b8d17dc2c3820f6c6a7ed0b3f0707ed463c87cd66"
 }

@@ -21,6 +21,7 @@ use crate::db::{
     alumni, analysis_results, analysis_runs, audit, intervals, presence, refresh_tokens,
     screenshots, users,
 };
+use crate::employment_type::EmploymentType;
 use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
 use crate::role::UserRole;
@@ -415,12 +416,18 @@ async fn list_users(
     Ok(Json(json!(users::list_all(&state.db).await?)))
 }
 
+fn default_employment_type() -> String {
+    "employee".into()
+}
+
 #[derive(Deserialize)]
 struct CreateUser {
     name: String,
     email: String,
     password: String,
     role: String,
+    #[serde(default = "default_employment_type")]
+    employment_type: String,
     #[serde(default)]
     manager_id: Option<Uuid>,
 }
@@ -433,6 +440,9 @@ async fn create_user(
 ) -> Result<Json<Value>, AppError> {
     let role = UserRole::from_str(&body.role)
         .map_err(|_| AppError::BadRequest("role must be employee, project_manager or hr".into()))?;
+    let employment_type = EmploymentType::from_str(&body.employment_type).map_err(|_| {
+        AppError::BadRequest("employment type must be employee, contractor or intern".into())
+    })?;
     if body.password.len() < 8 {
         return Err(AppError::BadRequest(
             "password must be at least 8 characters".into(),
@@ -443,7 +453,7 @@ async fn create_user(
     }
 
     let password_hash = auth::hash_password(&body.password).map_err(AppError::Internal)?;
-    let user = users::create(
+    let mut user = users::create(
         &state.db,
         body.name.trim(),
         body.email.trim(),
@@ -452,6 +462,11 @@ async fn create_user(
         body.manager_id,
     )
     .await?;
+    // create() defaults employment_type to 'employee'; apply the chosen value.
+    if employment_type != EmploymentType::Employee {
+        users::set_employment_type(&state.db, user.id, employment_type).await?;
+        user.employment_type = employment_type;
+    }
     audit::log(&state.db, hr.id, "user.create", "user", Some(user.id)).await;
 
     // Best-effort: email the new user their credentials + download link + setup
@@ -620,6 +635,37 @@ async fn set_managers(
     )))
 }
 
+#[derive(Deserialize)]
+struct SetEmploymentType {
+    employment_type: String,
+}
+
+/// `PUT /admin/users/:id/employment-type` (HR) — classify a worker as employee,
+/// contractor, or intern (orthogonal to their RBAC role). Logged.
+async fn set_employment_type(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Path(target): Path<Uuid>,
+    Json(body): Json<SetEmploymentType>,
+) -> Result<Json<Value>, AppError> {
+    let et = EmploymentType::from_str(&body.employment_type).map_err(|_| {
+        AppError::BadRequest("employment type must be employee, contractor or intern".into())
+    })?;
+    if users::find_by_id(&state.db, target).await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    users::set_employment_type(&state.db, target, et).await?;
+    audit::log(
+        &state.db,
+        hr.id,
+        "user.set_employment_type",
+        "user",
+        Some(target),
+    )
+    .await;
+    Ok(Json(json!({ "employment_type": et.as_str() })))
+}
+
 /// `GET /admin/alumni` (HR only) — former employees, most recently removed first.
 async fn list_alumni(
     State(state): State<AppState>,
@@ -641,6 +687,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/admin/users/:id/managers",
             get(get_managers).put(set_managers),
+        )
+        .route(
+            "/admin/users/:id/employment-type",
+            axum::routing::put(set_employment_type),
         )
         .route("/admin/users/:id/hours", get(user_hours))
         .route("/admin/users/:id/screenshots", get(user_screenshots))

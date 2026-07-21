@@ -20,6 +20,7 @@ pub mod middleware;
 pub mod presence;
 pub mod rate_limit;
 pub mod report_service;
+pub mod employment_type;
 pub mod role;
 pub mod routes;
 pub mod sampler;

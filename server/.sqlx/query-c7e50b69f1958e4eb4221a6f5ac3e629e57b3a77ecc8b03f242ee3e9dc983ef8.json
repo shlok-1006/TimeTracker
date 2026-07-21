@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM leave_allocations\n         WHERE user_id = $1 AND leave_type_id = $2 AND year = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c7e50b69f1958e4eb4221a6f5ac3e629e57b3a77ecc8b03f242ee3e9dc983ef8"
+}

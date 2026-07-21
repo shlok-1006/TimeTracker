@@ -78,3 +78,110 @@ async fn hr_config_forbidden_for_non_hr() {
         StatusCode::FORBIDDEN
     );
 }
+
+// ---- DB-backed: category defaults + manual override / adjust / delete ----
+
+async fn real_pool() -> Option<sqlx::PgPool> {
+    let url = std::env::var("DATABASE_URL").ok()?;
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .ok()
+}
+
+#[tokio::test]
+async fn category_defaults_and_manual_overrides() {
+    use server::db::{leave, users};
+    use server::employment_type::EmploymentType;
+
+    let Some(pool) = real_pool().await else {
+        eprintln!("skipping leave category test: DATABASE_URL not set");
+        return;
+    };
+    let tag = Uuid::new_v4();
+    let year = 2020;
+
+    // A leave type with distinct per-category defaults.
+    let lt = leave::create_type(&pool, &format!("cat-{tag}"), true, 20.0, 10.0, 5.0)
+        .await
+        .unwrap();
+
+    let emp = users::create(&pool, "emp", &format!("emp-{tag}@t.local"), "h", UserRole::Employee, None)
+        .await
+        .unwrap();
+    let con = users::create(&pool, "con", &format!("con-{tag}@t.local"), "h", UserRole::Employee, None)
+        .await
+        .unwrap();
+    users::set_employment_type(&pool, con.id, EmploymentType::Contractor)
+        .await
+        .unwrap();
+    let intern =
+        users::create(&pool, "int", &format!("int-{tag}@t.local"), "h", UserRole::Employee, None)
+            .await
+            .unwrap();
+    users::set_employment_type(&pool, intern.id, EmploymentType::Intern)
+        .await
+        .unwrap();
+    let pm = users::create(&pool, "pm", &format!("pm-{tag}@t.local"), "h", UserRole::ProjectManager, None)
+        .await
+        .unwrap();
+
+    // Fetch this type's balance row for a user.
+    async fn row(pool: &sqlx::PgPool, uid: Uuid, lt: Uuid, year: i32) -> leave::Balance {
+        leave::balances(pool, uid, year)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|b| b.leave_type_id == lt)
+            .expect("type present in balances")
+    }
+
+    // Category defaults apply with no explicit allocation.
+    let b = row(&pool, emp.id, lt.id, year).await;
+    assert_eq!(b.allotted_days, 20.0);
+    assert!(!b.is_override);
+    assert_eq!(row(&pool, con.id, lt.id, year).await.allotted_days, 10.0);
+    assert_eq!(row(&pool, intern.id, lt.id, year).await.allotted_days, 5.0);
+    // PM is treated as the employee category.
+    assert_eq!(row(&pool, pm.id, lt.id, year).await.allotted_days, 20.0);
+
+    // Adjust +5 from the effective default of 20 → 25 (now an override).
+    let n = leave::adjust_allocation(&pool, emp.id, lt.id, year, 5.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(n, 25.0);
+    let b = row(&pool, emp.id, lt.id, year).await;
+    assert_eq!(b.allotted_days, 25.0);
+    assert!(b.is_override);
+
+    // A large decrease clamps at 0.
+    let n = leave::adjust_allocation(&pool, emp.id, lt.id, year, -100.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(n, 0.0);
+
+    // Absolute set, then delete the override → back to the category default.
+    leave::upsert_allocation(&pool, emp.id, lt.id, year, 12.0)
+        .await
+        .unwrap();
+    assert_eq!(row(&pool, emp.id, lt.id, year).await.allotted_days, 12.0);
+    assert!(leave::delete_allocation(&pool, emp.id, lt.id, year)
+        .await
+        .unwrap());
+    let b = row(&pool, emp.id, lt.id, year).await;
+    assert_eq!(b.allotted_days, 20.0);
+    assert!(!b.is_override);
+
+    // Cleanup (deleting users cascades their allocations).
+    for u in [emp.id, con.id, intern.id, pm.id] {
+        users::delete(&pool, u).await.unwrap();
+    }
+    sqlx::query("DELETE FROM leave_types WHERE id = $1")
+        .bind(lt.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+}

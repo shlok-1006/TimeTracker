@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COALESCE(\n            la.allotted_days,\n            CASE\n                WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)\n                    THEN lt.default_days\n                WHEN u.employment_type = 'contractor'::employment_type\n                    THEN lt.default_days_contractor\n                WHEN u.employment_type = 'intern'::employment_type\n                    THEN lt.default_days_intern\n                ELSE lt.default_days\n            END\n        ) AS \"allotted!\"\n        FROM leave_types lt\n        JOIN users u ON u.id = $1\n        LEFT JOIN leave_allocations la\n               ON la.leave_type_id = lt.id AND la.user_id = $1 AND la.year = $3\n        WHERE lt.id = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allotted!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4c75ef942516e9a06712001b70c4e66cff2d32bf44b7c55b5c66fde1b1177515"
+}

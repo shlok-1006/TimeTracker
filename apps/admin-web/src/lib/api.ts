@@ -599,8 +599,21 @@ const leaveTypeSchema = z.object({
   name: z.string(),
   paid: z.boolean(),
   default_days: z.number(),
+  default_days_contractor: z.number(),
+  default_days_intern: z.number(),
 });
 export type LeaveType = z.infer<typeof leaveTypeSchema>;
+
+const leaveBalanceSchema = z.object({
+  leave_type_id: z.string(),
+  leave_type_name: z.string(),
+  paid: z.boolean(),
+  allotted_days: z.number(),
+  used_days: z.number(),
+  remaining_days: z.number(),
+  is_override: z.boolean(),
+});
+export type LeaveBalance = z.infer<typeof leaveBalanceSchema>;
 
 const pendingLeaveSchema = z.object({
   id: z.string(),
@@ -644,16 +657,31 @@ export async function fetchLeaveTypes(): Promise<LeaveType[]> {
   return z.array(leaveTypeSchema).parse(await authedGetJson("/me/leave/types"));
 }
 
-/** Create a leave type (HR; `POST /admin/leave/types`). */
+/** Create a leave type with per-category defaults (HR; `POST /admin/leave/types`). */
 export async function createLeaveType(input: {
   name: string;
   paid: boolean;
   default_days: number;
+  default_days_contractor: number;
+  default_days_intern: number;
 }): Promise<LeaveType> {
   return leaveTypeSchema.parse(await authedJson("POST", "/admin/leave/types", input));
 }
 
-/** Allocate yearly days to an employee (HR; `POST /admin/leave/allocations`). */
+/** Update a leave type's paid flag + per-category defaults (HR; `PATCH /admin/leave/types/:id`). */
+export async function updateLeaveType(
+  id: string,
+  input: {
+    paid: boolean;
+    default_days: number;
+    default_days_contractor: number;
+    default_days_intern: number;
+  },
+): Promise<LeaveType> {
+  return leaveTypeSchema.parse(await authedJson("PATCH", `/admin/leave/types/${id}`, input));
+}
+
+/** Set a user's yearly allotment (override) for a type (HR; `POST /admin/leave/allocations`). */
 export async function allocateLeave(input: {
   user_id: string;
   leave_type_id: string;
@@ -661,6 +689,36 @@ export async function allocateLeave(input: {
   allotted_days: number;
 }): Promise<void> {
   await authedJson("POST", "/admin/leave/allocations", input);
+}
+
+/** Increase/decrease a user's allotment by a delta (HR; `POST /admin/leave/allocations/adjust`). */
+export async function adjustLeaveAllocation(input: {
+  user_id: string;
+  leave_type_id: string;
+  year?: number;
+  delta: number;
+}): Promise<void> {
+  await authedJson("POST", "/admin/leave/allocations/adjust", input);
+}
+
+/** Remove a user's override, reverting to the category default (HR; `DELETE /admin/leave/allocations`). */
+export async function deleteLeaveAllocation(input: {
+  user_id: string;
+  leave_type_id: string;
+  year?: number;
+}): Promise<void> {
+  await authedJson("DELETE", "/admin/leave/allocations", input);
+}
+
+/** A user's per-type balances for the allocation UI (HR; `GET /admin/users/:id/leave/balance`). */
+export async function fetchUserLeaveBalance(
+  userId: string,
+  year?: number,
+): Promise<{ year: number; balances: LeaveBalance[] }> {
+  const qs = year ? `?year=${year}` : "";
+  return z
+    .object({ year: z.number(), balances: z.array(leaveBalanceSchema) })
+    .parse(await authedGetJson(`/admin/users/${userId}/leave/balance${qs}`));
 }
 
 /** Company holidays (`GET /admin/holidays?year=`). */

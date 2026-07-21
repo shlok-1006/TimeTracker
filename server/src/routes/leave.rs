@@ -183,8 +183,13 @@ struct NewType {
     name: String,
     #[serde(default = "default_true")]
     paid: bool,
+    /// Default days for employees (also PMs/HR).
     #[serde(default)]
     default_days: f64,
+    #[serde(default)]
+    default_days_contractor: f64,
+    #[serde(default)]
+    default_days_intern: f64,
 }
 fn default_true() -> bool {
     true
@@ -198,11 +203,60 @@ async fn create_type(
     if body.name.trim().is_empty() {
         return Err(AppError::BadRequest("name is required".into()));
     }
-    let t = leave::create_type(&state.db, body.name.trim(), body.paid, body.default_days).await?;
+    let t = leave::create_type(
+        &state.db,
+        body.name.trim(),
+        body.paid,
+        body.default_days,
+        body.default_days_contractor,
+        body.default_days_intern,
+    )
+    .await?;
     audit::log(
         &state.db,
         hr.id,
         "leave.type.create",
+        "leave_type",
+        Some(t.id),
+    )
+    .await;
+    Ok(Json(json!(t)))
+}
+
+#[derive(Deserialize)]
+struct UpdateType {
+    #[serde(default = "default_true")]
+    paid: bool,
+    #[serde(default)]
+    default_days: f64,
+    #[serde(default)]
+    default_days_contractor: f64,
+    #[serde(default)]
+    default_days_intern: f64,
+}
+
+/// `PATCH /admin/leave/types/:id` (HR) — update a type's paid flag and its
+/// per-category default allotments.
+async fn update_type(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateType>,
+) -> Result<Json<Value>, AppError> {
+    let t = leave::update_type(
+        &state.db,
+        id,
+        body.paid,
+        body.default_days,
+        body.default_days_contractor,
+        body.default_days_intern,
+    )
+    .await?
+    .ok_or(AppError::NotFound)?;
+    audit::log(
+        &state.db,
+        hr.id,
+        "leave.type.update",
         "leave_type",
         Some(t.id),
     )
@@ -246,6 +300,93 @@ async fn allocate(
     })))
 }
 
+#[derive(Deserialize)]
+struct AdjustAllocation {
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: Option<i32>,
+    /// Positive to increase, negative to decrease (result clamped at 0).
+    delta: f64,
+}
+
+/// `POST /admin/leave/allocations/adjust` (HR) — increase or decrease a user's
+/// allotment for a type by `delta` days, writing an explicit override.
+async fn adjust_allocation(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Json(body): Json<AdjustAllocation>,
+) -> Result<Json<Value>, AppError> {
+    let year = body.year.unwrap_or_else(|| Utc::now().year());
+    let allotted = leave::adjust_allocation(
+        &state.db,
+        body.user_id,
+        body.leave_type_id,
+        year,
+        body.delta,
+    )
+    .await?
+    .ok_or(AppError::NotFound)?;
+    audit::log(
+        &state.db,
+        hr.id,
+        "leave.allocate.adjust",
+        "user",
+        Some(body.user_id),
+    )
+    .await;
+    Ok(Json(json!({
+        "user_id": body.user_id, "leave_type_id": body.leave_type_id,
+        "year": year, "allotted_days": allotted
+    })))
+}
+
+#[derive(Deserialize)]
+struct DeleteAllocation {
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: Option<i32>,
+}
+
+/// `DELETE /admin/leave/allocations` (HR) — remove a user's explicit override,
+/// reverting the balance to their category default.
+async fn delete_allocation(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Json(body): Json<DeleteAllocation>,
+) -> Result<Json<Value>, AppError> {
+    let year = body.year.unwrap_or_else(|| Utc::now().year());
+    if !leave::delete_allocation(&state.db, body.user_id, body.leave_type_id, year).await? {
+        return Err(AppError::NotFound);
+    }
+    audit::log(
+        &state.db,
+        hr.id,
+        "leave.allocate.delete",
+        "user",
+        Some(body.user_id),
+    )
+    .await;
+    Ok(Json(json!({ "deleted": true })))
+}
+
+/// `GET /admin/users/:id/leave/balance?year=` (HR) — a specific user's per-type
+/// balances (effective allotments with override flags), for the allocation UI.
+async fn user_balance(
+    State(state): State<AppState>,
+    RequireHr(_hr): RequireHr,
+    Path(target): Path<Uuid>,
+    Query(q): Query<YearQuery>,
+) -> Result<Json<Value>, AppError> {
+    if users::find_by_id(&state.db, target).await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    let year = q.year.unwrap_or_else(|| Utc::now().year());
+    Ok(Json(json!({
+        "year": year,
+        "balances": leave::balances(&state.db, target, year).await?,
+    })))
+}
+
 async fn list_holidays(
     State(state): State<AppState>,
     RequireAdmin(_u): RequireAdmin,
@@ -283,6 +424,12 @@ pub fn router() -> Router<AppState> {
         .route("/admin/leave/requests/:id/reject", post(reject_request))
         // HR configuration
         .route("/admin/leave/types", post(create_type))
-        .route("/admin/leave/allocations", post(allocate))
+        .route("/admin/leave/types/:id", axum::routing::patch(update_type))
+        .route(
+            "/admin/leave/allocations",
+            post(allocate).delete(delete_allocation),
+        )
+        .route("/admin/leave/allocations/adjust", post(adjust_allocation))
+        .route("/admin/users/:id/leave/balance", get(user_balance))
         .route("/admin/holidays", get(list_holidays).post(create_holiday))
 }

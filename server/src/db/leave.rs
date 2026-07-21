@@ -12,7 +12,10 @@ pub struct LeaveType {
     pub id: Uuid,
     pub name: String,
     pub paid: bool,
+    /// Default days for the employee category (also used for PMs and HR).
     pub default_days: f64,
+    pub default_days_contractor: f64,
+    pub default_days_intern: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,14 +64,20 @@ pub struct Balance {
     pub allotted_days: f64,
     pub used_days: f64,
     pub remaining_days: f64,
+    /// True when `allotted_days` comes from an explicit per-user allocation
+    /// (a manual override); false when it falls back to the category default.
+    pub is_override: bool,
 }
 
 // ---- Leave types ----
 
 pub async fn list_types(pool: &PgPool) -> Result<Vec<LeaveType>, AppError> {
-    let rows = sqlx::query!("SELECT id, name, paid, default_days FROM leave_types ORDER BY name")
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query!(
+        "SELECT id, name, paid, default_days, default_days_contractor, default_days_intern
+         FROM leave_types ORDER BY name"
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
         .map(|r| LeaveType {
@@ -76,6 +85,8 @@ pub async fn list_types(pool: &PgPool) -> Result<Vec<LeaveType>, AppError> {
             name: r.name,
             paid: r.paid,
             default_days: r.default_days,
+            default_days_contractor: r.default_days_contractor,
+            default_days_intern: r.default_days_intern,
         })
         .collect())
 }
@@ -85,13 +96,19 @@ pub async fn create_type(
     name: &str,
     paid: bool,
     default_days: f64,
+    default_days_contractor: f64,
+    default_days_intern: f64,
 ) -> Result<LeaveType, AppError> {
     let r = sqlx::query!(
-        "INSERT INTO leave_types (name, paid, default_days) VALUES ($1, $2, $3)
-         RETURNING id, name, paid, default_days",
+        "INSERT INTO leave_types
+             (name, paid, default_days, default_days_contractor, default_days_intern)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, name, paid, default_days, default_days_contractor, default_days_intern",
         name,
         paid,
-        default_days
+        default_days,
+        default_days_contractor,
+        default_days_intern
     )
     .fetch_one(pool)
     .await?;
@@ -100,7 +117,43 @@ pub async fn create_type(
         name: r.name,
         paid: r.paid,
         default_days: r.default_days,
+        default_days_contractor: r.default_days_contractor,
+        default_days_intern: r.default_days_intern,
     })
+}
+
+/// Update a leave type's paid flag and its per-category default allotments.
+/// Returns the updated type, or `None` if no type has that id.
+pub async fn update_type(
+    pool: &PgPool,
+    id: Uuid,
+    paid: bool,
+    default_days: f64,
+    default_days_contractor: f64,
+    default_days_intern: f64,
+) -> Result<Option<LeaveType>, AppError> {
+    let row = sqlx::query!(
+        "UPDATE leave_types
+         SET paid = $2, default_days = $3,
+             default_days_contractor = $4, default_days_intern = $5
+         WHERE id = $1
+         RETURNING id, name, paid, default_days, default_days_contractor, default_days_intern",
+        id,
+        paid,
+        default_days,
+        default_days_contractor,
+        default_days_intern
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| LeaveType {
+        id: r.id,
+        name: r.name,
+        paid: r.paid,
+        default_days: r.default_days,
+        default_days_contractor: r.default_days_contractor,
+        default_days_intern: r.default_days_intern,
+    }))
 }
 
 // ---- Holidays ----
@@ -219,7 +272,86 @@ pub async fn upsert_allocation(
     Ok(())
 }
 
-/// Per-type balances for a user in a given year (allotted, used [approved], remaining).
+/// Delete a user's explicit allocation override for a type/year, reverting the
+/// balance to their category default. Returns whether a row was removed.
+pub async fn delete_allocation(
+    pool: &PgPool,
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: i32,
+) -> Result<bool, AppError> {
+    let res = sqlx::query!(
+        "DELETE FROM leave_allocations
+         WHERE user_id = $1 AND leave_type_id = $2 AND year = $3",
+        user_id,
+        leave_type_id,
+        year
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// The effective allotment for one (user, type, year): an explicit override if
+/// present, otherwise the leave type's default for the user's category. PMs and
+/// HR are treated as the employee category. Returns `None` if the type is unknown.
+pub async fn effective_allotment(
+    pool: &PgPool,
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: i32,
+) -> Result<Option<f64>, AppError> {
+    let row = sqlx::query!(
+        r#"
+        SELECT COALESCE(
+            la.allotted_days,
+            CASE
+                WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)
+                    THEN lt.default_days
+                WHEN u.employment_type = 'contractor'::employment_type
+                    THEN lt.default_days_contractor
+                WHEN u.employment_type = 'intern'::employment_type
+                    THEN lt.default_days_intern
+                ELSE lt.default_days
+            END
+        ) AS "allotted!"
+        FROM leave_types lt
+        JOIN users u ON u.id = $1
+        LEFT JOIN leave_allocations la
+               ON la.leave_type_id = lt.id AND la.user_id = $1 AND la.year = $3
+        WHERE lt.id = $2
+        "#,
+        user_id,
+        leave_type_id,
+        year
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.allotted))
+}
+
+/// Increase or decrease a user's allotment for a type/year by `delta` days,
+/// writing an explicit override (starting from their current effective
+/// allotment). The result is clamped to be non-negative. Returns the new
+/// allotment, or `None` if the leave type is unknown.
+pub async fn adjust_allocation(
+    pool: &PgPool,
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: i32,
+    delta: f64,
+) -> Result<Option<f64>, AppError> {
+    let Some(current) = effective_allotment(pool, user_id, leave_type_id, year).await? else {
+        return Ok(None);
+    };
+    let next = (current + delta).max(0.0);
+    upsert_allocation(pool, user_id, leave_type_id, year, next).await?;
+    Ok(Some(next))
+}
+
+/// Per-type balances for a user in a given year (allotted, used [approved],
+/// remaining). `allotted` falls back to the user's category default when there
+/// is no explicit allocation override; `is_override` flags which is which.
 pub async fn balances(pool: &PgPool, user_id: Uuid, year: i32) -> Result<Vec<Balance>, AppError> {
     let rows = sqlx::query!(
         r#"
@@ -227,7 +359,19 @@ pub async fn balances(pool: &PgPool, user_id: Uuid, year: i32) -> Result<Vec<Bal
             lt.id                                   AS leave_type_id,
             lt.name                                 AS leave_type_name,
             lt.paid                                 AS paid,
-            COALESCE(la.allotted_days, 0)           AS "allotted!",
+            COALESCE(
+                la.allotted_days,
+                CASE
+                    WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)
+                        THEN lt.default_days
+                    WHEN u.employment_type = 'contractor'::employment_type
+                        THEN lt.default_days_contractor
+                    WHEN u.employment_type = 'intern'::employment_type
+                        THEN lt.default_days_intern
+                    ELSE lt.default_days
+                END
+            )                                       AS "allotted!",
+            (la.allotted_days IS NOT NULL)          AS "is_override!",
             COALESCE((
                 SELECT SUM(lr.days) FROM leave_requests lr
                 WHERE lr.user_id = $1 AND lr.leave_type_id = lt.id
@@ -235,6 +379,7 @@ pub async fn balances(pool: &PgPool, user_id: Uuid, year: i32) -> Result<Vec<Bal
                   AND EXTRACT(YEAR FROM lr.start_date)::int = $2
             ), 0)                                   AS "used!"
         FROM leave_types lt
+        JOIN users u ON u.id = $1
         LEFT JOIN leave_allocations la
                ON la.leave_type_id = lt.id AND la.user_id = $1 AND la.year = $2
         ORDER BY lt.name
@@ -254,6 +399,7 @@ pub async fn balances(pool: &PgPool, user_id: Uuid, year: i32) -> Result<Vec<Bal
             allotted_days: r.allotted,
             used_days: r.used,
             remaining_days: r.allotted - r.used,
+            is_override: r.is_override,
         })
         .collect())
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO leave_types (name, paid, default_days) VALUES ($1, $2, $3)\n         RETURNING id, name, paid, default_days",
+  "query": "INSERT INTO leave_types\n             (name, paid, default_days, default_days_contractor, default_days_intern)\n         VALUES ($1, $2, $3, $4, $5)\n         RETURNING id, name, paid, default_days, default_days_contractor, default_days_intern",
   "describe": {
     "columns": [
       {
@@ -22,12 +22,24 @@
         "ordinal": 3,
         "name": "default_days",
         "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "default_days_contractor",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "default_days_intern",
+        "type_info": "Float8"
       }
     ],
     "parameters": {
       "Left": [
         "Text",
         "Bool",
+        "Float8",
+        "Float8",
         "Float8"
       ]
     },
@@ -35,8 +47,10 @@
       false,
       false,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "06e017e4fdf6a0d8b57ae7aa9a3d369522d3217d6159777862cc7bd5d5704ddf"
+  "hash": "7e5b9b9307d54e59bbc9c2e6e763b9d52d4079797907863d6786175a74695781"
 }

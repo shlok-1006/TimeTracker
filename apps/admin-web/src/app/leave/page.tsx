@@ -1,17 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  adjustLeaveAllocation,
   allocateLeave,
   approveLeave,
   createHoliday,
   createLeaveType,
+  deleteLeaveAllocation,
   fetchHolidays,
   fetchLeaveTypes,
   fetchPendingLeave,
+  fetchUserLeaveBalance,
   listUsers,
   rejectLeave,
+  updateLeaveType,
+  type LeaveType,
+  type LeaveBalance,
 } from "@/lib/api";
 import { useAdminSession } from "@/components/use-admin-session";
 
@@ -111,7 +117,8 @@ export default function LeavePage() {
   );
 }
 
-/** HR-only: leave types, per-employee allocations, and the holiday calendar. */
+/** HR-only: leave types (with per-category defaults), per-employee allocation
+ *  management, and the holiday calendar. */
 function HrConfig() {
   const qc = useQueryClient();
   const types = useQuery({ queryKey: ["leave_types"], queryFn: fetchLeaveTypes });
@@ -120,30 +127,32 @@ function HrConfig() {
   const holidays = useQuery({ queryKey: ["holidays", year], queryFn: () => fetchHolidays(year) });
 
   // Create leave type
-  const [typeForm, setTypeForm] = useState({ name: "", paid: true, default_days: 0 });
+  const [typeForm, setTypeForm] = useState({
+    name: "",
+    paid: true,
+    default_days: 0,
+    default_days_contractor: 0,
+    default_days_intern: 0,
+  });
   const addType = useMutation({
     mutationFn: () =>
       createLeaveType({
         name: typeForm.name.trim(),
         paid: typeForm.paid,
         default_days: Number(typeForm.default_days) || 0,
+        default_days_contractor: Number(typeForm.default_days_contractor) || 0,
+        default_days_intern: Number(typeForm.default_days_intern) || 0,
       }),
     onSuccess: () => {
-      setTypeForm({ name: "", paid: true, default_days: 0 });
+      setTypeForm({
+        name: "",
+        paid: true,
+        default_days: 0,
+        default_days_contractor: 0,
+        default_days_intern: 0,
+      });
       qc.invalidateQueries({ queryKey: ["leave_types"] });
     },
-  });
-
-  // Allocate
-  const [alloc, setAlloc] = useState({ user_id: "", leave_type_id: "", allotted_days: 0 });
-  const allocate = useMutation({
-    mutationFn: () =>
-      allocateLeave({
-        user_id: alloc.user_id,
-        leave_type_id: alloc.leave_type_id,
-        allotted_days: Number(alloc.allotted_days) || 0,
-      }),
-    onSuccess: () => setAlloc({ user_id: "", leave_type_id: "", allotted_days: 0 }),
   });
 
   // Holidays
@@ -160,19 +169,21 @@ function HrConfig() {
 
   return (
     <>
-      <Section title="Leave types">
-        <ul className="mb-4 flex flex-wrap gap-2">
+      <Section title="Leave types & category defaults">
+        <p className="mb-3 text-xs text-muted-foreground">
+          Default days granted per employment category. Employees, project managers and HR use the
+          Employee value; contractors and interns use their own. Per-person overrides are set below.
+        </p>
+        <ul className="mb-4 flex flex-col gap-2">
           {types.data?.map((t) => (
-            <li key={t.id} className="rounded-full bg-secondary px-3 py-1 text-xs">
-              {t.name} · {t.default_days}d · {t.paid ? "paid" : "unpaid"}
-            </li>
+            <LeaveTypeRow key={t.id} type={t} inputClass={input} />
           ))}
           {types.data?.length === 0 && (
             <li className="text-sm text-muted-foreground">None yet.</li>
           )}
         </ul>
         <form
-          className="flex flex-wrap items-end gap-3"
+          className="flex flex-wrap items-end gap-3 border-t pt-4"
           onSubmit={(e) => {
             e.preventDefault();
             if (typeForm.name.trim()) addType.mutate();
@@ -187,14 +198,40 @@ function HrConfig() {
             />
           </label>
           <label className="flex flex-col gap-1 text-xs">
-            <span className="text-muted-foreground">Default days</span>
+            <span className="text-muted-foreground">Employee days</span>
             <input
               type="number"
               min={0}
               step="0.5"
               value={typeForm.default_days}
               onChange={(e) => setTypeForm({ ...typeForm, default_days: Number(e.target.value) })}
-              className={`${input} w-28`}
+              className={`${input} w-24`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground">Contractor days</span>
+            <input
+              type="number"
+              min={0}
+              step="0.5"
+              value={typeForm.default_days_contractor}
+              onChange={(e) =>
+                setTypeForm({ ...typeForm, default_days_contractor: Number(e.target.value) })
+              }
+              className={`${input} w-24`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground">Intern days</span>
+            <input
+              type="number"
+              min={0}
+              step="0.5"
+              value={typeForm.default_days_intern}
+              onChange={(e) =>
+                setTypeForm({ ...typeForm, default_days_intern: Number(e.target.value) })
+              }
+              className={`${input} w-24`}
             />
           </label>
           <label className="flex items-center gap-2 text-xs">
@@ -218,67 +255,8 @@ function HrConfig() {
         )}
       </Section>
 
-      <Section title={`Allocate days (${year})`}>
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (alloc.user_id && alloc.leave_type_id) allocate.mutate();
-          }}
-        >
-          <label className="flex flex-col gap-1 text-xs">
-            <span className="text-muted-foreground">Employee</span>
-            <select
-              value={alloc.user_id}
-              onChange={(e) => setAlloc({ ...alloc, user_id: e.target.value })}
-              className={input}
-            >
-              <option value="">Select…</option>
-              {users.data?.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs">
-            <span className="text-muted-foreground">Type</span>
-            <select
-              value={alloc.leave_type_id}
-              onChange={(e) => setAlloc({ ...alloc, leave_type_id: e.target.value })}
-              className={input}
-            >
-              <option value="">Select…</option>
-              {types.data?.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs">
-            <span className="text-muted-foreground">Days</span>
-            <input
-              type="number"
-              min={0}
-              step="0.5"
-              value={alloc.allotted_days}
-              onChange={(e) => setAlloc({ ...alloc, allotted_days: Number(e.target.value) })}
-              className={`${input} w-28`}
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={allocate.isPending}
-            className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          >
-            Allocate
-          </button>
-        </form>
-        {allocate.isError && (
-          <p className="mt-2 text-sm text-red-600">{(allocate.error as Error).message}</p>
-        )}
-        {allocate.isSuccess && <p className="mt-2 text-sm text-green-600">Allocation saved.</p>}
+      <Section title={`Allocations (${year})`}>
+        <AllocationManager users={users.data ?? []} year={year} inputClass={input} />
       </Section>
 
       <Section title={`Holidays (${year})`}>
@@ -329,5 +307,284 @@ function HrConfig() {
         )}
       </Section>
     </>
+  );
+}
+
+/** One leave type row with an inline editor for its per-category defaults. */
+function LeaveTypeRow({ type, inputClass }: { type: LeaveType; inputClass: string }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({
+    paid: type.paid,
+    default_days: type.default_days,
+    default_days_contractor: type.default_days_contractor,
+    default_days_intern: type.default_days_intern,
+  });
+  const save = useMutation({
+    mutationFn: () =>
+      updateLeaveType(type.id, {
+        paid: form.paid,
+        default_days: Number(form.default_days) || 0,
+        default_days_contractor: Number(form.default_days_contractor) || 0,
+        default_days_intern: Number(form.default_days_intern) || 0,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["leave_types"] });
+      setEditing(false);
+    },
+  });
+
+  if (!editing) {
+    return (
+      <li className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-2.5 text-sm">
+        <span>
+          <span className="font-medium">{type.name}</span>{" "}
+          <span className="text-xs text-muted-foreground">
+            · Emp {type.default_days}d · Contractor {type.default_days_contractor}d · Intern{" "}
+            {type.default_days_intern}d · {type.paid ? "paid" : "unpaid"}
+          </span>
+        </span>
+        <button
+          onClick={() => {
+            setForm({
+              paid: type.paid,
+              default_days: type.default_days,
+              default_days_contractor: type.default_days_contractor,
+              default_days_intern: type.default_days_intern,
+            });
+            setEditing(true);
+          }}
+          className="text-xs underline hover:opacity-80"
+        >
+          Edit
+        </button>
+      </li>
+    );
+  }
+
+  return (
+    <li className="flex flex-wrap items-end gap-3 rounded-md border p-2.5">
+      <span className="text-sm font-medium">{type.name}</span>
+      <label className="flex flex-col gap-1 text-xs">
+        <span className="text-muted-foreground">Employee</span>
+        <input
+          type="number"
+          min={0}
+          step="0.5"
+          value={form.default_days}
+          onChange={(e) => setForm({ ...form, default_days: Number(e.target.value) })}
+          className={`${inputClass} w-20`}
+        />
+      </label>
+      <label className="flex flex-col gap-1 text-xs">
+        <span className="text-muted-foreground">Contractor</span>
+        <input
+          type="number"
+          min={0}
+          step="0.5"
+          value={form.default_days_contractor}
+          onChange={(e) => setForm({ ...form, default_days_contractor: Number(e.target.value) })}
+          className={`${inputClass} w-20`}
+        />
+      </label>
+      <label className="flex flex-col gap-1 text-xs">
+        <span className="text-muted-foreground">Intern</span>
+        <input
+          type="number"
+          min={0}
+          step="0.5"
+          value={form.default_days_intern}
+          onChange={(e) => setForm({ ...form, default_days_intern: Number(e.target.value) })}
+          className={`${inputClass} w-20`}
+        />
+      </label>
+      <label className="flex items-center gap-2 text-xs">
+        <input
+          type="checkbox"
+          checked={form.paid}
+          onChange={(e) => setForm({ ...form, paid: e.target.checked })}
+        />
+        Paid
+      </label>
+      <button
+        onClick={() => save.mutate()}
+        disabled={save.isPending}
+        className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+      >
+        {save.isPending ? "Saving…" : "Save"}
+      </button>
+      <button onClick={() => setEditing(false)} className="text-xs underline">
+        Cancel
+      </button>
+    </li>
+  );
+}
+
+/** Pick an employee and set / adjust / reset their per-type allotments.
+ *  Effective values fall back to the category default (flagged accordingly). */
+function AllocationManager({
+  users,
+  year,
+  inputClass,
+}: {
+  users: { id: string; name: string }[];
+  year: number;
+  inputClass: string;
+}) {
+  const qc = useQueryClient();
+  const [userId, setUserId] = useState("");
+  const balances = useQuery({
+    queryKey: ["user_leave_balance", userId, year],
+    queryFn: () => fetchUserLeaveBalance(userId, year),
+    enabled: !!userId,
+  });
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: ["user_leave_balance", userId, year] });
+
+  const setDays = useMutation({
+    mutationFn: (v: { leave_type_id: string; allotted_days: number }) =>
+      allocateLeave({ user_id: userId, leave_type_id: v.leave_type_id, year, allotted_days: v.allotted_days }),
+    onSuccess: invalidate,
+  });
+  const adjust = useMutation({
+    mutationFn: (v: { leave_type_id: string; delta: number }) =>
+      adjustLeaveAllocation({ user_id: userId, leave_type_id: v.leave_type_id, year, delta: v.delta }),
+    onSuccess: invalidate,
+  });
+  const reset = useMutation({
+    mutationFn: (leave_type_id: string) =>
+      deleteLeaveAllocation({ user_id: userId, leave_type_id, year }),
+    onSuccess: invalidate,
+  });
+  const busy = setDays.isPending || adjust.isPending || reset.isPending;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <label className="flex max-w-xs flex-col gap-1 text-xs">
+        <span className="text-muted-foreground">Employee</span>
+        <select value={userId} onChange={(e) => setUserId(e.target.value)} className={inputClass}>
+          <option value="">Select…</option>
+          {users.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.name}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {userId && balances.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {userId && balances.data && balances.data.balances.length === 0 && (
+        <p className="text-sm text-muted-foreground">No leave types defined yet.</p>
+      )}
+      {userId && balances.data && balances.data.balances.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[34rem] text-sm">
+            <thead>
+              <tr className="border-b text-left text-muted-foreground">
+                <th className="py-2 font-medium">Type</th>
+                <th className="py-2 font-medium">Allotted</th>
+                <th className="py-2 font-medium">Used</th>
+                <th className="py-2 font-medium">Remaining</th>
+                <th className="py-2 font-medium">Adjust / set</th>
+              </tr>
+            </thead>
+            <tbody>
+              {balances.data.balances.map((b) => (
+                <AllocationRow
+                  key={b.leave_type_id}
+                  b={b}
+                  inputClass={inputClass}
+                  busy={busy}
+                  onSet={(days) => setDays.mutate({ leave_type_id: b.leave_type_id, allotted_days: days })}
+                  onAdjust={(delta) => adjust.mutate({ leave_type_id: b.leave_type_id, delta })}
+                  onReset={() => reset.mutate(b.leave_type_id)}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {(setDays.isError || adjust.isError || reset.isError) && (
+        <p className="text-sm text-red-600">
+          {((setDays.error || adjust.error || reset.error) as Error).message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AllocationRow({
+  b,
+  inputClass,
+  busy,
+  onSet,
+  onAdjust,
+  onReset,
+}: {
+  b: LeaveBalance;
+  inputClass: string;
+  busy: boolean;
+  onSet: (days: number) => void;
+  onAdjust: (delta: number) => void;
+  onReset: () => void;
+}) {
+  const [val, setVal] = useState(String(b.allotted_days));
+  // Re-sync the input when the underlying allotment changes (after a mutation).
+  useEffect(() => setVal(String(b.allotted_days)), [b.allotted_days]);
+
+  return (
+    <tr className="border-b last:border-0">
+      <td className="py-2">
+        {b.leave_type_name}{" "}
+        <span
+          className={`ml-1 rounded px-1.5 py-0.5 text-[10px] ${
+            b.is_override ? "bg-amber-100 text-amber-800" : "bg-secondary text-muted-foreground"
+          }`}
+        >
+          {b.is_override ? "override" : "default"}
+        </span>
+      </td>
+      <td className="py-2 tabular-nums">{b.allotted_days}</td>
+      <td className="py-2 tabular-nums">{b.used_days}</td>
+      <td className="py-2 tabular-nums">{b.remaining_days}</td>
+      <td className="py-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => onAdjust(-1)}
+            disabled={busy}
+            className="rounded bg-secondary px-2 py-1 text-xs disabled:opacity-50"
+          >
+            −1
+          </button>
+          <button
+            onClick={() => onAdjust(1)}
+            disabled={busy}
+            className="rounded bg-secondary px-2 py-1 text-xs disabled:opacity-50"
+          >
+            +1
+          </button>
+          <input
+            type="number"
+            min={0}
+            step="0.5"
+            value={val}
+            onChange={(e) => setVal(e.target.value)}
+            className={`${inputClass} w-20`}
+          />
+          <button
+            onClick={() => onSet(Number(val) || 0)}
+            disabled={busy}
+            className="rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
+          >
+            Set
+          </button>
+          {b.is_override && (
+            <button onClick={onReset} disabled={busy} className="text-xs underline disabled:opacity-50">
+              Reset
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }

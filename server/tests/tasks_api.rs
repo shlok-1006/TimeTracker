@@ -1,5 +1,6 @@
-//! Manual-task management API tests (Feature 5 Phase 2): HR-only gating (no DB)
-//! plus a live HTTP round-trip with audit verification (skips if no DATABASE_URL).
+//! Manual-task management API tests (Feature 5 Phase 2): dashboard-role gating
+//! (no DB) plus live HTTP round-trips with audit + PM-scope verification (skip
+//! if no DATABASE_URL).
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
@@ -39,7 +40,7 @@ fn lazy_app() -> Router {
 
 fn token(role: UserRole) -> String {
     JwtKeys::new(SECRET, 900)
-        .issue(Uuid::new_v4(), role, None)
+        .issue(Uuid::new_v4(), role, None, None)
         .unwrap()
 }
 
@@ -82,7 +83,7 @@ async fn real_pool() -> Option<PgPool> {
 }
 
 #[tokio::test]
-async fn task_management_is_hr_only() {
+async fn task_management_rejects_employees_and_anon() {
     let uid = Uuid::new_v4();
     let path = format!("/admin/users/{uid}/tasks");
     // No token → 401.
@@ -95,28 +96,28 @@ async fn task_management_is_hr_only() {
     )
     .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
-    // Employee + project manager → 403 (HR only).
-    for role in [UserRole::Employee, UserRole::ProjectManager] {
-        let t = token(role);
-        let (s, _) = send(
-            lazy_app(),
-            "POST",
-            &path,
-            Some(&t),
-            Some(json!({ "title": "X" })),
-        )
-        .await;
-        assert_eq!(s, StatusCode::FORBIDDEN, "{role:?} must be forbidden");
-        let (s2, _) = send(
-            lazy_app(),
-            "DELETE",
-            &format!("/admin/tasks/{}", Uuid::new_v4()),
-            Some(&t),
-            None,
-        )
-        .await;
-        assert_eq!(s2, StatusCode::FORBIDDEN);
-    }
+    // Employees are desktop-only → 403 by role, before any DB lookup. (Project
+    // managers now pass the role gate and are instead team-scoped, which needs a
+    // real DB — covered by `pm_task_scope_over_http`.)
+    let t = token(UserRole::Employee);
+    let (s, _) = send(
+        lazy_app(),
+        "POST",
+        &path,
+        Some(&t),
+        Some(json!({ "title": "X" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "employee must be forbidden");
+    let (s2, _) = send(
+        lazy_app(),
+        "DELETE",
+        &format!("/admin/tasks/{}", Uuid::new_v4()),
+        Some(&t),
+        None,
+    )
+    .await;
+    assert_eq!(s2, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -153,18 +154,36 @@ async fn task_crud_and_audit_over_http() {
     .await
     .unwrap();
 
-    // Create.
+    // Create with a weight + due date.
     let (s, body) = send(
         app_with(pool.clone()),
         "POST",
         &format!("/admin/users/{}/tasks", emp.id),
         Some(&hr),
-        Some(json!({ "title": "Fix the gateway", "description": "retry logic" })),
+        Some(json!({
+            "title": "Fix the gateway",
+            "description": "retry logic",
+            "weight": 8,
+            "due_date": "2020-05-01"
+        })),
     )
     .await;
     assert_eq!(s, StatusCode::OK, "create: {body}");
     let task_id = body["id"].as_str().unwrap().to_string();
     assert_eq!(body["status"], "open");
+    assert_eq!(body["weight"], 8);
+    assert_eq!(body["due_date"], "2020-05-01");
+
+    // A weight outside 1–10 is rejected.
+    let (s, _) = send(
+        app_with(pool.clone()),
+        "POST",
+        &format!("/admin/users/{}/tasks", emp.id),
+        Some(&hr),
+        Some(json!({ "title": "bad", "weight": 11 })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "weight 11 must be rejected");
 
     // List.
     let (s, body) = send(
@@ -224,5 +243,75 @@ async fn task_crud_and_audit_over_http() {
     .unwrap();
     assert_eq!(audited, 3, "create/update/delete should each be audited");
 
+    users::delete(&pool, emp.id).await.unwrap();
+}
+
+/// A project manager may assign tasks only to employees they manage.
+#[tokio::test]
+async fn pm_task_scope_over_http() {
+    let Some(pool) = real_pool().await else {
+        eprintln!("skipping pm_task_scope: DATABASE_URL not set");
+        return;
+    };
+    let tag = Uuid::new_v4();
+    let pm = users::create(
+        &pool,
+        "Scope PM",
+        &format!("scopepm-{tag}@t.local"),
+        "h",
+        UserRole::ProjectManager,
+        None,
+    )
+    .await
+    .unwrap();
+    let emp = users::create(
+        &pool,
+        "Scope Emp",
+        &format!("scopeemp-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
+    let pm_token = JwtKeys::new(SECRET, 900)
+        .issue(pm.id, UserRole::ProjectManager, None, None)
+        .unwrap();
+    let path = format!("/admin/users/{}/tasks", emp.id);
+    let body = json!({ "title": "scoped work", "weight": 3 });
+
+    // Not a manager of emp yet → 403.
+    let (s, _) = send(
+        app_with(pool.clone()),
+        "POST",
+        &path,
+        Some(&pm_token),
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::FORBIDDEN,
+        "PM must not assign to an unmanaged employee"
+    );
+
+    // Assign PM as emp's manager → now allowed.
+    users::add_manager(&pool, emp.id, pm.id).await.unwrap();
+    let (s, created) = send(
+        app_with(pool.clone()),
+        "POST",
+        &path,
+        Some(&pm_token),
+        Some(body),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "PM can assign to a managed employee: {created}");
+    assert_eq!(created["created_by"], pm.id.to_string());
+    assert_eq!(created["weight"], 3);
+
+    // Cleanup: deleting the employee cascades the task + the manager link. We do
+    // NOT delete the PM — it became an audit actor by creating a task, and the
+    // audit-immutability trigger blocks the FK's ON DELETE SET NULL (hard-delete
+    // of an audited user is intentionally impossible; that path uses soft-delete).
     users::delete(&pool, emp.id).await.unwrap();
 }

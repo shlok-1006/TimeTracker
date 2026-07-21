@@ -12,14 +12,19 @@ export function UserTasks({ userId }: { userId: string }) {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [weight, setWeight] = useState(5);
+  const [dueDate, setDueDate] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["user_tasks", userId] });
   const create = useMutation({
-    mutationFn: () => createUserTask(userId, title.trim(), description.trim()),
+    mutationFn: () =>
+      createUserTask(userId, title.trim(), description.trim(), weight, dueDate || null),
     onSuccess: () => {
       setTitle("");
       setDescription("");
+      setWeight(5);
+      setDueDate("");
       setErr(null);
       invalidate();
     },
@@ -41,27 +46,51 @@ export function UserTasks({ userId }: { userId: string }) {
     <section className="rounded-lg border bg-card p-6 text-card-foreground">
       <h2 className="mb-4 text-lg font-semibold">Assigned tasks</h2>
 
-      <form onSubmit={submit} className="mb-4 flex flex-col gap-2 sm:flex-row">
-        <input
-          required
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Task title"
-          className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
-        />
-        <input
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Description (optional)"
-          className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
-        />
-        <button
-          type="submit"
-          disabled={create.isPending || !title.trim()}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-        >
-          Assign
-        </button>
+      <form onSubmit={submit} className="mb-4 flex flex-col gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            required
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Task title"
+            className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          />
+          <input
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Description (optional)"
+            className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            Weight (1–10)
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={weight}
+              onChange={(e) => setWeight(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
+              className="w-24 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            Due date (optional)
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={create.isPending || !title.trim()}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50 sm:ml-auto"
+          >
+            Assign
+          </button>
+        </div>
       </form>
       {err && <p className="mb-2 text-sm text-red-600">{err}</p>}
 
@@ -78,6 +107,12 @@ export function UserTasks({ userId }: { userId: string }) {
             <div className={t.status === "done" ? "opacity-60" : ""}>
               <p className={`font-medium ${t.status === "done" ? "line-through" : ""}`}>{t.title}</p>
               {t.description && <p className="text-sm text-muted-foreground">{t.description}</p>}
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span className="rounded bg-secondary px-1.5 py-0.5 font-medium text-secondary-foreground">
+                  Weight {t.weight}/10
+                </span>
+                {t.due_date && <span>Due {t.due_date}</span>}
+              </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <button

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, user_id, created_by, title, description, status, created_at, updated_at\n           FROM manual_tasks WHERE id = $1",
+  "query": "SELECT id, user_id, created_by, title, description, status, weight, due_date, created_at, updated_at\n           FROM manual_tasks WHERE user_id = $1 ORDER BY created_at DESC",
   "describe": {
     "columns": [
       {
@@ -35,11 +35,21 @@
       },
       {
         "ordinal": 6,
+        "name": "weight",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "due_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 8,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 9,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -57,8 +67,10 @@
       false,
       false,
       false,
+      true,
+      false,
       false
     ]
   },
-  "hash": "38de83a505169d78bff6d5462ecdf10c67612e6834056b33498be46be7c72396"
+  "hash": "80d2fb6fe73cb2c29168928340a3d4a7eb38dc24c233f54da5b35e3292157081"
 }

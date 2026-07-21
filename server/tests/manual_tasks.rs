@@ -1,6 +1,7 @@
 //! Manual-tasks repository round-trip (Feature 5 Phase 1). Hits a live DB via
 //! DATABASE_URL; skips if unset.
 
+use chrono::NaiveDate;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -45,13 +46,16 @@ async fn manual_task_crud_roundtrip() {
     .await
     .unwrap();
 
-    // Create.
+    // Create with a weight + due date.
+    let due = NaiveDate::from_ymd_opt(2020, 5, 1).unwrap();
     let task = manual_tasks::create(
         &pool,
         emp.id,
         pm.id,
         "Write API docs",
         "Cover all endpoints",
+        7,
+        Some(due),
     )
     .await
     .unwrap();
@@ -59,6 +63,8 @@ async fn manual_task_crud_roundtrip() {
     assert_eq!(task.created_by, Some(pm.id));
     assert_eq!(task.status, "open");
     assert_eq!(task.title, "Write API docs");
+    assert_eq!(task.weight, 7);
+    assert_eq!(task.due_date, Some(due));
 
     // List + get.
     let list = manual_tasks::list_for_user(&pool, emp.id).await.unwrap();
@@ -66,15 +72,22 @@ async fn manual_task_crud_roundtrip() {
     let got = manual_tasks::get(&pool, task.id).await.unwrap().unwrap();
     assert_eq!(got.description, "Cover all endpoints");
 
-    // Update title only; description preserved.
-    assert!(
-        manual_tasks::update(&pool, task.id, Some("Write & publish API docs"), None)
-            .await
-            .unwrap()
-    );
+    // Update title + weight only; description and due date preserved.
+    assert!(manual_tasks::update(
+        &pool,
+        task.id,
+        Some("Write & publish API docs"),
+        None,
+        Some(9),
+        None,
+    )
+    .await
+    .unwrap());
     let after = manual_tasks::get(&pool, task.id).await.unwrap().unwrap();
     assert_eq!(after.title, "Write & publish API docs");
     assert_eq!(after.description, "Cover all endpoints");
+    assert_eq!(after.weight, 9);
+    assert_eq!(after.due_date, Some(due), "due date preserved through PATCH");
     assert!(after.updated_at >= after.created_at);
 
     // Mark done.

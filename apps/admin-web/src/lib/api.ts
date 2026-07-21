@@ -398,6 +398,8 @@ const manualTaskSchema = z.object({
   title: z.string(),
   description: z.string(),
   status: z.string(),
+  weight: z.number(),
+  due_date: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 });
@@ -408,14 +410,22 @@ export async function fetchUserTasks(userId: string): Promise<ManualTask[]> {
   return z.array(manualTaskSchema).parse(await authedGetJson(`/admin/users/${userId}/tasks`));
 }
 
-/** Assign a task to an employee (`POST /admin/users/:id/tasks`). */
+/** Assign a task to an employee (`POST /admin/users/:id/tasks`).
+ *  `weight` is 1–10; `dueDate` is "YYYY-MM-DD" or null (open-ended). */
 export async function createUserTask(
   userId: string,
   title: string,
   description: string,
+  weight: number,
+  dueDate: string | null,
 ): Promise<ManualTask> {
   return manualTaskSchema.parse(
-    await authedJson("POST", `/admin/users/${userId}/tasks`, { title, description }),
+    await authedJson("POST", `/admin/users/${userId}/tasks`, {
+      title,
+      description,
+      weight,
+      due_date: dueDate,
+    }),
   );
 }
 

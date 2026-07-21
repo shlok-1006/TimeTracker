@@ -27,7 +27,18 @@ async fn main() -> anyhow::Result<()> {
     db::run_migrations(&pool).await?;
     tracing::info!("database connected and migrations applied");
 
-    let jwt = JwtKeys::new(&config.jwt_access_secret, config.jwt_access_ttl_seconds);
+    let mut jwt = JwtKeys::new(&config.jwt_access_secret, config.jwt_access_ttl_seconds);
+    if let Some(pem) = &config.jwt_rs256_private_key_pem {
+        jwt = jwt
+            .with_rs256(pem, &config.jwt_kid, config.jwt_sign_rs256)
+            .context("failed to load the RS256 key (JWT_RS256_PRIVATE_KEY_PEM)")?;
+    }
+    tracing::info!(
+        signing_alg = if config.jwt_sign_rs256 { "RS256" } else { "HS256" },
+        jwks_published = jwt.jwks_json().is_some(),
+        kid = %config.jwt_kid,
+        "jwt signing configured"
+    );
     let storage = StorageClient::new(S3Config::from_env()?);
     let linear = server::linear_service::LinearService::from_env();
     tracing::info!(

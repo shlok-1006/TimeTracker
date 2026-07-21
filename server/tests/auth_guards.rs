@@ -34,7 +34,7 @@ fn app() -> axum::Router {
 
 fn token_for(role: UserRole) -> String {
     JwtKeys::new(SECRET, 900)
-        .issue(Uuid::new_v4(), role, None)
+        .issue(Uuid::new_v4(), role, None, None)
         .expect("issue token")
 }
 

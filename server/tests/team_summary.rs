@@ -140,7 +140,7 @@ async fn status(path: &str, role: Option<UserRole>) -> StatusCode {
     let mut b = Request::builder().uri(path);
     if let Some(r) = role {
         let t = JwtKeys::new(SECRET, 900)
-            .issue(Uuid::new_v4(), r, None)
+            .issue(Uuid::new_v4(), r, None, None)
             .unwrap();
         b = b.header("authorization", format!("Bearer {t}"));
     }

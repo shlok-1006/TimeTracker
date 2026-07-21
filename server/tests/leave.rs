@@ -30,7 +30,7 @@ fn app() -> axum::Router {
 
 fn token(role: UserRole) -> String {
     JwtKeys::new(SECRET, 900)
-        .issue(Uuid::new_v4(), role, None)
+        .issue(Uuid::new_v4(), role, None, None)
         .unwrap()
 }
 

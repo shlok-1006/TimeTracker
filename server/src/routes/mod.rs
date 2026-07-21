@@ -11,6 +11,7 @@ pub mod attendance;
 pub mod auth;
 pub mod health;
 pub mod intervals;
+pub mod jwks;
 pub mod leave;
 pub mod linear;
 pub mod onboarding;
@@ -99,6 +100,7 @@ pub fn build(state: AppState) -> Router {
     let public = Router::new()
         .merge(health::router())
         .merge(auth_routes)
+        .merge(jwks::router())
         .merge(ticket_requests::router());
 
     let protected = Router::new()

@@ -18,6 +18,15 @@ pub struct Config {
     pub jwt_access_ttl_seconds: i64,
     /// Refresh-token lifetime in seconds.
     pub jwt_refresh_ttl_seconds: i64,
+    /// RSA private key (PEM) for RS256 signing + the JWKS endpoint (HRMS
+    /// integration). Optional — absent means HS256-only, exactly as before.
+    pub jwt_rs256_private_key_pem: Option<String>,
+    /// Key id advertised in the JWT header and the JWKS document.
+    pub jwt_kid: String,
+    /// True when JWT_SIGNING_ALG=RS256 — new tokens are RSA-signed. The flag is
+    /// independent of key presence so the key can ship first (flag off), then
+    /// the flip is a one-var change with instant rollback.
+    pub jwt_sign_rs256: bool,
 }
 
 /// Exact browser origins allowed by CORS (SEC-02) — no wildcard. Comma-separated
@@ -88,6 +97,24 @@ impl Config {
             .parse()
             .context("JWT_REFRESH_TTL_SECONDS must be an integer")?;
 
+        let jwt_sign_rs256 = parse_signing_alg(&env_or("JWT_SIGNING_ALG", "HS256"))?;
+
+        // PEMs often arrive through env files with literal `\n` sequences —
+        // normalize them so both real newlines and escaped ones work.
+        let jwt_rs256_private_key_pem = std::env::var("JWT_RS256_PRIVATE_KEY_PEM")
+            .ok()
+            .map(|v| v.replace("\\n", "\n"))
+            .filter(|v| !v.trim().is_empty());
+
+        if jwt_sign_rs256 && jwt_rs256_private_key_pem.is_none() {
+            anyhow::bail!(
+                "JWT_SIGNING_ALG=RS256 requires JWT_RS256_PRIVATE_KEY_PEM to be set \
+                 (generate with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`)"
+            );
+        }
+
+        let jwt_kid = env_or("JWT_KID", "tt-1");
+
         Ok(Self {
             socket_addr: SocketAddr::new(host, port),
             database_url,
@@ -95,7 +122,20 @@ impl Config {
             jwt_access_secret,
             jwt_access_ttl_seconds,
             jwt_refresh_ttl_seconds,
+            jwt_rs256_private_key_pem,
+            jwt_kid,
+            jwt_sign_rs256,
         })
+    }
+}
+
+/// Parse JWT_SIGNING_ALG: HS256 (default, today's behavior) or RS256.
+/// Anything else is a hard startup error — a typo must not silently fall back.
+fn parse_signing_alg(raw: &str) -> anyhow::Result<bool> {
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "HS256" => Ok(false),
+        "RS256" => Ok(true),
+        other => anyhow::bail!("JWT_SIGNING_ALG must be HS256 or RS256, got {other:?}"),
     }
 }
 
@@ -164,5 +204,14 @@ mod tests {
     fn rejects_long_but_low_entropy_secret() {
         // 40 identical chars: passes length but has 1 distinct byte (RA-13).
         assert!(validate_jwt_secret(&"a".repeat(40)).is_err());
+    }
+
+    #[test]
+    fn parses_signing_alg() {
+        assert!(!parse_signing_alg("HS256").unwrap());
+        assert!(parse_signing_alg("RS256").unwrap());
+        assert!(parse_signing_alg(" rs256 ").unwrap()); // case/space tolerant
+        assert!(parse_signing_alg("ES256").is_err()); // unsupported → hard error
+        assert!(parse_signing_alg("").is_err());
     }
 }

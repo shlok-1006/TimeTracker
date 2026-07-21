@@ -143,8 +143,17 @@ services:
       DATABASE_MAX_CONNECTIONS: "10"
       # SEC-07: required (>=32 chars). Set in .env: openssl rand -base64 48
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET in .env (openssl rand -base64 48)}
-      JWT_ACCESS_TTL_SECONDS: "300"
+      # 900s per the HRMS integration agreement (cuts dashboard refresh traffic;
+      # still well under the 3600 SEC-18 cap). Override in .env if needed.
+      JWT_ACCESS_TTL_SECONDS: ${JWT_ACCESS_TTL_SECONDS:-900}
       JWT_REFRESH_TTL_SECONDS: "2592000"
+      # RS256 signing + JWKS (HRMS integration). Two-step rollout: ship with
+      # ALG=HS256 + the key set (JWKS appears, behavior unchanged), then flip
+      # ALG=RS256. Instant rollback = set HS256 again. PEM in .env must be
+      # single-line with \n escapes (compose env_file can't hold multiline).
+      JWT_SIGNING_ALG: ${JWT_SIGNING_ALG:-HS256}
+      JWT_RS256_PRIVATE_KEY_PEM: ${JWT_RS256_PRIVATE_KEY_PEM:-}
+      JWT_KID: ${JWT_KID:-tt-1}
       # Presigned-URL host: must be reachable by clients. Locally that's MinIO's
       # published port (localhost:9100); on a VM set S3_ENDPOINT in .env to the
       # public address (or a Cloudflare R2 endpoint). Driven by .env so the same

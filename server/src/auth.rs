@@ -157,7 +157,10 @@ pub async fn login(state: &AppState, req: LoginRequest) -> Result<LoginResponse,
         return Err(AppError::Unauthorized);
     }
 
-    let access_token = state.jwt.issue(user.id, user.role, user.team_id)?;
+    let access_token =
+        state
+            .jwt
+            .issue(user.id, user.role, user.team_id, Some(user.email.clone()))?;
     let refresh_token = issue_refresh_token(state, user.id).await?;
     audit::log(&state.db, user.id, "auth.login", "user", Some(user.id)).await;
 
@@ -236,7 +239,10 @@ pub async fn change_password(
     )
     .await;
 
-    let access_token = state.jwt.issue(user.id, user.role, user.team_id)?;
+    let access_token =
+        state
+            .jwt
+            .issue(user.id, user.role, user.team_id, Some(user.email.clone()))?;
     let refresh_token = issue_refresh_token(state, user.id).await?;
 
     Ok(LoginResponse {
@@ -329,7 +335,10 @@ pub async fn refresh(state: &AppState, req: RefreshRequest) -> Result<TokenPair,
         .await?
         .ok_or(AppError::Unauthorized)?;
 
-    let access_token = state.jwt.issue(user.id, user.role, user.team_id)?;
+    let access_token =
+        state
+            .jwt
+            .issue(user.id, user.role, user.team_id, Some(user.email.clone()))?;
     let refresh_token = issue_refresh_token(state, user.id).await?;
 
     Ok(TokenPair {

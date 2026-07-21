@@ -18,6 +18,7 @@ mod reports;
 mod screenshot;
 mod sync_worker;
 mod timer;
+mod updates;
 
 use anyhow::Context;
 use serde::Serialize;
@@ -143,7 +144,9 @@ pub fn run() {
             activity_tracker::activity_today,
             screenshot::check_capture,
             screenshot::request_capture_permission,
-            screenshot::relaunch_app
+            screenshot::relaunch_app,
+            updates::check_for_update,
+            updates::open_downloads_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running TimeTracker desktop application");

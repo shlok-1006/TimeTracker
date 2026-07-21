@@ -13,6 +13,7 @@ import { MyLeave } from "@/components/my-leave";
 import { MyAttendance } from "@/components/my-attendance";
 import { Tickets } from "@/components/tickets";
 import { RecordingIndicator } from "@/components/recording-indicator";
+import { UpdateBanner } from "@/components/update-banner";
 
 type View = "dashboard" | "myday" | "work" | "leave" | "attendance";
 
@@ -49,6 +50,7 @@ export default function DashboardPage() {
 
   return (
     <div className="flex h-screen">
+      <UpdateBanner />
       <RecordingIndicator />
 
       <aside className="flex h-screen w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">

@@ -241,6 +241,8 @@ mod tests {
             title: title.into(),
             description: description.into(),
             status: status.into(),
+            weight: 5,
+            due_date: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

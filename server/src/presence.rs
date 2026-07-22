@@ -36,6 +36,19 @@ impl PresenceStatus {
     pub fn is_reportable(&self) -> bool {
         !matches!(self, PresenceStatus::NotLoggedIn)
     }
+
+    /// True when the timer is running (any active session — working, idle,
+    /// meeting, or break), as opposed to stopped / signed out. Used to mark
+    /// attendance present the moment a user starts tracking.
+    pub fn is_tracking(&self) -> bool {
+        matches!(
+            self,
+            PresenceStatus::Working
+                | PresenceStatus::Idle
+                | PresenceStatus::Meeting
+                | PresenceStatus::Break
+        )
+    }
 }
 
 impl fmt::Display for PresenceStatus {

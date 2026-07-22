@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO attendance_days\n            (user_id, day, status, worked_seconds, idle_seconds, first_in_utc,\n             last_out_utc, note, is_override, overridden_by)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9)\n        ON CONFLICT (user_id, day) DO UPDATE SET\n            status = EXCLUDED.status,\n            worked_seconds = EXCLUDED.worked_seconds,\n            idle_seconds = EXCLUDED.idle_seconds,\n            first_in_utc = EXCLUDED.first_in_utc,\n            last_out_utc = EXCLUDED.last_out_utc,\n            note = EXCLUDED.note,\n            is_override = TRUE,\n            overridden_by = EXCLUDED.overridden_by,\n            updated_at = now()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Text",
+        "Int4",
+        "Int4",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f62911c7445c6d37a7a9b54401d0000b7a09cdc3768e3d195a35ea32ef601e13"
+}

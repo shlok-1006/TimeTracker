@@ -19,6 +19,8 @@ pub struct AttendanceDay {
     pub first_in_utc: Option<DateTime<Utc>>,
     pub last_out_utc: Option<DateTime<Utc>>,
     pub note: String,
+    /// True when an HR edit is pinned here — derivation leaves it untouched.
+    pub is_override: bool,
 }
 
 /// Worked/idle seconds and clock in/out for a user on a UTC day, clipped to the
@@ -91,6 +93,7 @@ pub async fn upsert(
             last_out_utc = EXCLUDED.last_out_utc,
             note = EXCLUDED.note,
             updated_at = now()
+        WHERE attendance_days.is_override = FALSE
         "#,
         user_id,
         day,
@@ -113,7 +116,7 @@ pub async fn get(
 ) -> Result<Option<AttendanceDay>, AppError> {
     let row = sqlx::query!(
         r#"SELECT user_id, day, status, worked_seconds, idle_seconds,
-                  first_in_utc, last_out_utc, note
+                  first_in_utc, last_out_utc, note, is_override
            FROM attendance_days WHERE user_id = $1 AND day = $2"#,
         user_id,
         day
@@ -129,6 +132,7 @@ pub async fn get(
         first_in_utc: r.first_in_utc,
         last_out_utc: r.last_out_utc,
         note: r.note,
+        is_override: r.is_override,
     }))
 }
 
@@ -160,7 +164,7 @@ pub async fn list_range(
 ) -> Result<Vec<AttendanceDay>, AppError> {
     let rows = sqlx::query!(
         r#"SELECT user_id, day, status, worked_seconds, idle_seconds,
-                  first_in_utc, last_out_utc, note
+                  first_in_utc, last_out_utc, note, is_override
            FROM attendance_days
            WHERE user_id = $1 AND day >= $2 AND day <= $3
            ORDER BY day"#,
@@ -181,8 +185,76 @@ pub async fn list_range(
             first_in_utc: r.first_in_utc,
             last_out_utc: r.last_out_utc,
             note: r.note,
+            is_override: r.is_override,
         })
         .collect())
+}
+
+/// Pin a manual HR override for a user/day. Marks the row `is_override` so the
+/// nightly rollup and the recompute-today path leave it alone. Overwrites any
+/// existing row (HR's explicit edit always wins).
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_override(
+    pool: &PgPool,
+    user_id: Uuid,
+    day: NaiveDate,
+    status: &str,
+    worked_seconds: i32,
+    idle_seconds: i32,
+    first_in_utc: Option<DateTime<Utc>>,
+    last_out_utc: Option<DateTime<Utc>>,
+    note: &str,
+    overridden_by: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query!(
+        r#"
+        INSERT INTO attendance_days
+            (user_id, day, status, worked_seconds, idle_seconds, first_in_utc,
+             last_out_utc, note, is_override, overridden_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9)
+        ON CONFLICT (user_id, day) DO UPDATE SET
+            status = EXCLUDED.status,
+            worked_seconds = EXCLUDED.worked_seconds,
+            idle_seconds = EXCLUDED.idle_seconds,
+            first_in_utc = EXCLUDED.first_in_utc,
+            last_out_utc = EXCLUDED.last_out_utc,
+            note = EXCLUDED.note,
+            is_override = TRUE,
+            overridden_by = EXCLUDED.overridden_by,
+            updated_at = now()
+        "#,
+        user_id,
+        day,
+        status,
+        worked_seconds,
+        idle_seconds,
+        first_in_utc,
+        last_out_utc,
+        note,
+        overridden_by
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Clear a user/day override so derivation controls it again. Returns whether a
+/// row was actually un-pinned (false = no override was set).
+pub async fn clear_override(
+    pool: &PgPool,
+    user_id: Uuid,
+    day: NaiveDate,
+) -> Result<bool, AppError> {
+    let res = sqlx::query!(
+        "UPDATE attendance_days
+         SET is_override = FALSE, overridden_by = NULL, updated_at = now()
+         WHERE user_id = $1 AND day = $2 AND is_override = TRUE",
+        user_id,
+        day
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
 }
 
 /// Per-employee attendance summary over `[from, to]` (the HR/PM report).

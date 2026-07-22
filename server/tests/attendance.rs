@@ -93,7 +93,7 @@ async fn attendance_rollup_derives_all_statuses() {
     assert!(present.first_in_utc.is_some() && present.last_out_utc.is_some());
 
     // LEAVE: an approved leave request covering Tuesday.
-    let lt = leave::create_type(&pool, &format!("Annual-{tag}"), true, 20.0)
+    let lt = leave::create_type(&pool, &format!("Annual-{tag}"), true, 20.0, 0.0, 0.0)
         .await
         .unwrap();
     let req = leave::create_request(&pool, emp.id, lt.id, tuesday, tuesday, 1.0, "vacation")
@@ -161,6 +161,181 @@ async fn attendance_rollup_derives_all_statuses() {
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn attendance_override_survives_rollup_and_reverts() {
+    let Some(pool) = pool().await else {
+        eprintln!("skipping attendance override test: DATABASE_URL not set");
+        return;
+    };
+    let tag = Uuid::new_v4();
+    let emp = users::create(
+        &pool,
+        "Att Ovr",
+        &format!("att-ovr-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE users SET created_at = '2020-01-01T00:00:00Z' WHERE id = $1",
+        emp.id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // A plain weekday with no work derives "absent".
+    let monday = next_weekday(d(2020, 4, 6), Weekday::Mon);
+    let derived = attendance_service::rollup_day(&pool, emp.id, monday)
+        .await
+        .unwrap();
+    assert_eq!(derived.status, "absent");
+    assert!(!derived.is_override);
+
+    // HR overrides it to "leave".
+    let ovr =
+        attendance_service::override_day(&pool, emp.id, monday, "leave", "approved offline", emp.id)
+            .await
+            .unwrap();
+    assert_eq!(ovr.status, "leave");
+    assert_eq!(ovr.note, "approved offline");
+    assert!(ovr.is_override);
+
+    // The rollup (nightly job / recompute-today path) must NOT clobber it.
+    let after = attendance_service::rollup_day(&pool, emp.id, monday)
+        .await
+        .unwrap();
+    assert_eq!(after.status, "leave", "override must survive the rollup");
+    assert!(after.is_override);
+
+    // Clearing the override reverts to the derived status.
+    let reverted = attendance_service::clear_override(&pool, emp.id, monday)
+        .await
+        .unwrap();
+    assert_eq!(reverted.status, "absent", "revert recomputes derived status");
+    assert!(!reverted.is_override);
+
+    users::delete(&pool, emp.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn completed_day_under_four_hours_is_partial() {
+    let Some(pool) = pool().await else {
+        eprintln!("skipping partial-day test: DATABASE_URL not set");
+        return;
+    };
+    let tag = Uuid::new_v4();
+    let emp = users::create(
+        &pool,
+        "Att Partial",
+        &format!("att-partial-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE users SET created_at = '2020-01-01T00:00:00Z' WHERE id = $1",
+        emp.id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let short_day = next_weekday(d(2020, 7, 6), Weekday::Mon);
+    let full_day = short_day + Duration::days(1);
+
+    // 2h of work on a completed weekday → partial (under the 4h threshold).
+    let s1 = Utc.from_utc_datetime(&short_day.and_hms_opt(9, 0, 0).unwrap());
+    intervals::insert_batch(
+        &pool,
+        emp.id,
+        &[IntervalDto {
+            id: Uuid::new_v4(),
+            start_utc: s1,
+            end_utc: s1 + Duration::hours(2),
+            kind: "active".into(),
+            team_id: None,
+        }],
+    )
+    .await
+    .unwrap();
+    let partial = attendance_service::rollup_day(&pool, emp.id, short_day)
+        .await
+        .unwrap();
+    assert_eq!(partial.status, "partial");
+
+    // 5h of work → full present day.
+    let s2 = Utc.from_utc_datetime(&full_day.and_hms_opt(9, 0, 0).unwrap());
+    intervals::insert_batch(
+        &pool,
+        emp.id,
+        &[IntervalDto {
+            id: Uuid::new_v4(),
+            start_utc: s2,
+            end_utc: s2 + Duration::hours(5),
+            kind: "active".into(),
+            team_id: None,
+        }],
+    )
+    .await
+    .unwrap();
+    let present = attendance_service::rollup_day(&pool, emp.id, full_day)
+        .await
+        .unwrap();
+    assert_eq!(present.status, "present");
+
+    users::delete(&pool, emp.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn mark_present_today_materializes_without_section_visit() {
+    let Some(pool) = pool().await else {
+        eprintln!("skipping mark-present test: DATABASE_URL not set");
+        return;
+    };
+    let tag = Uuid::new_v4();
+    let emp = users::create(
+        &pool,
+        "Att Live",
+        &format!("att-live-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
+    let today = Utc::now().date_naive();
+
+    // No calendar view, no rollup — just the "started tracking" signal marks
+    // the day present immediately (even with nothing synced yet).
+    attendance_service::mark_present_today(&pool, emp.id)
+        .await
+        .unwrap();
+    let row = attendance::get(&pool, emp.id, today)
+        .await
+        .unwrap()
+        .expect("attendance row created on start");
+    assert_eq!(row.status, "present");
+    assert!(!row.is_override);
+
+    // It must never stomp an HR override.
+    attendance_service::override_day(&pool, emp.id, today, "leave", "wfh", emp.id)
+        .await
+        .unwrap();
+    attendance_service::mark_present_today(&pool, emp.id)
+        .await
+        .unwrap();
+    let after = attendance::get(&pool, emp.id, today).await.unwrap().unwrap();
+    assert_eq!(after.status, "leave", "HR override must be preserved");
+    assert!(after.is_override);
+
+    users::delete(&pool, emp.id).await.unwrap();
 }
 
 #[tokio::test]

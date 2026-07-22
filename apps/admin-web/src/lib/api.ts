@@ -782,8 +782,20 @@ const attendanceDaySchema = z.object({
   first_in_utc: z.string().nullable(),
   last_out_utc: z.string().nullable(),
   note: z.string(),
+  is_override: z.boolean(),
 });
 export type AttendanceDayRow = z.infer<typeof attendanceDaySchema>;
+
+/** The attendance statuses HR may assign (must match the server CHECK). */
+export const ATTENDANCE_STATUSES = [
+  "present",
+  "partial",
+  "absent",
+  "leave",
+  "holiday",
+  "weekend",
+] as const;
+export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
 
 const attendanceCalendarSchema = z.object({
   from: z.string(),
@@ -800,6 +812,30 @@ export async function fetchUserAttendance(
 ): Promise<AttendanceCalendar> {
   return attendanceCalendarSchema.parse(
     await authedGetJson(`/admin/users/${userId}/attendance?from=${from}&to=${to}`),
+  );
+}
+
+/** HR: set (override) a user's attendance status for a day
+ *  (`PUT /admin/users/:id/attendance/:day`). */
+export async function setUserAttendance(
+  userId: string,
+  day: string,
+  status: AttendanceStatus,
+  note: string,
+): Promise<AttendanceDayRow> {
+  return attendanceDaySchema.parse(
+    await authedJson("PUT", `/admin/users/${userId}/attendance/${day}`, { status, note }),
+  );
+}
+
+/** HR: revert a day to the auto-derived status
+ *  (`DELETE /admin/users/:id/attendance/:day`). */
+export async function clearUserAttendance(
+  userId: string,
+  day: string,
+): Promise<AttendanceDayRow> {
+  return attendanceDaySchema.parse(
+    await authedJson("DELETE", `/admin/users/${userId}/attendance/${day}`),
   );
 }
 

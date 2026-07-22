@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::attendance_service;
 use crate::db::{presence, users};
 use crate::error::AppError;
 use crate::middleware::AuthUser;
@@ -36,6 +37,14 @@ async fn heartbeat(
     presence::heartbeat(&state.db, user.id, body.status, body.current_interval_id).await?;
     if let Some(tz) = body.timezone.as_deref() {
         users::set_timezone(&state.db, user.id, tz).await?;
+    }
+    // As soon as the user is tracking, mark them present for today — no need to
+    // open the attendance section to trigger it. Best-effort: a failure here must
+    // not fail the heartbeat.
+    if body.status.is_tracking() {
+        if let Err(e) = attendance_service::mark_present_today(&state.db, user.id).await {
+            tracing::warn!(user_id = %user.id, "mark-present-on-heartbeat failed: {e}");
+        }
     }
     Ok(Json(json!({ "ok": true })))
 }

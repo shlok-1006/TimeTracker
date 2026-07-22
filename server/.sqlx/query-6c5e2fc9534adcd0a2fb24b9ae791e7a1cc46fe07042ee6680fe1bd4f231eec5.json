@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE attendance_days\n         SET is_override = FALSE, overridden_by = NULL, updated_at = now()\n         WHERE user_id = $1 AND day = $2 AND is_override = TRUE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6c5e2fc9534adcd0a2fb24b9ae791e7a1cc46fe07042ee6680fe1bd4f231eec5"
+}

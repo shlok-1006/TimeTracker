@@ -18,6 +18,7 @@ import { ActivityCard } from "@/components/activity-card";
 import { DayGallery } from "@/components/day-gallery";
 import { ReportCard } from "@/components/report-card";
 import { UserTasks } from "@/components/user-tasks";
+import { UserAttendance } from "@/components/user-attendance";
 import { ActivityTimeline } from "@/components/activity-timeline";
 import { fmtHms } from "@/lib/format";
 
@@ -218,6 +219,8 @@ export default function UserDetailPage() {
       </section>
 
       <UserTasks userId={id} />
+
+      <UserAttendance userId={id} />
 
       <section className="rounded-lg border bg-card p-6 text-card-foreground">
         <h2 className="mb-3 text-lg font-semibold">Screenshots</h2>

@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::attendance_service;
-use crate::db::{attendance, audit};
+use crate::db::{attendance, audit, users};
 use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
 use crate::role::UserRole;
@@ -28,6 +28,11 @@ use crate::state::AppState;
 
 /// Cap a range so a single request can't roll up an unbounded number of days.
 const MAX_RANGE_DAYS: i64 = 366;
+
+/// The attendance statuses HR may assign (must match the DB CHECK constraint).
+const VALID_STATUSES: [&str; 6] = [
+    "present", "partial", "absent", "leave", "holiday", "weekend",
+];
 
 #[derive(Deserialize)]
 struct RangeQuery {
@@ -114,10 +119,67 @@ async fn rollup(
     Ok(Json(json!({ "day": day, "employees": count })))
 }
 
+#[derive(Deserialize)]
+struct OverrideBody {
+    status: String,
+    #[serde(default)]
+    note: String,
+}
+
+/// `PUT /admin/users/:id/attendance/:day` — HR sets (overrides) a user's status
+/// for a day. The edit is pinned so the nightly rollup won't overwrite it.
+async fn set_attendance(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Path((target, day)): Path<(Uuid, NaiveDate)>,
+    Json(body): Json<OverrideBody>,
+) -> Result<Json<Value>, AppError> {
+    if !VALID_STATUSES.contains(&body.status.as_str()) {
+        return Err(AppError::BadRequest(format!(
+            "status must be one of: {}",
+            VALID_STATUSES.join(", ")
+        )));
+    }
+    if users::find_by_id(&state.db, target).await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    let row =
+        attendance_service::override_day(&state.db, target, day, &body.status, body.note.trim(), hr.id)
+            .await?;
+    audit::log(&state.db, hr.id, "attendance.override", "user", Some(target)).await;
+    Ok(Json(json!(row)))
+}
+
+/// `DELETE /admin/users/:id/attendance/:day` — HR reverts a day back to the
+/// automatically-derived status (recomputed from intervals).
+async fn clear_attendance(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Path((target, day)): Path<(Uuid, NaiveDate)>,
+) -> Result<Json<Value>, AppError> {
+    if users::find_by_id(&state.db, target).await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    let row = attendance_service::clear_override(&state.db, target, day).await?;
+    audit::log(
+        &state.db,
+        hr.id,
+        "attendance.override.clear",
+        "user",
+        Some(target),
+    )
+    .await;
+    Ok(Json(json!(row)))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me/attendance", get(my_attendance))
         .route("/admin/users/:id/attendance", get(user_attendance))
+        .route(
+            "/admin/users/:id/attendance/:day",
+            axum::routing::put(set_attendance).delete(clear_attendance),
+        )
         .route("/admin/attendance", get(attendance_report))
         .route("/admin/attendance/rollup", post(rollup))
 }

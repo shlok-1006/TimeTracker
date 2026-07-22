@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT user_id, day, status, worked_seconds, idle_seconds,\n                  first_in_utc, last_out_utc, note\n           FROM attendance_days WHERE user_id = $1 AND day = $2",
+  "query": "SELECT user_id, day, status, worked_seconds, idle_seconds,\n                  first_in_utc, last_out_utc, note, is_override\n           FROM attendance_days\n           WHERE user_id = $1 AND day >= $2 AND day <= $3\n           ORDER BY day",
   "describe": {
     "columns": [
       {
@@ -42,11 +42,17 @@
         "ordinal": 7,
         "name": "note",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "is_override",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
         "Uuid",
+        "Date",
         "Date"
       ]
     },
@@ -58,8 +64,9 @@
       false,
       true,
       true,
+      false,
       false
     ]
   },
-  "hash": "80f0038d0dfef3016dcfd49d3b9ffc06edc0046dc9b26f33f908004df1fd0b76"
+  "hash": "cd9ca7b0357dcd298e1d4f2950a0812f915a466827dc97efde08521568e70b01"
 }

@@ -64,6 +64,10 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     tauri::async_runtime::spawn(sync_worker::run(state.clone()));
     tauri::async_runtime::spawn(presence::run(state.clone()));
     tauri::async_runtime::spawn(presence::run_break_reminders(handle.clone(), state.clone()));
+    tauri::async_runtime::spawn(presence::run_not_tracking_reminders(
+        handle.clone(),
+        state.clone(),
+    ));
     tauri::async_runtime::spawn(activity_tracker::run(state.clone()));
     tauri::async_runtime::spawn(screenshot::run(state));
     Ok(())

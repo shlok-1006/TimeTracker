@@ -16,8 +16,11 @@ use crate::http;
 use crate::timer::DesktopState;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(45);
-/// How often to nudge someone who's still on a break.
-const BREAK_REMINDER_INTERVAL: Duration = Duration::from_secs(600); // 10 minutes
+/// How often to nudge someone who's still on a break (until they resume or mute).
+const BREAK_REMINDER_INTERVAL: Duration = Duration::from_secs(180); // 3 minutes
+/// How often to nudge a signed-in user whose machine is in use but who hasn't
+/// started the timer.
+const NOT_TRACKING_REMINDER_INTERVAL: Duration = Duration::from_secs(300); // 5 minutes
 
 /// Pure status derivation.
 ///
@@ -128,6 +131,34 @@ pub async fn run_break_reminders(app: AppHandle, state: DesktopState) {
                 .show()
             {
                 tracing::warn!("break reminder notification failed: {e}");
+            }
+        }
+    }
+}
+
+/// Background reminder: while the user is signed in and actively using the
+/// machine (not idle) but the timer is NOT running, nudge them to start
+/// tracking. Skipped when signed out (nothing to start), when the machine is
+/// idle (they're away), or when the timer is already running.
+pub async fn run_not_tracking_reminders(app: AppHandle, state: DesktopState) {
+    loop {
+        tokio::time::sleep(NOT_TRACKING_REMINDER_INTERVAL).await;
+        // Only nudge a signed-in user — a logged-out user has nothing to start.
+        if auth::stored_refresh().is_none() {
+            continue;
+        }
+        let tracking = state.tracker.lock().await.is_some();
+        // "System is on but the app isn't": machine in active use with the timer
+        // stopped.
+        if !tracking && !state.idle.is_idle() {
+            if let Err(e) = app
+                .notification()
+                .builder()
+                .title("You haven't started the timer")
+                .body("Your computer is active but TimeTracker isn't recording. Open the app and click Start tracking.")
+                .show()
+            {
+                tracing::warn!("not-tracking reminder notification failed: {e}");
             }
         }
     }

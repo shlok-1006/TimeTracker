@@ -2,23 +2,29 @@
 
 import { useState } from "react";
 import type { AdminShot } from "@/lib/api";
+import { Lightbox } from "@/components/lightbox";
 
-/** Thumbnail grid + click-to-zoom modal. Images that fail to load are hidden
- *  (e.g. when the object store is offline). */
+/** Thumbnail grid + click-to-open viewer with prev/next navigation. Images that
+ *  fail to load are hidden (e.g. when the object store is offline). */
 export function ScreenshotGallery({ shots }: { shots: AdminShot[] }) {
-  const [zoom, setZoom] = useState<string | null>(null);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   if (shots.length === 0) {
     return <p className="text-sm text-muted-foreground">No screenshots.</p>;
   }
 
+  const items = shots.map((s) => ({
+    url: s.url,
+    caption: new Date(s.taken_at).toLocaleString(),
+  }));
+
   return (
     <>
       <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
-        {shots.map((s) => (
+        {shots.map((s, i) => (
           <button
             key={s.id}
-            onClick={() => setZoom(s.url)}
+            onClick={() => setOpenIndex(i)}
             className="overflow-hidden rounded-md border"
             title={new Date(s.taken_at).toLocaleString()}
           >
@@ -33,14 +39,13 @@ export function ScreenshotGallery({ shots }: { shots: AdminShot[] }) {
         ))}
       </div>
 
-      {zoom && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-6"
-          onClick={() => setZoom(null)}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={zoom} alt="screenshot" className="max-h-[85vh] w-auto" />
-        </div>
+      {openIndex !== null && (
+        <Lightbox
+          items={items}
+          index={openIndex}
+          onIndexChange={setOpenIndex}
+          onClose={() => setOpenIndex(null)}
+        />
       )}
     </>
   );

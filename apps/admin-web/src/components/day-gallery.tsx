@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { DayShot } from "@/lib/api";
+import { Lightbox } from "@/components/lightbox";
 
 const VERDICT_BADGE: Record<string, string> = {
   aligned: "bg-green-100 text-green-800",
@@ -17,19 +18,24 @@ function timeLabel(iso: string) {
 /** Day-based screenshot grid: each tile shows its capture time and an analysis
  *  badge (verdict, or "Meeting · not analysed"). Click to zoom. */
 export function DayGallery({ shots }: { shots: DayShot[] }) {
-  const [zoom, setZoom] = useState<string | null>(null);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   if (shots.length === 0) {
     return <p className="text-sm text-muted-foreground">No screenshots for this day.</p>;
   }
 
+  const items = shots.map((s) => ({
+    url: s.presigned_url,
+    caption: timeLabel(s.screenshot.taken_at),
+  }));
+
   return (
     <>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {shots.map((s) => (
+        {shots.map((s, i) => (
           <div key={s.screenshot.id} className="overflow-hidden rounded-md border">
             <button
-              onClick={() => setZoom(s.presigned_url)}
+              onClick={() => setOpenIndex(i)}
               className="block w-full"
               title={new Date(s.screenshot.taken_at).toLocaleString()}
             >
@@ -67,14 +73,13 @@ export function DayGallery({ shots }: { shots: DayShot[] }) {
         ))}
       </div>
 
-      {zoom && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-6"
-          onClick={() => setZoom(null)}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={zoom} alt="screenshot" className="max-h-[85vh] w-auto" />
-        </div>
+      {openIndex !== null && (
+        <Lightbox
+          items={items}
+          index={openIndex}
+          onIndexChange={setOpenIndex}
+          onClose={() => setOpenIndex(null)}
+        />
       )}
     </>
   );

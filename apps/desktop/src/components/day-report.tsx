@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { invoker } from "@/lib/tauri";
+import { Lightbox } from "@/components/lightbox";
 
 type DayShot = {
   screenshot: { id: string; taken_at: string; captured_status: string };
@@ -47,7 +48,7 @@ function scoreColor(score: number) {
  *  day's screenshots (each badged with its verdict or "Meeting · not analysed"). */
 export function DayReport() {
   const [date, setDate] = useState(() => new Date().toLocaleDateString("en-CA"));
-  const [zoom, setZoom] = useState<string | null>(null);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   const shots = useQuery({
     queryKey: ["me_day_shots", date],
@@ -140,13 +141,13 @@ export function DayReport() {
         )}
         {shots.data && shots.data.length > 0 && (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {shots.data.map((s) => (
+            {shots.data.map((s, i) => (
               <div
                 key={s.screenshot.id}
                 className="overflow-hidden rounded-md border border-slate-200 dark:border-slate-700"
               >
                 <button
-                  onClick={() => setZoom(s.presigned_url)}
+                  onClick={() => setOpenIndex(i)}
                   className="block w-full"
                   title={new Date(s.screenshot.taken_at).toLocaleString()}
                 >
@@ -189,14 +190,19 @@ export function DayReport() {
         )}
       </div>
 
-      {zoom && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
-          onClick={() => setZoom(null)}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={zoom} alt="screenshot" className="max-h-[80vh] w-auto" />
-        </div>
+      {openIndex !== null && shots.data && (
+        <Lightbox
+          items={shots.data.map((s) => ({
+            url: s.presigned_url,
+            caption: new Date(s.screenshot.taken_at).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+          }))}
+          index={openIndex}
+          onIndexChange={setOpenIndex}
+          onClose={() => setOpenIndex(null)}
+        />
       )}
     </div>
   );

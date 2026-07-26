@@ -35,6 +35,7 @@ async fn my_hours(State(state): State<AppState>, user: AuthUser) -> Result<Json<
         "week_active_seconds": s.week_active_seconds,
         "week_idle_seconds": s.week_idle_seconds,
         "week_meeting_seconds": s.week_meeting_seconds,
+        "week_grace_seconds": s.week_grace_seconds,
         "total_seconds": s.total_seconds,
     })))
 }

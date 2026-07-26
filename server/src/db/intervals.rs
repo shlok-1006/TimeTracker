@@ -84,10 +84,15 @@ pub struct HoursSummary {
     pub today_active_seconds: i64,
     pub today_idle_seconds: i64,
     pub today_meeting_seconds: i64,
+    /// This week's total INCLUDING any manual grace time (so the dashboard total
+    /// reflects grants). `week_grace_seconds` says how much of it is grace.
     pub week_seconds: i64,
     pub week_active_seconds: i64,
     pub week_idle_seconds: i64,
     pub week_meeting_seconds: i64,
+    /// Manually-granted "grace" time in the current week (0 = none). When > 0 the
+    /// UI tags the week total as including grace.
+    pub week_grace_seconds: i64,
     /// All-time worked (active+idle+meeting) — used only for the desktop's
     /// "server total (reconciled)" line.
     pub total_seconds: i64,
@@ -138,29 +143,46 @@ pub async fn hours_summary(pool: &PgPool, user_id: Uuid) -> Result<HoursSummary,
     .fetch_optional(pool)
     .await?;
 
-    // No intervals yet → all zeros (the GROUP BY yields no row).
+    // Manual "grace" time granted for the CURRENT business week — added to the
+    // week total (Rule 2: intervals stay pure; grace is a separate additive
+    // layer). Same Monday/4 AM/user-tz boundary as the week window above, so the
+    // two line up. Computed separately so grace shows even with zero intervals.
+    let grace: i64 = sqlx::query_scalar!(
+        r#"SELECT COALESCE(SUM(seconds), 0)::bigint AS "grace!"
+           FROM time_grants
+           WHERE user_id = $1
+             AND week_start = date_trunc('week', ((now() AT TIME ZONE $2::text) - interval '4 hours'))::date"#,
+        user_id,
+        tz
+    )
+    .fetch_one(pool)
+    .await?;
+
+    // No intervals yet → all zeros (the GROUP BY yields no row) — but grace still applies.
     Ok(match r {
         Some(r) => HoursSummary {
             today_seconds: r.today,
             today_active_seconds: r.today_active,
             today_idle_seconds: r.today_idle,
             today_meeting_seconds: r.today_meeting,
-            week_seconds: r.week,
+            week_seconds: r.week + grace,
             week_active_seconds: r.week_active,
             week_idle_seconds: r.week_idle,
             week_meeting_seconds: r.week_meeting,
-            total_seconds: r.total,
+            week_grace_seconds: grace,
+            total_seconds: r.total + grace,
         },
         None => HoursSummary {
             today_seconds: 0,
             today_active_seconds: 0,
             today_idle_seconds: 0,
             today_meeting_seconds: 0,
-            week_seconds: 0,
+            week_seconds: grace,
             week_active_seconds: 0,
             week_idle_seconds: 0,
             week_meeting_seconds: 0,
-            total_seconds: 0,
+            week_grace_seconds: grace,
+            total_seconds: grace,
         },
     })
 }

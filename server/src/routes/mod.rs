@@ -20,6 +20,7 @@ pub mod reports;
 pub mod tasks;
 pub mod teams;
 pub mod ticket_requests;
+pub mod time_grants;
 pub mod uploads;
 
 use axum::http::{header, HeaderValue, Method};
@@ -119,6 +120,7 @@ pub fn build(state: AppState) -> Router {
         .merge(onboarding::router())
         .merge(attendance::router())
         .merge(activity::router())
+        .merge(time_grants::router())
         .merge(admin::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

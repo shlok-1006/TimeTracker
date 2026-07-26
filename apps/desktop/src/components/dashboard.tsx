@@ -23,6 +23,7 @@ type HoursSummary = {
   week_active_seconds: number;
   week_idle_seconds: number;
   week_meeting_seconds: number;
+  week_grace_seconds?: number;
   total_seconds: number;
 };
 type DayBucket = { date: string; worked_seconds: number; idle_seconds: number };
@@ -31,11 +32,20 @@ type ActivitySummary = {
   apps: { app_name: string; seconds: number }[];
 };
 
-function Card({ label, value }: { label: string; value: string }) {
+function Card({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: React.ReactNode;
+}) {
   return (
     <div className="rounded-lg border border-slate-200 p-5 dark:border-slate-800">
       <p className="text-sm text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
+      {hint}
     </div>
   );
 }
@@ -71,6 +81,10 @@ export function Dashboard({ userId }: { userId: string }) {
 
   const s = localSummary.data;
   const reconciled = serverHours.data?.total_seconds;
+  // Grace time is server-side (local SQLite doesn't know about it); fold it into
+  // the displayed week total and tag it.
+  const weekGrace = serverHours.data?.week_grace_seconds ?? 0;
+  const weekTotal = (s?.week_seconds ?? 0) + weekGrace;
   const statusInfo = STATUS_LABEL[status.data ?? "not_working"] ?? {
     label: status.data ?? "—",
     dot: "bg-slate-400",
@@ -91,7 +105,20 @@ export function Dashboard({ userId }: { userId: string }) {
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card label="Today's hours" value={fmtHms(s?.today_seconds ?? 0)} />
-        <Card label="This week" value={fmtHms(s?.week_seconds ?? 0)} />
+        <Card
+          label="This week"
+          value={fmtHms(weekTotal)}
+          hint={
+            weekGrace > 0 ? (
+              <span
+                className="mt-1 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800"
+                title="Includes grace time added by HR / your manager"
+              >
+                incl. {fmtHms(weekGrace)} grace
+              </span>
+            ) : undefined
+          }
+        />
         <div className="rounded-lg border border-slate-200 p-5 dark:border-slate-800">
           <p className="text-sm text-slate-500">Current status</p>
           <p className="mt-1 inline-flex items-center gap-2 text-2xl font-semibold">

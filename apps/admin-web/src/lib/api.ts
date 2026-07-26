@@ -62,9 +62,48 @@ const hoursSummarySchema = z.object({
   week_active_seconds: z.number(),
   week_idle_seconds: z.number(),
   week_meeting_seconds: z.number(),
+  week_grace_seconds: z.number(),
   total_seconds: z.number(),
 });
 export type HoursSummary = z.infer<typeof hoursSummarySchema>;
+
+// ---- Manual "grace" time grants (HR / PM) ----
+
+const timeGrantSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  week_start: z.string(),
+  seconds: z.number(),
+  reason: z.string(),
+  granted_by: z.string().nullable(),
+  granted_by_name: z.string().nullable(),
+  created_at: z.string(),
+});
+export type TimeGrant = z.infer<typeof timeGrantSchema>;
+
+/** This week's grace grants for a user (`GET /admin/users/:id/time-grants`). */
+export async function fetchTimeGrants(
+  userId: string,
+): Promise<{ week_start: string; grants: TimeGrant[] }> {
+  return z
+    .object({ week_start: z.string(), grants: z.array(timeGrantSchema) })
+    .parse(await authedGetJson(`/admin/users/${userId}/time-grants`));
+}
+
+/** Add grace time to a user's current week (`POST /admin/users/:id/time-grants`). */
+export async function addTimeGrant(
+  userId: string,
+  input: { hours: number; minutes: number; reason: string },
+): Promise<TimeGrant> {
+  return timeGrantSchema.parse(
+    await authedJson("POST", `/admin/users/${userId}/time-grants`, input),
+  );
+}
+
+/** Remove a grace grant (`DELETE /admin/time-grants/:id`). */
+export async function deleteTimeGrant(id: string): Promise<void> {
+  await authedJson("DELETE", `/admin/time-grants/${id}`);
+}
 
 const adminShotSchema = z.object({
   id: z.string(),
@@ -950,6 +989,42 @@ export async function login(email: string, password: string): Promise<LoginRespo
   }
   if (!res.ok) {
     throw new Error(`Login failed (status ${res.status}).`);
+  }
+  return loginResponseSchema.parse(await res.json());
+}
+
+/** Change the password from the login screen (verifying the current one) and
+ *  sign in with the new one. Public — no token required (`POST /auth/change-password`). */
+export async function changePassword(
+  email: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE}/auth/change-password`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      email,
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  if (res.status === 401) {
+    throw new Error("Current email or password is incorrect.");
+  }
+  if (res.status === 400) {
+    // Surface the server's validation message (e.g. min length).
+    let msg = "Invalid new password.";
+    try {
+      const j = (await res.json()) as { error?: string };
+      if (j.error) msg = j.error;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(msg);
+  }
+  if (!res.ok) {
+    throw new Error(`Password change failed (status ${res.status}).`);
   }
   return loginResponseSchema.parse(await res.json());
 }

@@ -19,14 +19,24 @@ import { DayGallery } from "@/components/day-gallery";
 import { ReportCard } from "@/components/report-card";
 import { UserTasks } from "@/components/user-tasks";
 import { UserAttendance } from "@/components/user-attendance";
+import { UserGraceTime } from "@/components/user-grace-time";
 import { ActivityTimeline } from "@/components/activity-timeline";
 import { fmtHms } from "@/lib/format";
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: React.ReactNode;
+}) {
   return (
     <div className="rounded-lg border p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="text-lg font-semibold tabular-nums">{value}</p>
+      {hint}
     </div>
   );
 }
@@ -149,7 +159,20 @@ export default function UserDetailPage() {
                 This week
               </p>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <Stat label="Total" value={fmtHms(hours.data.week_seconds)} />
+                <Stat
+                  label="Total"
+                  value={fmtHms(hours.data.week_seconds)}
+                  hint={
+                    hours.data.week_grace_seconds > 0 ? (
+                      <span
+                        className="mt-1 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800"
+                        title="Includes manually-granted grace time"
+                      >
+                        incl. {fmtHms(hours.data.week_grace_seconds)} grace
+                      </span>
+                    ) : undefined
+                  }
+                />
                 <Stat label="Active" value={fmtHms(hours.data.week_active_seconds)} />
                 <Stat label="Idle" value={fmtHms(hours.data.week_idle_seconds)} />
                 <Stat label="Meeting" value={fmtHms(hours.data.week_meeting_seconds)} />
@@ -158,6 +181,8 @@ export default function UserDetailPage() {
           </div>
         )}
       </section>
+
+      <UserGraceTime userId={id} />
 
       <section className="rounded-lg border bg-card p-6 text-card-foreground">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

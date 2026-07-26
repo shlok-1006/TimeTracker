@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.id, g.user_id, g.week_start, g.seconds, g.reason, g.granted_by,\n                  gb.name AS \"granted_by_name?\", g.created_at\n           FROM time_grants g\n           LEFT JOIN users gb ON gb.id = g.granted_by\n           WHERE g.user_id = $1 AND g.week_start = $2\n           ORDER BY g.created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "week_start",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 3,
+        "name": "seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "granted_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "granted_by_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "2cf12be20ed27073c11bfc5961b5d5261eebe6a507e9ba4b75954bb0664403e9"
+}

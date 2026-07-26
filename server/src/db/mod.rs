@@ -21,6 +21,7 @@ pub mod refresh_tokens;
 pub mod screenshots;
 pub mod teams;
 pub mod ticket_requests;
+pub mod time_grants;
 pub mod users;
 pub mod weekly_hours;
 

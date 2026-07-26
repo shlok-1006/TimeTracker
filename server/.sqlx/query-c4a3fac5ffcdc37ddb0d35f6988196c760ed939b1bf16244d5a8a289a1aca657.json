@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(seconds), 0)::bigint AS \"grace!\"\n           FROM time_grants\n           WHERE user_id = $1\n             AND week_start = date_trunc('week', ((now() AT TIME ZONE $2::text) - interval '4 hours'))::date",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "grace!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c4a3fac5ffcdc37ddb0d35f6988196c760ed939b1bf16244d5a8a289a1aca657"
+}

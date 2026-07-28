@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { useAuthStore } from "@/lib/auth-store";
 import { useAdminSession } from "@/components/use-admin-session";
+import { HrOkf } from "@/components/hr-okf";
 import { cn } from "@/lib/utils";
 
 /** Routes that render without the admin sidebar (auth / entry redirect). */
@@ -155,6 +156,9 @@ function AdminShell({ children }: { children: React.ReactNode }) {
 
         <div className="min-w-0 flex-1">{children}</div>
       </div>
+
+      {/* HR-only floating company-rulebook (OKF) button + drawer, on every screen */}
+      <HrOkf />
     </div>
   );
 }

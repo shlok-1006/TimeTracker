@@ -14,6 +14,7 @@ pub mod intervals;
 pub mod jwks;
 pub mod leave;
 pub mod linear;
+pub mod okf;
 pub mod onboarding;
 pub mod presence;
 pub mod reports;
@@ -121,6 +122,7 @@ pub fn build(state: AppState) -> Router {
         .merge(attendance::router())
         .merge(activity::router())
         .merge(time_grants::router())
+        .merge(okf::router())
         .merge(admin::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

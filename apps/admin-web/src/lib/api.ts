@@ -377,6 +377,26 @@ export async function fetchUserActivity(userId: string, day: string): Promise<Us
   );
 }
 
+// ---- OKF (company rulebook — HR only) ----
+
+const okfSchema = z.object({
+  content: z.string(),
+  updated_by: z.string().nullable(),
+  updated_by_name: z.string().nullable(),
+  updated_at: z.string(),
+});
+export type Okf = z.infer<typeof okfSchema>;
+
+/** The current company rulebook (`GET /admin/okf`, HR only). */
+export async function getOkf(): Promise<Okf> {
+  return okfSchema.parse(await authedGetJson("/admin/okf"));
+}
+
+/** Replace the rulebook content (`PUT /admin/okf`, HR only). */
+export async function updateOkf(content: string): Promise<Okf> {
+  return okfSchema.parse(await authedJson("PUT", "/admin/okf", { content }));
+}
+
 // ---- Teams + summary (Feature 4) ----
 
 const teamWithCountSchema = z.object({

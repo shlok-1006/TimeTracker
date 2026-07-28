@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.content AS \"content!\", d.updated_by,\n                  u.name AS \"updated_by_name?\", d.updated_at AS \"updated_at!\"\n           FROM okf_document d\n           LEFT JOIN users u ON u.id = d.updated_by\n           WHERE d.id = 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "updated_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "updated_by_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "updated_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "d379dc1bc91531c66575240c44b9b1ac11e944aa8ce8e6711baf0a9386f46ffd"
+}

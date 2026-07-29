@@ -52,6 +52,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | ATT-04 | **Status precedence** when no time was tracked. | `leave → holiday → weekend → absent` | `code` | `server/src/attendance_service.rs:63` |
 | ATT-05 | **Business-day boundary.** When "a day" starts for attendance rollup. ⚠️ See §12-C: this is **UTC midnight** today, while the dashboard uses 4 AM local. | UTC midnight *(target: 4 AM Asia/Kolkata)* | `code` | `server/src/attendance_service.rs:34` |
 | ATT-06 | **Weekend days.** Days counted as `weekend`. | Sat, Sun | `code` | `server/src/leave_service.rs:12` |
+| ATT-07 | **Weekends never count as a work day.** A Sat/Sun stays `weekend` even when the employee tracks time — it is never `present` or `partial`. Auto-present on Start is also skipped on weekends. | Weekends = `weekend` always | `code` | `server/src/attendance_service.rs:47` (`derive_status`), `:225` (`mark_present_today`) |
 
 ---
 
@@ -170,6 +171,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | 2026-07-27 | Shlok | — | Initial OKF captured from the running system (code-verified). |
 | 2026-07-27 | HR | LV-10, LV-11, LV-12 | Added monthly cap (2/mo), carry-over cap (10/yr), maternity/paternity 1-yr eligibility. New policy — pending build (§12-F/G/H). |
 | 2026-07-29 | Shlok | AUTH-01, AUTH-02 | Access token 5 min → 1 h; refresh token 30 d → 90 d, to cut desktop "session expired" prompts. Ships on next server deploy. |
+| 2026-07-29 | Shlok | ATT-07 | Weekends never count as present/partial even with tracked time; auto-present skipped on weekends. Ships on next server deploy. |
 
 *(HR: add a row whenever you edit a Value. The agent appends a row for every reconciliation it performs.)*
 

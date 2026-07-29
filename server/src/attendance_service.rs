@@ -1,13 +1,15 @@
 //! Attendance business logic (Feature 6C): derive a day's attendance status
 //! from the interval log, integrating approved leave and company holidays.
 //!
-//! Precedence: tracked time wins. A day **in progress** (today) with any tracked
-//! time is `present` (starting the tracker is enough — they may still reach a
-//! full day). Once the day is **complete**, less than the full-day threshold
-//! (default 4h) of tracked time is a `partial` (half) day; at/above it is
-//! `present`. With no tracked time we explain the day as leave → holiday →
-//! weekend → absent. `status` must stay within the `attendance_days_status_check`
-//! constraint: present | partial | absent | leave | holiday | weekend.
+//! Precedence: approved leave and holidays explain the day first; **weekends are
+//! never a work day** — a Sat/Sun stays `weekend` even if the employee tracked
+//! time, so it never counts as present or partial. Otherwise tracked time wins:
+//! a day **in progress** (today) with any tracked time is `present` (starting the
+//! tracker is enough — they may still reach a full day); once **complete**, under
+//! the full-day threshold (default 4h) it is `partial` (a half day), at/above it
+//! `present`. With none of the above the day is `absent`. `status` must stay
+//! within the `attendance_days_status_check` constraint: present | partial |
+//! absent | leave | holiday | weekend.
 
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use sqlx::PgPool;
@@ -52,7 +54,17 @@ fn derive_status(
     holiday_name: Option<&str>,
     day: NaiveDate,
 ) -> (&'static str, String) {
-    if tracked_seconds > 0 {
+    // Approved leave and holidays explain the day first (only ever supplied when
+    // there was no tracked time). Weekends are never a work day: a Sat/Sun stays
+    // `weekend` even when the employee tracked time — it must not count as present
+    // or partial.
+    if let Some(lt) = leave_type {
+        ("leave", lt.to_string())
+    } else if let Some(h) = holiday_name {
+        ("holiday", h.to_string())
+    } else if is_weekend(day) {
+        ("weekend", String::new())
+    } else if tracked_seconds > 0 {
         // A day still in progress is optimistically present (they may yet reach
         // a full day); once complete, under the threshold makes it a half day.
         if day_complete && tracked_seconds < full_day_seconds {
@@ -60,12 +72,6 @@ fn derive_status(
         } else {
             ("present", String::new())
         }
-    } else if let Some(lt) = leave_type {
-        ("leave", lt.to_string())
-    } else if let Some(h) = holiday_name {
-        ("holiday", h.to_string())
-    } else if is_weekend(day) {
-        ("weekend", String::new())
     } else {
         ("absent", String::new())
     }
@@ -224,6 +230,11 @@ pub async fn clear_override(
 /// the attendance model).
 pub async fn mark_present_today(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
     let today = Utc::now().date_naive();
+    // Weekends never count as a work day — don't auto-mark present on Sat/Sun.
+    // (The rollup will derive `weekend`; see derive_status.)
+    if is_weekend(today) {
+        return Ok(());
+    }
     if let Some(row) = attendance::get(pool, user_id, today).await? {
         // Leave an HR edit alone, and skip the write if it's already present.
         if row.is_override || row.status == "present" {
@@ -310,10 +321,13 @@ mod tests {
     }
 
     #[test]
-    fn work_overrides_leave_and_holiday() {
-        // A full day of work on a weekend with leave/holiday context is present.
-        let (s, _) = derive_status(FULL, FULL, true, Some("Annual"), Some("X"), weekend());
-        assert_eq!(s, "present");
+    fn weekend_work_is_never_present_or_partial() {
+        // Tracking on a Saturday/Sunday must not count as a work day — the day
+        // stays `weekend`, whether in progress or complete, full or partial.
+        assert_eq!(derive_status(1, FULL, false, None, None, weekend()).0, "weekend");
+        assert_eq!(derive_status(3600, FULL, true, None, None, weekend()).0, "weekend");
+        assert_eq!(derive_status(FULL, FULL, true, None, None, weekend()).0, "weekend");
+        assert_eq!(derive_status(8 * 3600, FULL, false, None, None, weekend()).0, "weekend");
     }
 
     #[test]

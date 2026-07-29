@@ -73,11 +73,13 @@ impl Config {
         validate_jwt_secret(&jwt_access_secret)?;
 
         // SEC-18: a stateless access token can't be revoked before it expires,
-        // so keep the lifetime short (default 5 min) and cap it — logout/reset
+        // so keep the lifetime bounded (default 1 hour) and cap it — logout/reset
         // revoke the refresh token, so no new access token can be minted and the
-        // outstanding one lapses within this bounded window.
+        // outstanding one lapses within this bounded window. A 1-hour access token
+        // means the desktop refreshes ~12x less often than the old 5-min default,
+        // cutting the "session expired" prompts caused by refresh hiccups.
         const MAX_ACCESS_TTL: i64 = 3600;
-        let configured_access_ttl: i64 = env_or("JWT_ACCESS_TTL_SECONDS", "300")
+        let configured_access_ttl: i64 = env_or("JWT_ACCESS_TTL_SECONDS", "3600")
             .parse()
             .context("JWT_ACCESS_TTL_SECONDS must be an integer")?;
         if configured_access_ttl < 1 {
@@ -93,7 +95,9 @@ impl Config {
             configured_access_ttl
         };
 
-        let jwt_refresh_ttl_seconds: i64 = env_or("JWT_REFRESH_TTL_SECONDS", "2592000")
+        // Sliding 90-day window (reissued on every refresh): a user who opens the
+        // app at least once every 90 days never has to sign in again.
+        let jwt_refresh_ttl_seconds: i64 = env_or("JWT_REFRESH_TTL_SECONDS", "7776000")
             .parse()
             .context("JWT_REFRESH_TTL_SECONDS must be an integer")?;
 

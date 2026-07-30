@@ -430,3 +430,51 @@ pub async fn set_employment_type(
     .await?;
     Ok(res.rows_affected() > 0)
 }
+
+/// One directory entry for the cross-system identity handshake (HRMS integration).
+/// `id` is the canonical UUID (== the JWT `sub`); `teams` are the team NAMES the
+/// person belongs to (empty when none). Deliberately minimal — no secrets, no
+/// internal fields — so it is safe for another system to read and reconcile against.
+#[derive(Debug, Clone, Serialize)]
+pub struct DirectoryEntry {
+    pub id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub role: UserRole,
+    pub teams: Vec<String>,
+}
+
+/// The canonical employee directory: every user with their team names, ordered by
+/// name. One query with a `user_teams`→`teams` aggregation (LEFT JOIN so people on
+/// no team still appear with an empty `teams`).
+pub async fn list_directory(pool: &PgPool) -> Result<Vec<DirectoryEntry>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT u.id,
+                  u.name,
+                  u.email,
+                  u.role::text AS "role!",
+                  COALESCE(
+                      array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL),
+                      ARRAY[]::text[]
+                  ) AS "teams!"
+           FROM users u
+           LEFT JOIN user_teams ut ON ut.user_id = u.id
+           LEFT JOIN teams t ON t.id = ut.team_id
+           GROUP BY u.id, u.name, u.email, u.role
+           ORDER BY u.name"#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|r| {
+            Ok(DirectoryEntry {
+                id: r.id,
+                name: r.name,
+                email: r.email,
+                role: parse_role(&r.role)?,
+                teams: r.teams,
+            })
+        })
+        .collect()
+}

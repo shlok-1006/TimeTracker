@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id,\n                  u.name,\n                  u.email,\n                  u.role::text AS \"role!\",\n                  COALESCE(\n                      array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL),\n                      ARRAY[]::text[]\n                  ) AS \"teams!\"\n           FROM users u\n           LEFT JOIN user_teams ut ON ut.user_id = u.id\n           LEFT JOIN teams t ON t.id = ut.team_id\n           GROUP BY u.id, u.name, u.email, u.role\n           ORDER BY u.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "role!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "teams!",
+        "type_info": "TextArray"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "da09ff1bfbb280d32cc0dad8b040a426c33a0f956b2a66387280b47afb2dc3cc"
+}

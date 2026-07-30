@@ -1,9 +1,10 @@
 //! Screenshot capture + upload (STEP 4) with token-refreshing API calls.
 //!
-//! Captures the primary monitor **only while Working** (never during a meeting,
-//! break, idle, or when not tracking) — meeting time is excluded so it can't
-//! skew the report. Each upload is tagged with the capture-time status. Flow
-//! per Rule 5:
+//! Captures the primary monitor while **Working or in a Meeting** (never during
+//! a break, idle, or when not tracking). Meeting shots are uploaded too, tagged
+//! `meeting`, so they appear in the gallery — but the server never samples or
+//! analyses them, so meeting time still can't skew the report. Each upload is
+//! tagged with the capture-time status. Flow per Rule 5:
 //!   1. POST /uploads/presign  -> presigned PUT URL + storage key
 //!   2. PUT the JPEG bytes directly to storage (MinIO/R2)
 //!   3. POST /screenshots      -> store metadata only
@@ -66,11 +67,12 @@ fn next_delay() -> Duration {
     Duration::from_secs(pick_delay_secs(min, max, rand::random::<u64>()))
 }
 
-/// Capture is allowed **only while actively working**. Meeting time is
-/// explicitly excluded — no screenshots are taken during a meeting so they
-/// can't skew the report — as are idle, break, and not-tracking.
+/// Capture is allowed while actively **working** or **in a meeting**. Meeting
+/// shots are uploaded (tagged `meeting`) so they show in the gallery, but the
+/// server never samples or analyses them. Idle, break, and not-tracking are
+/// excluded.
 pub fn should_capture(status: &str) -> bool {
-    status == "working"
+    status == "working" || status == "meeting"
 }
 
 /// Encode an RGBA frame as JPEG bytes.
@@ -209,7 +211,8 @@ pub fn repair_stale_grant_if_needed(data_dir: &std::path::Path) {
     }
 }
 
-/// Background worker: after each randomized delay, capture + upload if Working.
+/// Background worker: after each randomized delay, capture + upload if Working
+/// or in a Meeting.
 pub async fn run(state: DesktopState) {
     let client = reqwest::Client::new();
     loop {
@@ -299,9 +302,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn captures_only_while_working() {
+    fn captures_while_working_or_meeting() {
         assert!(should_capture("working"));
-        assert!(!should_capture("meeting")); // meetings must not be captured
+        assert!(should_capture("meeting")); // meeting shots are captured (tagged, never analysed)
         assert!(!should_capture("idle"));
         assert!(!should_capture("break"));
         assert!(!should_capture("not_working"));

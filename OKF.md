@@ -84,7 +84,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | HRS-03 | **Dashboard "day's work"** shown to users. ⚠️ Differs from HRS-02 — **includes idle** (only break excluded). See §12-E. | `active + idle + meeting` | `code` | `server/src/db/intervals.rs:75` |
 | HRS-04 | **Idle threshold.** No OS input for this long ⇒ segment tagged `idle`. | **5m** (300 s) | `env` `TIMETRACKER_IDLE_THRESHOLD_SECS` | `apps/desktop/src-tauri/src/idle.rs:16` |
 | HRS-05 | **Idle does NOT auto-pause.** The timer keeps running; idle time is tagged, not stopped. | No auto-pause | `code` | `apps/desktop/src-tauri/src/timer.rs:74` |
-| HRS-06 | **Meeting mode.** Manually toggled; **counts as worked time**, but **screenshots are suppressed** while in a meeting. | Manual; counts as worked; no shots | `code` | `apps/desktop/src-tauri/src/presence.rs:84`, `screenshot.rs:70` |
+| HRS-06 | **Meeting mode.** Manually toggled; **counts as worked time**. Screenshots ARE captured during meetings (tagged `meeting`) so they appear in the gallery, but the AI never samples or analyses them. | Manual; counts as worked; meeting shots captured, labelled, not analysed | `code` | `apps/desktop/src-tauri/src/screenshot.rs:72`; sampler `server/src/sampler.rs:80`; analyzer `server/src/vision_analyzer.rs:51` |
 | HRS-07 | **Weekly expected hours.** `working_days × this`; a full 5-day week = 40h. Approved leave/holidays reduce `working_days`. | **8h/working day** (28800 s) | `code` | `server/src/weekly_hours_service.rs:22` |
 | HRS-08 | **Grace time (manual weekly hours).** HR/PM may add time to an employee's **current week**; a **reason is required**; positive only. | Enabled; reason required | `code` | `server/src/routes/time_grants.rs:46` |
 | HRS-09 | **Grace time cap** per grant. | **1 week** (604800 s) | `code` | `server/src/routes/time_grants.rs:28` |
@@ -172,6 +172,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | 2026-07-27 | HR | LV-10, LV-11, LV-12 | Added monthly cap (2/mo), carry-over cap (10/yr), maternity/paternity 1-yr eligibility. New policy — pending build (§12-F/G/H). |
 | 2026-07-29 | Shlok | AUTH-01, AUTH-02 | Access token 5 min → 1 h; refresh token 30 d → 90 d, to cut desktop "session expired" prompts. Ships on next server deploy. |
 | 2026-07-29 | Shlok | ATT-07 | Weekends never count as present/partial even with tracked time; auto-present skipped on weekends. Ships on next server deploy. |
+| 2026-07-30 | Shlok | HRS-06 | Meeting mode now captures screenshots (labelled "meeting"), but the AI still never analyses them. Ships in the next desktop release. |
 
 *(HR: add a row whenever you edit a Value. The agent appends a row for every reconciliation it performs.)*
 

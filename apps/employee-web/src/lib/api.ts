@@ -282,3 +282,47 @@ export type AttendanceCalendar = z.infer<typeof attendanceCalendarSchema>;
 export async function fetchMyAttendance(from: string, to: string): Promise<AttendanceCalendar> {
   return attendanceCalendarSchema.parse(await authedGetJson(`/me/attendance?from=${from}&to=${to}`));
 }
+
+// ---- Policy handbook (read-only) ----
+
+const policySummarySchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  title: z.string(),
+  category: z.string(),
+  kind: z.enum(["markdown", "file"]),
+  file_name: z.string().nullable(),
+  updated_at: z.string(),
+});
+export type PolicySummary = z.infer<typeof policySummarySchema>;
+
+const policyDocSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  title: z.string(),
+  category: z.string(),
+  kind: z.enum(["markdown", "file"]),
+  content: z.string(),
+  file_name: z.string().nullable(),
+  updated_at: z.string(),
+});
+export type PolicyDoc = z.infer<typeof policyDocSchema>;
+
+/** All policy documents (`GET /policies`). */
+export async function fetchPolicies(): Promise<PolicySummary[]> {
+  return z.array(policySummarySchema).parse(await authedGetJson("/policies"));
+}
+
+/** One policy document (`GET /policies/:id`). */
+export async function fetchPolicy(id: string): Promise<PolicyDoc> {
+  return policyDocSchema.parse(await authedGetJson(`/policies/${id}`));
+}
+
+/** A short-lived download URL for a file document (`GET /policies/:id/download`). */
+export async function fetchPolicyDownloadUrl(
+  id: string,
+): Promise<{ url: string; file_name: string | null }> {
+  return z
+    .object({ url: z.string(), file_name: z.string().nullable() })
+    .parse(await authedGetJson(`/policies/${id}/download`));
+}

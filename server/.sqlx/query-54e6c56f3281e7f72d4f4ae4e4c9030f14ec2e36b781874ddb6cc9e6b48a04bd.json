@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO okf_documents (slug, title, category, kind, content, updated_by)\n           VALUES ($1, $2, $3, 'markdown', $4, $5) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "54e6c56f3281e7f72d4f4ae4e4c9030f14ec2e36b781874ddb6cc9e6b48a04bd"
+}

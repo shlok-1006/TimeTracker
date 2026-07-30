@@ -17,6 +17,7 @@ const NAV = [
   { href: "/leave", label: "Leave" },
   { href: "/attendance", label: "Attendance" },
   { href: "/performance", label: "My Performance" },
+  { href: "/policies", label: "Policies" },
 ];
 
 /** Wraps the app: bare routes pass through; everything else gets the sidebar. */

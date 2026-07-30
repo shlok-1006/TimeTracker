@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE okf_documents\n           SET title = $2, category = $3, content = $4,\n               sort_order = COALESCE($5, sort_order),\n               updated_by = $6, updated_at = now()\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ebf7ccd527f640ccaa52427643bdcc728e41769529cb17b7dc27668e701cf0c7"
+}

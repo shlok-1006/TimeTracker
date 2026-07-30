@@ -377,24 +377,116 @@ export async function fetchUserActivity(userId: string, day: string): Promise<Us
   );
 }
 
-// ---- OKF (company rulebook — HR only) ----
+// ---- OKF policy library (HR edits; everyone reads) ----
 
-const okfSchema = z.object({
+const policySummarySchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  title: z.string(),
+  category: z.string(),
+  kind: z.enum(["markdown", "file"]),
+  file_name: z.string().nullable(),
+  updated_at: z.string(),
+});
+export type PolicySummary = z.infer<typeof policySummarySchema>;
+
+const policyDocSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  title: z.string(),
+  category: z.string(),
+  kind: z.enum(["markdown", "file"]),
   content: z.string(),
+  storage_key: z.string().nullable(),
+  file_name: z.string().nullable(),
+  content_type: z.string().nullable(),
+  size_bytes: z.number().nullable(),
+  sort_order: z.number(),
   updated_by: z.string().nullable(),
   updated_by_name: z.string().nullable(),
   updated_at: z.string(),
 });
-export type Okf = z.infer<typeof okfSchema>;
+export type PolicyDoc = z.infer<typeof policyDocSchema>;
 
-/** The current company rulebook (`GET /admin/okf`, HR only). */
-export async function getOkf(): Promise<Okf> {
-  return okfSchema.parse(await authedGetJson("/admin/okf"));
+/** All policy documents (`GET /policies`, any signed-in user). */
+export async function listPolicies(): Promise<PolicySummary[]> {
+  return z.array(policySummarySchema).parse(await authedGetJson("/policies"));
 }
 
-/** Replace the rulebook content (`PUT /admin/okf`, HR only). */
-export async function updateOkf(content: string): Promise<Okf> {
-  return okfSchema.parse(await authedJson("PUT", "/admin/okf", { content }));
+/** One policy document (`GET /policies/:id`). */
+export async function getPolicy(id: string): Promise<PolicyDoc> {
+  return policyDocSchema.parse(await authedGetJson(`/policies/${id}`));
+}
+
+/** Create a markdown document (`POST /admin/policies`, HR only). */
+export async function createPolicy(input: {
+  title: string;
+  category: string;
+  content: string;
+}): Promise<PolicyDoc> {
+  return policyDocSchema.parse(await authedJson("POST", "/admin/policies", input));
+}
+
+/** Edit a document (`PUT /admin/policies/:id`, HR only). */
+export async function updatePolicy(
+  id: string,
+  input: { title: string; category: string; content: string },
+): Promise<PolicyDoc> {
+  return policyDocSchema.parse(await authedJson("PUT", `/admin/policies/${id}`, input));
+}
+
+/** Delete a document (`DELETE /admin/policies/:id`, HR only). */
+export async function deletePolicy(id: string): Promise<void> {
+  await authedJson("DELETE", `/admin/policies/${id}`);
+}
+
+/** Presign a PUT to upload a file attachment (`POST /admin/policies/upload-url`). */
+export async function getPolicyUploadUrl(
+  fileName: string,
+): Promise<{ url: string; storage_key: string }> {
+  return z
+    .object({ url: z.string(), storage_key: z.string() })
+    .parse(await authedJson("POST", "/admin/policies/upload-url", { file_name: fileName }));
+}
+
+/** Register an uploaded file as a document (`POST /admin/policies/file`, HR only). */
+export async function createFilePolicy(input: {
+  title: string;
+  category: string;
+  storage_key: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+}): Promise<PolicyDoc> {
+  return policyDocSchema.parse(await authedJson("POST", "/admin/policies/file", input));
+}
+
+/** A short-lived download URL for a file document (`GET /policies/:id/download`). */
+export async function getPolicyDownloadUrl(
+  id: string,
+): Promise<{ url: string; file_name: string | null }> {
+  return z
+    .object({ url: z.string(), file_name: z.string().nullable() })
+    .parse(await authedGetJson(`/policies/${id}/download`));
+}
+
+/** Upload a file end-to-end: presign → PUT to storage → register the document. */
+export async function uploadPolicyFile(file: File, category: string): Promise<PolicyDoc> {
+  const { url, storage_key } = await getPolicyUploadUrl(file.name);
+  const put = await fetch(url, {
+    method: "PUT",
+    body: file,
+    headers: { "content-type": file.type || "application/octet-stream" },
+  });
+  if (!put.ok) throw new Error(`upload failed (status ${put.status})`);
+  return createFilePolicy({
+    title: file.name,
+    category,
+    storage_key,
+    file_name: file.name,
+    content_type: file.type || "application/octet-stream",
+    size_bytes: file.size,
+  });
 }
 
 // ---- Teams + summary (Feature 4) ----

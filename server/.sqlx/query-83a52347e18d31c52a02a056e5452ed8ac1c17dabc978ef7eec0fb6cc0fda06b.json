@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.id AS \"id!\", d.slug AS \"slug!\", d.title AS \"title!\",\n                  d.category AS \"category!\", d.kind AS \"kind!\", d.content AS \"content!\",\n                  d.storage_key, d.file_name, d.content_type, d.size_bytes,\n                  d.sort_order AS \"sort_order!\", d.updated_by,\n                  u.name AS \"updated_by_name?\", d.updated_at AS \"updated_at!\"\n           FROM okf_documents d\n           LEFT JOIN users u ON u.id = d.updated_by\n           WHERE d.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "category!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "content!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "file_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "content_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "size_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "sort_order!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "updated_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 12,
+        "name": "updated_by_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "updated_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "83a52347e18d31c52a02a056e5452ed8ac1c17dabc978ef7eec0fb6cc0fda06b"
+}

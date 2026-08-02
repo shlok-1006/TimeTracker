@@ -173,6 +173,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | 2026-07-29 | Shlok | AUTH-01, AUTH-02 | Access token 5 min → 1 h; refresh token 30 d → 90 d, to cut desktop "session expired" prompts. Ships on next server deploy. |
 | 2026-07-29 | Shlok | ATT-07 | Weekends never count as present/partial even with tracked time; auto-present skipped on weekends. Ships on next server deploy. |
 | 2026-07-30 | Shlok | HRS-06 | Meeting mode now captures screenshots (labelled "meeting"), but the AI still never analyses them. Ships in the next desktop release. |
+| 2026-07-30 | Shlok | ATT-07 | Backfill (migration 0039): existing weekend days saved as present/partial are corrected to "weekend" (HR overrides untouched), so the rule applies to past data too. |
 
 *(HR: add a row whenever you edit a Value. The agent appends a row for every reconciliation it performs.)*
 

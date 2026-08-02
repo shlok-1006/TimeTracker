@@ -154,7 +154,9 @@ pub async fn request_capture_permission() -> Result<bool, String> {
         let granted = macos_permission::request();
         if !granted {
             let _ = std::process::Command::new("open")
-                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                .arg(
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                )
                 .spawn();
         }
         Ok(granted)

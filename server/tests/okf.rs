@@ -50,9 +50,17 @@ async fn policy_library_is_seeded_and_crud_works() {
         .unwrap();
     assert_eq!(doc.kind, "markdown");
 
-    let edited = okf::update(&pool, doc.id, "Test Policy v2", "Testing", "# v2", None, hr.id)
-        .await
-        .unwrap();
+    let edited = okf::update(
+        &pool,
+        doc.id,
+        "Test Policy v2",
+        "Testing",
+        "# v2",
+        None,
+        hr.id,
+    )
+    .await
+    .unwrap();
     assert_eq!(edited.title, "Test Policy v2");
     assert_eq!(edited.content, "# v2");
     assert_eq!(edited.updated_by, Some(hr.id));

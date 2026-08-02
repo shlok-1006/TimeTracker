@@ -98,8 +98,22 @@ async fn create_policy(
     if body.content.len() > MAX_CONTENT_BYTES {
         return Err(AppError::BadRequest("the document is too large".into()));
     }
-    let doc = okf::create(&state.db, title, norm_category(&body.category), &body.content, actor.id).await?;
-    audit::log(&state.db, actor.id, "okf.create", "okf_document", Some(doc.id)).await;
+    let doc = okf::create(
+        &state.db,
+        title,
+        norm_category(&body.category),
+        &body.content,
+        actor.id,
+    )
+    .await?;
+    audit::log(
+        &state.db,
+        actor.id,
+        "okf.create",
+        "okf_document",
+        Some(doc.id),
+    )
+    .await;
     Ok(Json(json!(doc)))
 }
 
@@ -222,7 +236,14 @@ async fn create_file_policy(
         actor.id,
     )
     .await?;
-    audit::log(&state.db, actor.id, "okf.create_file", "okf_document", Some(doc.id)).await;
+    audit::log(
+        &state.db,
+        actor.id,
+        "okf.create_file",
+        "okf_document",
+        Some(doc.id),
+    )
+    .await;
     Ok(Json(json!(doc)))
 }
 
@@ -235,7 +256,11 @@ async fn download_policy(
     let doc = okf::get(&state.db, id).await?;
     let key = match doc.storage_key {
         Some(k) if doc.kind == "file" => k,
-        _ => return Err(AppError::BadRequest("this document has no attached file".into())),
+        _ => {
+            return Err(AppError::BadRequest(
+                "this document has no attached file".into(),
+            ))
+        }
     };
     let url = state
         .storage

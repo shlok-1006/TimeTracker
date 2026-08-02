@@ -53,9 +53,17 @@ async fn open_manual_tasks_appear_in_context() {
     let open = manual_tasks::create(&pool, emp.id, pm.id, "Open task", "do this", 5, None)
         .await
         .unwrap();
-    let done = manual_tasks::create(&pool, emp.id, pm.id, "Done task", "already finished", 5, None)
-        .await
-        .unwrap();
+    let done = manual_tasks::create(
+        &pool,
+        emp.id,
+        pm.id,
+        "Done task",
+        "already finished",
+        5,
+        None,
+    )
+    .await
+    .unwrap();
     manual_tasks::set_status(&pool, done.id, "done")
         .await
         .unwrap();

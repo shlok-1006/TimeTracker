@@ -52,7 +52,9 @@ async fn add_grant(
         return Err(AppError::BadRequest("time to add must be positive".into()));
     }
     if seconds > MAX_GRANT_SECONDS {
-        return Err(AppError::BadRequest("time to add is unreasonably large".into()));
+        return Err(AppError::BadRequest(
+            "time to add is unreasonably large".into(),
+        ));
     }
     let reason = body.reason.trim();
     if reason.is_empty() {
@@ -60,8 +62,15 @@ async fn add_grant(
     }
 
     let week_start = time_grants::current_week_start(&state.db, target).await?;
-    let grant =
-        time_grants::create(&state.db, target, week_start, seconds as i32, reason, actor.id).await?;
+    let grant = time_grants::create(
+        &state.db,
+        target,
+        week_start,
+        seconds as i32,
+        reason,
+        actor.id,
+    )
+    .await?;
     audit::log(&state.db, actor.id, "time.grant", "user", Some(target)).await;
     Ok(Json(json!(grant)))
 }
@@ -87,7 +96,14 @@ async fn delete_grant(
         .ok_or(AppError::NotFound)?;
     authorize_view(&state, &actor, owner).await?;
     time_grants::delete(&state.db, id).await?;
-    audit::log(&state.db, actor.id, "time.grant.delete", "user", Some(owner)).await;
+    audit::log(
+        &state.db,
+        actor.id,
+        "time.grant.delete",
+        "user",
+        Some(owner),
+    )
+    .await;
     Ok(Json(json!({ "deleted": true })))
 }
 

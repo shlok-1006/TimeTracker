@@ -41,7 +41,9 @@ async fn grace_grants_add_to_week_total_and_revert() {
     let base_week = before.week_seconds;
 
     // Grant 2h to the current week; it lands on the same week the summary scopes.
-    let wk = time_grants::current_week_start(&pool, emp.id).await.unwrap();
+    let wk = time_grants::current_week_start(&pool, emp.id)
+        .await
+        .unwrap();
     let first = time_grants::create(&pool, emp.id, wk, 2 * 3600, "off-tracker work", emp.id)
         .await
         .unwrap();

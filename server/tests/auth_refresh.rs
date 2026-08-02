@@ -121,5 +121,9 @@ async fn re_presenting_a_just_rotated_token_recovers_not_logs_out() {
         Some(json!({ "refresh_token": "deadbeef-not-a-real-token" })),
     )
     .await;
-    assert_eq!(s, StatusCode::UNAUTHORIZED, "unknown token must be rejected");
+    assert_eq!(
+        s,
+        StatusCode::UNAUTHORIZED,
+        "unknown token must be rejected"
+    );
 }

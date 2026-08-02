@@ -15,8 +15,7 @@
 const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/shlok-1006/TimeTracker-Download/releases/latest";
 /// Human-facing downloads page the "Update now" button opens.
-const DOWNLOADS_PAGE: &str =
-    "https://github.com/shlok-1006/TimeTracker-Download/releases/latest";
+const DOWNLOADS_PAGE: &str = "https://github.com/shlok-1006/TimeTracker-Download/releases/latest";
 
 /// Returns `Some(latest_version)` when a newer release is available, or `None`
 /// when the running build is current. Returns `Err` on a network / parse

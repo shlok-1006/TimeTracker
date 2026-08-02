@@ -87,7 +87,11 @@ async fn manual_task_crud_roundtrip() {
     assert_eq!(after.title, "Write & publish API docs");
     assert_eq!(after.description, "Cover all endpoints");
     assert_eq!(after.weight, 9);
-    assert_eq!(after.due_date, Some(due), "due date preserved through PATCH");
+    assert_eq!(
+        after.due_date,
+        Some(due),
+        "due date preserved through PATCH"
+    );
     assert!(after.updated_at >= after.created_at);
 
     // Mark done.

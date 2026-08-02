@@ -305,7 +305,11 @@ async fn pm_task_scope_over_http() {
         Some(body),
     )
     .await;
-    assert_eq!(s, StatusCode::OK, "PM can assign to a managed employee: {created}");
+    assert_eq!(
+        s,
+        StatusCode::OK,
+        "PM can assign to a managed employee: {created}"
+    );
     assert_eq!(created["created_by"], pm.id.to_string());
     assert_eq!(created["weight"], 3);
 

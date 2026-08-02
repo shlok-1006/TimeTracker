@@ -107,25 +107,52 @@ async fn category_defaults_and_manual_overrides() {
         .await
         .unwrap();
 
-    let emp = users::create(&pool, "emp", &format!("emp-{tag}@t.local"), "h", UserRole::Employee, None)
-        .await
-        .unwrap();
-    let con = users::create(&pool, "con", &format!("con-{tag}@t.local"), "h", UserRole::Employee, None)
-        .await
-        .unwrap();
+    let emp = users::create(
+        &pool,
+        "emp",
+        &format!("emp-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
+    let con = users::create(
+        &pool,
+        "con",
+        &format!("con-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
     users::set_employment_type(&pool, con.id, EmploymentType::Contractor)
         .await
         .unwrap();
-    let intern =
-        users::create(&pool, "int", &format!("int-{tag}@t.local"), "h", UserRole::Employee, None)
-            .await
-            .unwrap();
+    let intern = users::create(
+        &pool,
+        "int",
+        &format!("int-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
     users::set_employment_type(&pool, intern.id, EmploymentType::Intern)
         .await
         .unwrap();
-    let pm = users::create(&pool, "pm", &format!("pm-{tag}@t.local"), "h", UserRole::ProjectManager, None)
-        .await
-        .unwrap();
+    let pm = users::create(
+        &pool,
+        "pm",
+        &format!("pm-{tag}@t.local"),
+        "h",
+        UserRole::ProjectManager,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Fetch this type's balance row for a user.
     async fn row(pool: &sqlx::PgPool, uid: Uuid, lt: Uuid, year: i32) -> leave::Balance {

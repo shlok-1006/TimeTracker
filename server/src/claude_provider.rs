@@ -201,7 +201,9 @@ impl ClaudeProvider {
             let req = match self.backend {
                 Backend::Bridge => {
                     let base = self.base_url.as_ref().ok_or(ClaudeError::NotConfigured)?;
-                    self.client.post(format!("{base}{bridge_path}")).bearer_auth(key)
+                    self.client
+                        .post(format!("{base}{bridge_path}"))
+                        .bearer_auth(key)
                 }
                 Backend::Anthropic => self
                     .client
@@ -322,7 +324,10 @@ mod tests {
     #[test]
     fn extracts_bridge_text() {
         let v = json!({ "text": "{\"verdict\":\"aligned\"}", "model": "claude-haiku-4-5" });
-        assert_eq!(extract_text_bridge(&v).unwrap(), "{\"verdict\":\"aligned\"}");
+        assert_eq!(
+            extract_text_bridge(&v).unwrap(),
+            "{\"verdict\":\"aligned\"}"
+        );
     }
 
     #[test]

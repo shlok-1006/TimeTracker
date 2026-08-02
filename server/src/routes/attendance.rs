@@ -143,10 +143,23 @@ async fn set_attendance(
     if users::find_by_id(&state.db, target).await?.is_none() {
         return Err(AppError::NotFound);
     }
-    let row =
-        attendance_service::override_day(&state.db, target, day, &body.status, body.note.trim(), hr.id)
-            .await?;
-    audit::log(&state.db, hr.id, "attendance.override", "user", Some(target)).await;
+    let row = attendance_service::override_day(
+        &state.db,
+        target,
+        day,
+        &body.status,
+        body.note.trim(),
+        hr.id,
+    )
+    .await?;
+    audit::log(
+        &state.db,
+        hr.id,
+        "attendance.override",
+        "user",
+        Some(target),
+    )
+    .await;
     Ok(Json(json!(row)))
 }
 

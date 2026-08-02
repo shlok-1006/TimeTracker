@@ -197,10 +197,16 @@ async fn attendance_override_survives_rollup_and_reverts() {
     assert!(!derived.is_override);
 
     // HR overrides it to "leave".
-    let ovr =
-        attendance_service::override_day(&pool, emp.id, monday, "leave", "approved offline", emp.id)
-            .await
-            .unwrap();
+    let ovr = attendance_service::override_day(
+        &pool,
+        emp.id,
+        monday,
+        "leave",
+        "approved offline",
+        emp.id,
+    )
+    .await
+    .unwrap();
     assert_eq!(ovr.status, "leave");
     assert_eq!(ovr.note, "approved offline");
     assert!(ovr.is_override);
@@ -216,7 +222,10 @@ async fn attendance_override_survives_rollup_and_reverts() {
     let reverted = attendance_service::clear_override(&pool, emp.id, monday)
         .await
         .unwrap();
-    assert_eq!(reverted.status, "absent", "revert recomputes derived status");
+    assert_eq!(
+        reverted.status, "absent",
+        "revert recomputes derived status"
+    );
     assert!(!reverted.is_override);
 
     users::delete(&pool, emp.id).await.unwrap();
@@ -331,7 +340,10 @@ async fn mark_present_today_materializes_without_section_visit() {
     attendance_service::mark_present_today(&pool, emp.id)
         .await
         .unwrap();
-    let after = attendance::get(&pool, emp.id, today).await.unwrap().unwrap();
+    let after = attendance::get(&pool, emp.id, today)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(after.status, "leave", "HR override must be preserved");
     assert!(after.is_override);
 

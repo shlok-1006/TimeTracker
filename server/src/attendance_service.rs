@@ -282,24 +282,48 @@ mod tests {
     fn in_progress_day_with_any_work_is_present() {
         // Today is optimistically present even below the full-day threshold —
         // the employee may still reach a full day.
-        assert_eq!(derive_status(1, FULL, false, None, None, weekday()).0, "present");
-        assert_eq!(derive_status(3600, FULL, false, None, None, weekday()).0, "present");
+        assert_eq!(
+            derive_status(1, FULL, false, None, None, weekday()).0,
+            "present"
+        );
+        assert_eq!(
+            derive_status(3600, FULL, false, None, None, weekday()).0,
+            "present"
+        );
     }
 
     #[test]
     fn completed_day_under_threshold_is_partial() {
         // < 4h on a finished day is a half (partial) day; >= 4h is a full present day.
-        assert_eq!(derive_status(3600, FULL, true, None, None, weekday()).0, "partial");
-        assert_eq!(derive_status(FULL - 1, FULL, true, None, None, weekday()).0, "partial");
-        assert_eq!(derive_status(FULL, FULL, true, None, None, weekday()).0, "present");
-        assert_eq!(derive_status(6 * 3600, FULL, true, None, None, weekday()).0, "present");
+        assert_eq!(
+            derive_status(3600, FULL, true, None, None, weekday()).0,
+            "partial"
+        );
+        assert_eq!(
+            derive_status(FULL - 1, FULL, true, None, None, weekday()).0,
+            "partial"
+        );
+        assert_eq!(
+            derive_status(FULL, FULL, true, None, None, weekday()).0,
+            "present"
+        );
+        assert_eq!(
+            derive_status(6 * 3600, FULL, true, None, None, weekday()).0,
+            "present"
+        );
     }
 
     #[test]
     fn no_work_is_not_present() {
         // Zero tracked time on a plain weekday is absent — never partial.
-        assert_eq!(derive_status(0, FULL, true, None, None, weekday()).0, "absent");
-        assert_eq!(derive_status(0, FULL, false, None, None, weekday()).0, "absent");
+        assert_eq!(
+            derive_status(0, FULL, true, None, None, weekday()).0,
+            "absent"
+        );
+        assert_eq!(
+            derive_status(0, FULL, false, None, None, weekday()).0,
+            "absent"
+        );
     }
 
     #[test]
@@ -324,10 +348,22 @@ mod tests {
     fn weekend_work_is_never_present_or_partial() {
         // Tracking on a Saturday/Sunday must not count as a work day — the day
         // stays `weekend`, whether in progress or complete, full or partial.
-        assert_eq!(derive_status(1, FULL, false, None, None, weekend()).0, "weekend");
-        assert_eq!(derive_status(3600, FULL, true, None, None, weekend()).0, "weekend");
-        assert_eq!(derive_status(FULL, FULL, true, None, None, weekend()).0, "weekend");
-        assert_eq!(derive_status(8 * 3600, FULL, false, None, None, weekend()).0, "weekend");
+        assert_eq!(
+            derive_status(1, FULL, false, None, None, weekend()).0,
+            "weekend"
+        );
+        assert_eq!(
+            derive_status(3600, FULL, true, None, None, weekend()).0,
+            "weekend"
+        );
+        assert_eq!(
+            derive_status(FULL, FULL, true, None, None, weekend()).0,
+            "weekend"
+        );
+        assert_eq!(
+            derive_status(8 * 3600, FULL, false, None, None, weekend()).0,
+            "weekend"
+        );
     }
 
     #[test]
@@ -340,8 +376,14 @@ mod tests {
             derive_status(0, FULL, true, None, Some("New Year"), weekday()).0,
             "holiday"
         );
-        assert_eq!(derive_status(0, FULL, true, None, None, weekend()).0, "weekend");
-        assert_eq!(derive_status(0, FULL, true, None, None, weekday()).0, "absent");
+        assert_eq!(
+            derive_status(0, FULL, true, None, None, weekend()).0,
+            "weekend"
+        );
+        assert_eq!(
+            derive_status(0, FULL, true, None, None, weekday()).0,
+            "absent"
+        );
     }
 
     #[test]

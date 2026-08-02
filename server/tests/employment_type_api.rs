@@ -166,7 +166,14 @@ async fn create_and_update_employment_type_over_http() {
     assert_eq!(updated["employment_type"], "intern");
 
     // The list reflects the new type.
-    let (s, list) = send(app_with(pool.clone()), "GET", "/admin/users", Some(&hr), None).await;
+    let (s, list) = send(
+        app_with(pool.clone()),
+        "GET",
+        "/admin/users",
+        Some(&hr),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     let row = list
         .as_array()

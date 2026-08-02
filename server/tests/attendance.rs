@@ -320,18 +320,22 @@ async fn mark_present_today_materializes_without_section_visit() {
     .await
     .unwrap();
     let today = Utc::now().date_naive();
+    let is_weekend = matches!(today.weekday(), Weekday::Sat | Weekday::Sun);
 
-    // No calendar view, no rollup — just the "started tracking" signal marks
-    // the day present immediately (even with nothing synced yet).
+    // No calendar view, no rollup — just the "started tracking" signal marks the
+    // day present immediately (even with nothing synced yet) — except on a
+    // weekend, which never counts as a work day, so nothing is marked.
     attendance_service::mark_present_today(&pool, emp.id)
         .await
         .unwrap();
-    let row = attendance::get(&pool, emp.id, today)
-        .await
-        .unwrap()
-        .expect("attendance row created on start");
-    assert_eq!(row.status, "present");
-    assert!(!row.is_override);
+    let row = attendance::get(&pool, emp.id, today).await.unwrap();
+    if is_weekend {
+        assert!(row.is_none(), "weekend start must not create a present row");
+    } else {
+        let row = row.expect("attendance row created on start");
+        assert_eq!(row.status, "present");
+        assert!(!row.is_override);
+    }
 
     // It must never stomp an HR override.
     attendance_service::override_day(&pool, emp.id, today, "leave", "wfh", emp.id)

@@ -61,6 +61,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+          # Scope the cache by CPU arch. `macos-latest` moved to Apple Silicon,
+          # so a build-script binary cached on the old Intel runner could be
+          # restored onto an arm64 runner and fail to execute ("cannot execute
+          # binary file", exit 126), which broke the macOS universal build.
+          # Arch-scoping prevents a cross-arch cache restore.
+          key: ${{ runner.arch }}
 
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile

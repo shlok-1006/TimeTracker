@@ -174,6 +174,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | 2026-07-29 | Shlok | ATT-07 | Weekends never count as present/partial even with tracked time; auto-present skipped on weekends. Ships on next server deploy. |
 | 2026-07-30 | Shlok | HRS-06 | Meeting mode now captures screenshots (labelled "meeting"), but the AI still never analyses them. Ships in the next desktop release. |
 | 2026-07-30 | Shlok | ATT-07 | Backfill (migration 0039): existing weekend days saved as present/partial are corrected to "weekend" (HR overrides untouched), so the rule applies to past data too. |
+| 2026-08-03 | Shlok | HRS-07 | Weekly shortfall mail consolidated: ONE company-wide digest to HR listing every employee below their required hours, plus one team digest per PM — instead of a separate mail per employee. Threshold unchanged (8h × working days, Mon–Fri, minus holidays/leave). |
 
 *(HR: add a row whenever you edit a Value. The agent appends a row for every reconciliation it performs.)*
 

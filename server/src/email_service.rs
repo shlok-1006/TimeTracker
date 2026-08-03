@@ -99,47 +99,60 @@ pub async fn send_approval_request(e: ApprovalEmail<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Details for a weekly hours-shortfall warning to HR + the employee's PM.
-pub struct HoursShortfallEmail<'a> {
-    pub recipients: &'a [String],
-    pub employee_name: &'a str,
-    pub employee_email: &'a str,
-    pub week_start: chrono::NaiveDate,
-    pub week_end: chrono::NaiveDate,
+/// One employee's line in a weekly hours-shortfall digest.
+#[derive(Clone)]
+pub struct HoursDigestRow {
+    pub name: String,
+    pub email: String,
     pub working_days: i64,
     pub required_seconds: i64,
     pub worked_seconds: i64,
     pub shortfall_seconds: i64,
 }
 
-/// Warn HR and the project manager that an employee missed their weekly hours.
-pub async fn send_hours_shortfall(e: HoursShortfallEmail<'_>) -> anyhow::Result<()> {
-    // RA-11: strip control chars / cap the interpolated identity fields.
+/// Send ONE consolidated mail listing every employee below their weekly hours to
+/// the given recipients (one message each) — a single company-wide mail for HR
+/// and one team mail per project manager, instead of a separate mail per
+/// employee. No-op when there are no rows or no recipients.
+pub async fn send_hours_shortfall_digest(
+    recipients: &[String],
+    week_start: chrono::NaiveDate,
+    week_end: chrono::NaiveDate,
+    rows: &[HoursDigestRow],
+) -> anyhow::Result<()> {
     use crate::validate::sanitize_line;
-    let name = sanitize_line(e.employee_name, 200);
-    let email = sanitize_line(e.employee_email, 320);
+    if rows.is_empty() || recipients.is_empty() {
+        return Ok(());
+    }
     let subject = format!(
-        "[TimeTracker] Weekly hours shortfall — {} ({} to {})",
-        name, e.week_start, e.week_end
+        "[TimeTracker] Weekly hours shortfall — {} employee(s) ({} to {})",
+        rows.len(),
+        week_start,
+        week_end
     );
-    let body = format!(
-        "Hi,\n\n{name} ({email}) did not complete the expected working hours for the \
-         week of {ws} to {we}.\n\n\
-         Working days: {wd}\n\
-         Expected:     {req}\n\
-         Worked:       {wk}\n\
-         Shortfall:    {sf}\n\n\
-         Please follow up with the employee.\n\n(TimeTracker)\n",
-        name = name,
-        email = email,
-        ws = e.week_start,
-        we = e.week_end,
-        wd = e.working_days,
-        req = fmt_hm(e.required_seconds),
-        wk = fmt_hm(e.worked_seconds),
-        sf = fmt_hm(e.shortfall_seconds),
+    let mut body = format!(
+        "Hi,\n\nThe following {} employee(s) did not complete their expected working hours for \
+         the week of {ws} to {we}.\nExpected = 8h x working days (Mon-Fri, excluding holidays \
+         and approved leave), so a full week is 40h.\n\n",
+        rows.len(),
+        ws = week_start,
+        we = week_end,
     );
-    send_plain(e.recipients, &subject, &body).await
+    for r in rows {
+        let name = sanitize_line(&r.name, 200);
+        let email = sanitize_line(&r.email, 320);
+        body.push_str(&format!(
+            "- {name} ({email}): worked {wk} of {req} over {wd} working day(s) - short {sf}\n",
+            name = name,
+            email = email,
+            wk = fmt_hm(r.worked_seconds),
+            req = fmt_hm(r.required_seconds),
+            wd = r.working_days,
+            sf = fmt_hm(r.shortfall_seconds),
+        ));
+    }
+    body.push_str("\nPlease follow up with the employees.\n\n(TimeTracker)\n");
+    send_plain(recipients, &subject, &body).await
 }
 
 /// Details for a low daily-score alert to HR.

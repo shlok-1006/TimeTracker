@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
+use futures::stream::{self, StreamExt};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -25,6 +26,12 @@ use crate::vision_analyzer::{self, AnalysisOutcome};
 
 /// Cap on a manual task's description in the analyzer context.
 const EXCERPT_CHARS: usize = 200;
+
+/// Vision calls in flight at once. The RUH bridge caps at 3 concurrent calls
+/// (FOR_SHLOK_VISION_BRIDGE.md); one shot per call keeps one-image→one-verdict,
+/// so a 20-shot run finishes ~3× sooner than the old serial loop. DB writes
+/// stay on the orchestrating task — only fetch+analyze fan out.
+const ANALYZE_CONCURRENCY: usize = 3;
 
 fn excerpt(s: &str) -> String {
     if s.chars().count() <= EXCERPT_CHARS {
@@ -92,23 +99,27 @@ pub async fn analyze_user_day(
 
     let mut analyzed = 0usize;
     let mut skipped = 0usize;
-    for s in shots {
+    let tickets_ref = &tickets;
+    let mut results = stream::iter(shots.into_iter().map(|s| async move {
         let image = match storage.fetch_object(&s.storage_key).await {
             Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::warn!(screenshot = %s.screenshot_id, "fetch failed: {e}");
-                continue;
-            }
+            Err(e) => return (s, Err(format!("fetch failed: {e}"))),
         };
-        match vision_analyzer::analyze_screenshot(
+        let out = vision_analyzer::analyze_screenshot(
             claude,
             &image,
             "image/jpeg",
             &s.captured_status,
-            &tickets,
+            tickets_ref,
         )
         .await
-        {
+        .map_err(|e| e.to_string());
+        (s, out)
+    }))
+    .buffer_unordered(ANALYZE_CONCURRENCY);
+
+    while let Some((s, res)) = results.next().await {
+        match res {
             Ok(AnalysisOutcome::Analyzed(a)) => {
                 analysis_results::upsert(db, job.id, s.screenshot_id, &a).await?;
                 analyzed += 1;
@@ -117,6 +128,7 @@ pub async fn analyze_user_day(
             Err(e) => tracing::warn!(screenshot = %s.screenshot_id, "analysis failed: {e}"),
         }
     }
+    drop(results);
 
     let report = report_service::build_report(db, user_id, day, job.id, claude).await?;
     Ok(AnalyzeOutcome {
@@ -162,26 +174,32 @@ async fn analyze_user_range(
     // system has no record of past assignment states.)
     let tickets = build_context(db, linear, user_id).await?;
 
+    let tickets_ref = &tickets;
     for (day, day_shots) in group_by_day(shots) {
         let job = sampler::create_daily_job(db, user_id, day).await?;
-        for s in day_shots {
+        // Same fan-out as analyze_user_day: up to ANALYZE_CONCURRENCY vision calls
+        // in flight; progress bumps + upserts stay serialized on this task so the
+        // admin UI's poll bar advances exactly once per finished shot.
+        let mut results = stream::iter(day_shots.into_iter().map(|s| async move {
             let image = match storage.fetch_object(&s.storage_key).await {
                 Ok(bytes) => bytes,
-                Err(e) => {
-                    tracing::warn!(screenshot = %s.id, "range analysis: fetch failed: {e}");
-                    analysis_runs::bump(db, run_id, 0, 0, 1).await?;
-                    continue;
-                }
+                Err(e) => return (s, Err(format!("fetch failed: {e}"))),
             };
-            match vision_analyzer::analyze_screenshot(
+            let out = vision_analyzer::analyze_screenshot(
                 claude,
                 &image,
                 "image/jpeg",
                 &s.captured_status,
-                &tickets,
+                tickets_ref,
             )
             .await
-            {
+            .map_err(|e| e.to_string());
+            (s, out)
+        }))
+        .buffer_unordered(ANALYZE_CONCURRENCY);
+
+        while let Some((s, res)) = results.next().await {
+            match res {
                 Ok(AnalysisOutcome::Analyzed(a)) => {
                     analysis_results::upsert(db, job.id, s.id, &a).await?;
                     analysis_runs::bump(db, run_id, 1, 0, 0).await?;
@@ -195,6 +213,7 @@ async fn analyze_user_range(
                 }
             }
         }
+        drop(results);
         // Refresh the day's report from everything now stored under its job.
         if let Err(e) = report_service::build_report(db, user_id, day, job.id, claude).await {
             tracing::warn!(%user_id, %day, "range analysis: report rebuild failed: {e}");

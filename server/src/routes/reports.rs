@@ -13,7 +13,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -29,8 +29,10 @@ struct DayQuery {
     day: Option<NaiveDate>,
 }
 
+/// `day` is the ORG-LOCAL (IST) calendar day — the same key the nightly batch
+/// writes and the HRMS passes (sync agreement with Tapan). Default: org-today.
 fn resolve_day(q: &DayQuery) -> NaiveDate {
-    q.day.unwrap_or_else(|| Utc::now().date_naive())
+    q.day.unwrap_or_else(crate::org_time::today)
 }
 
 /// `GET /admin/reports?day=` — roster of reports for a day. HR: all employees;

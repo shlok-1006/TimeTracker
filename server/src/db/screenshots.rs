@@ -4,16 +4,16 @@
 //! presence status at capture time — so sampling/analysis can exclude
 //! non-working (e.g. meeting) shots.
 
-use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
 
 /// UTC `[start, end)` bounds of a calendar day.
+/// A `day` means the ORG-LOCAL calendar day (IST) — see crate::org_time.
 fn day_bounds(day: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
-    let start = Utc.from_utc_datetime(&day.and_hms_opt(0, 0, 0).expect("valid midnight"));
-    (start, start + Duration::days(1))
+    crate::org_time::day_bounds_utc(day)
 }
 
 /// Statuses a screenshot can be captured under (must match the DB CHECK).

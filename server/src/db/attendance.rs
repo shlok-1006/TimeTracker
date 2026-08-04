@@ -324,3 +324,19 @@ pub async fn report(
         })
         .collect())
 }
+
+/// Users whose attendance for `day` is present or partial — the nightly analyzer's
+/// selection base (changes: nightly coverage). Attendance-based selection means a
+/// present employee with few/no working screenshots still gets a daily report;
+/// the scheduler unions this with the has-working-shots list so weekend workers
+/// (whose day stays `weekend` even when tracking) are not dropped.
+pub async fn user_ids_present_on_day(pool: &PgPool, day: NaiveDate) -> Result<Vec<Uuid>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT user_id FROM attendance_days
+           WHERE day = $1 AND status IN ('present', 'partial')"#,
+        day
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.user_id).collect())
+}

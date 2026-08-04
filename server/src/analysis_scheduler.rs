@@ -1,7 +1,13 @@
 //! Nightly analysis scheduler. Once a day (at `RUN_HOUR_UTC`), it samples,
-//! analyzes, and builds reports for the *previous* day for every employee who
-//! captured working screenshots — so reports appear automatically without anyone
-//! calling the on-demand endpoint.
+//! analyzes, and builds reports for the *previous* ORG-LOCAL (IST) day —
+//! `RUN_HOUR_UTC` = 2 is 07:30 IST, safely after the IST day closes.
+//!
+//! Selection (changes: nightly coverage, agreed with HRMS): the union of
+//!   * everyone whose attendance for the day is present/partial — a present
+//!     employee with few/no working screenshots still gets a report
+//!     (`total_analyzed = 0`; the report endpoint returns it, never 404), and
+//!   * everyone with working screenshots — covers weekend workers, whose
+//!     attendance stays `weekend` even when they track time.
 //!
 //! Idempotent: sampling never resamples a day and `build_report` upserts, so a
 //! repeated run (e.g. after a restart) is safe.
@@ -10,8 +16,9 @@ use chrono::{Duration, TimeZone, Utc};
 
 use crate::analysis_service;
 use crate::db::analysis_reports::{self, AnalysisReport};
-use crate::db::{screenshots, users};
+use crate::db::{attendance, screenshots, users};
 use crate::email_service;
+use crate::org_time;
 use crate::report_service;
 use crate::role::UserRole;
 use crate::state::AppState;
@@ -49,20 +56,31 @@ fn duration_until_next_run() -> std::time::Duration {
         .unwrap_or_else(|_| std::time::Duration::from_secs(3600))
 }
 
-/// Build yesterday's reports for every employee with working screenshots.
+/// Build yesterday's (org-local day) reports for everyone present or tracking.
 async fn run_once(state: &AppState) {
     if !state.claude.is_configured() {
         tracing::info!("nightly analysis skipped: Claude not configured");
         return;
     }
-    let yesterday = (Utc::now() - Duration::days(1)).date_naive();
-    let users = match screenshots::working_user_ids_on_day(&state.db, yesterday).await {
+    let yesterday = org_time::yesterday();
+    let mut users = match screenshots::working_user_ids_on_day(&state.db, yesterday).await {
         Ok(u) => u,
         Err(e) => {
             tracing::warn!("nightly analysis: could not list users: {e}");
             return;
         }
     };
+    // Union in attendance-selected users (present/partial with no working shots).
+    match attendance::user_ids_present_on_day(&state.db, yesterday).await {
+        Ok(present) => {
+            for id in present {
+                if !users.contains(&id) {
+                    users.push(id);
+                }
+            }
+        }
+        Err(e) => tracing::warn!("nightly analysis: attendance selection failed: {e}"),
+    }
     tracing::info!(day = %yesterday, employees = users.len(), "nightly analysis: starting");
     for user_id in users {
         match analysis_service::analyze_user_day(

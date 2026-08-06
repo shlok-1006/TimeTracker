@@ -395,6 +395,22 @@ async fn list_holidays(
     Ok(Json(json!(leave::list_holidays(&state.db, q.year).await?)))
 }
 
+/// `GET /me/holidays?year=` — the company holiday calendar for ANY signed-in
+/// user (HRMS integration: the employee home dashboard shows upcoming holidays).
+///
+/// Same `[{id, day, name}]` payload as the admin route. Holidays are company-wide
+/// and carry no personal data, so `AuthUser` is the right guard — this is a read
+/// of a published calendar, not a view onto anyone's record. Writes stay HR-only
+/// on `POST /admin/holidays`; the admin GET is left in place so existing HR
+/// surfaces keep working unchanged.
+async fn my_holidays(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(q): Query<YearQuery>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!(leave::list_holidays(&state.db, q.year).await?)))
+}
+
 #[derive(Deserialize)]
 struct NewHoliday {
     day: NaiveDate,
@@ -432,4 +448,5 @@ pub fn router() -> Router<AppState> {
         .route("/admin/leave/allocations/adjust", post(adjust_allocation))
         .route("/admin/users/:id/leave/balance", get(user_balance))
         .route("/admin/holidays", get(list_holidays).post(create_holiday))
+        .route("/me/holidays", get(my_holidays))
 }

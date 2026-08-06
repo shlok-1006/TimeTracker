@@ -79,6 +79,46 @@ async fn hr_config_forbidden_for_non_hr() {
     );
 }
 
+#[tokio::test]
+async fn holidays_readable_by_every_signed_in_role() {
+    // The company calendar is published, not personal: any authenticated user may read
+    // it (the HRMS employee dashboard shows upcoming holidays). Anything but 401/403.
+    for role in [UserRole::Employee, UserRole::ProjectManager, UserRole::Hr] {
+        let status = req("GET", "/me/holidays", Some(role)).await;
+        assert_ne!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{role:?} must not be forbidden"
+        );
+        assert_ne!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{role:?} must not be unauthorized"
+        );
+    }
+}
+
+#[tokio::test]
+async fn holidays_still_require_a_session() {
+    assert_eq!(
+        req("GET", "/me/holidays", None).await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn creating_a_holiday_stays_hr_only() {
+    // Opening the READ must not have widened the write.
+    assert_eq!(
+        req("POST", "/admin/holidays", Some(UserRole::Employee)).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        req("POST", "/admin/holidays", Some(UserRole::ProjectManager)).await,
+        StatusCode::FORBIDDEN
+    );
+}
+
 // ---- DB-backed: category defaults + manual override / adjust / delete ----
 
 async fn real_pool() -> Option<sqlx::PgPool> {

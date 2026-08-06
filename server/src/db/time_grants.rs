@@ -117,3 +117,24 @@ pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
         .await?;
     Ok(res.rows_affected() > 0)
 }
+
+/// Total manually-granted seconds whose week falls inside an inclusive day range
+/// (used by the monthly rollup so grace time shows in the month's total).
+pub async fn sum_for_range(
+    pool: &PgPool,
+    user_id: Uuid,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Result<i64, AppError> {
+    let row = sqlx::query!(
+        r#"SELECT COALESCE(SUM(seconds), 0)::BIGINT AS "total!"
+           FROM time_grants
+           WHERE user_id = $1 AND week_start >= $2 AND week_start <= $3"#,
+        user_id,
+        from,
+        to
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.total)
+}

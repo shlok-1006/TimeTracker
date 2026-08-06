@@ -66,6 +66,9 @@ async fn main() -> anyhow::Result<()> {
     // Weekly hours compliance: every Monday morning, warn HR + PM about anyone
     // who worked fewer than working_days × 8h in the week that just ended.
     tokio::spawn(server::weekly_hours_scheduler::run(state.clone()));
+    // Month-end summaries: once the IST month closes, build every employee's
+    // monthly report so it's ready without anyone generating it by hand.
+    tokio::spawn(server::monthly_report_scheduler::run(state.clone()));
 
     let app = server::build_router(state);
 

@@ -478,3 +478,16 @@ pub async fn list_directory(pool: &PgPool) -> Result<Vec<DirectoryEntry>, AppErr
         })
         .collect()
 }
+
+/// Ids of the employees a project manager manages (via `user_managers`).
+/// Used for PM-scoped batch operations such as generating a month's reports for
+/// their team; HR paths use `list_all` instead.
+pub async fn managed_by(pool: &PgPool, manager_id: Uuid) -> Result<Vec<Uuid>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT user_id FROM user_managers WHERE manager_id = $1"#,
+        manager_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.user_id).collect())
+}

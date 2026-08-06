@@ -1,0 +1,137 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, user_id, month, worked_seconds, grace_seconds,\n                  days_present, days_partial, days_absent, days_leave, days_holiday, days_weekend,\n                  days_analyzed, days_above_threshold, alignment_threshold, avg_alignment_score,\n                  screenshots_analyzed, days, generated_by, created_at, updated_at\n           FROM monthly_reports WHERE user_id = $1 AND month = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "month",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 3,
+        "name": "worked_seconds",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "grace_seconds",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "days_present",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "days_partial",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "days_absent",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "days_leave",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "days_holiday",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "days_weekend",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "days_analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "days_above_threshold",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "alignment_threshold",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 14,
+        "name": "avg_alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 15,
+        "name": "screenshots_analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "days",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 17,
+        "name": "generated_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 18,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 19,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "a3cf270739742723bbb2edcd069a397b098dc0b269ea4fd1371843a256932fac"
+}

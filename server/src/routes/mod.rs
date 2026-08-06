@@ -15,6 +15,7 @@ pub mod intervals;
 pub mod jwks;
 pub mod leave;
 pub mod linear;
+pub mod monthly_reports;
 pub mod okf;
 pub mod onboarding;
 pub mod presence;
@@ -123,6 +124,7 @@ pub fn build(state: AppState) -> Router {
         .merge(attendance::router())
         .merge(activity::router())
         .merge(time_grants::router())
+        .merge(monthly_reports::router())
         .merge(okf::router())
         .merge(directory::router())
         .merge(admin::router())

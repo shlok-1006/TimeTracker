@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.user_id, u.name, u.email, m.worked_seconds,\n                  m.days_present, m.days_partial, m.days_absent,\n                  m.days_analyzed, m.days_above_threshold, m.avg_alignment_score, m.updated_at\n           FROM monthly_reports m\n           JOIN users u ON u.id = m.user_id\n           WHERE m.month = $1\n             AND ($2::uuid IS NULL\n                  OR EXISTS (SELECT 1 FROM user_managers um\n                             WHERE um.user_id = u.id AND um.manager_id = $2))\n           ORDER BY u.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "worked_seconds",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "days_present",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "days_partial",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "days_absent",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "days_analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "days_above_threshold",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "avg_alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Date",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "5ac2006fe1b0227a3ef0ee584b05a347a6facd35ebdb2c70ffcaf75c3382fad1"
+}

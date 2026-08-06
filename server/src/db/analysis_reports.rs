@@ -293,3 +293,43 @@ fn map_row(
         created_at,
     }
 }
+
+/// One user's daily reports across an inclusive day range — the source for the
+/// monthly rollup's "how many days scored above the threshold" figure.
+pub async fn list_for_range(
+    pool: &PgPool,
+    user_id: Uuid,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Result<Vec<AnalysisReport>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,
+                  not_aligned_count, inconclusive_count, alignment_score, summary_text, model, created_at
+           FROM analysis_reports
+           WHERE user_id = $1 AND day >= $2 AND day <= $3
+           ORDER BY day"#,
+        user_id,
+        from,
+        to
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| AnalysisReport {
+            id: r.id,
+            user_id: r.user_id,
+            day: r.day,
+            job_id: r.job_id,
+            total_analyzed: r.total_analyzed,
+            aligned_count: r.aligned_count,
+            partially_count: r.partially_count,
+            not_aligned_count: r.not_aligned_count,
+            inconclusive_count: r.inconclusive_count,
+            alignment_score: r.alignment_score,
+            summary_text: r.summary_text,
+            model: r.model,
+            created_at: r.created_at,
+        })
+        .collect())
+}

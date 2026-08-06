@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(seconds), 0)::BIGINT AS \"total!\"\n           FROM time_grants\n           WHERE user_id = $1 AND week_start >= $2 AND week_start <= $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "78757ce3c17e67163f05ef58245302b764bef094ca7aef6ef02f16735e15e3d8"
+}

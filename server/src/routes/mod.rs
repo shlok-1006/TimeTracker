@@ -10,6 +10,7 @@ pub mod admin;
 pub mod attendance;
 pub mod auth;
 pub mod directory;
+pub mod employee_directory;
 pub mod health;
 pub mod intervals;
 pub mod jwks;
@@ -127,6 +128,7 @@ pub fn build(state: AppState) -> Router {
         .merge(monthly_reports::router())
         .merge(okf::router())
         .merge(directory::router())
+        .merge(employee_directory::router())
         .merge(admin::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

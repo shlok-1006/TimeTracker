@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, degree, institute, year, grade FROM employee_education\n         WHERE user_id = $1 ORDER BY year DESC NULLS LAST, degree",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "degree",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "institute",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "year",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "grade",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1270ef3703ae4f5551bc2f0fbf5a0acf9044b87e9a1831dcdbdd1a5f4b2d3350"
+}

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET employee_code = $2, department = $3, designation = $4,\n                          joined_on = $5, updated_at = now()\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Date"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ce80133c1fadff90e4e719e4b310f0eafafbd3b21bb70b989fe8f2b745c50606"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO employee_bank_details\n             (user_id, account_name, account_number, bank_name, ifsc, pan, uan)\n           VALUES ($1,$2,$3,$4,$5,$6,$7)\n           ON CONFLICT (user_id) DO UPDATE SET\n             account_name = EXCLUDED.account_name,\n             account_number = EXCLUDED.account_number,\n             bank_name = EXCLUDED.bank_name,\n             ifsc = EXCLUDED.ifsc,\n             pan = EXCLUDED.pan,\n             uan = EXCLUDED.uan,\n             updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cade905ae7717ad23c9e6ccd7e978ed52e722fa018d34789d6ab3f22bb5807e9"
+}

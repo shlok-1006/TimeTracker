@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE employee_profiles SET verified_at = now(), verified_by = $2, updated_at = now()\n         WHERE user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f4a8c7c776d06b715a35a0f33eda0bb69339038cd021b2de0bf1b761fcc22317"
+}

@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT account_name, account_number, bank_name, ifsc, pan, uan\n         FROM employee_bank_details WHERE user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "account_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "account_number",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "bank_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "ifsc",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "pan",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "uan",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8ca24a93733d4f1450dd8e8f0bb921dbe1fb7ddb665e460fe85f8e41e1ae57d5"
+}

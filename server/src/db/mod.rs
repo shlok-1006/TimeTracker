@@ -11,6 +11,7 @@ pub mod analysis_results;
 pub mod analysis_runs;
 pub mod attendance;
 pub mod audit;
+pub mod employee_directory;
 pub mod intervals;
 pub mod leave;
 pub mod linear_repository;

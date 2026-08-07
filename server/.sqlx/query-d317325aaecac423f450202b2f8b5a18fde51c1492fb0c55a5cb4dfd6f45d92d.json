@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id, u.name, u.email, u.role::text AS \"role!\",\n                  u.employee_code, u.department, u.designation, u.joined_on,\n                  COALESCE(\n                      ARRAY(SELECT t.name FROM user_teams ut\n                            JOIN teams t ON t.id = ut.team_id\n                            WHERE ut.user_id = u.id ORDER BY t.name),\n                      '{}'\n                  ) AS \"teams!: Vec<String>\",\n                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS \"has_profile!\"\n           FROM users u WHERE u.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "role!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "employee_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "department",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "designation",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "joined_on",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 8,
+        "name": "teams!: Vec<String>",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 9,
+        "name": "has_profile!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "d317325aaecac423f450202b2f8b5a18fde51c1492fb0c55a5cb4dfd6f45d92d"
+}

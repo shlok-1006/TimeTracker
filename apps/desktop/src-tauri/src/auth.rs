@@ -9,7 +9,15 @@
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 
-const KEYRING_SERVICE: &str = "com.timetracker.desktop";
+/// Keychain service name. Debug builds use a separate entry so that running the
+/// app locally cannot read, refresh or overwrite the session belonging to the
+/// installed release on the same machine — signing in during development would
+/// otherwise rotate the real user's refresh token out from under them.
+const KEYRING_SERVICE: &str = if cfg!(debug_assertions) {
+    "com.timetracker.desktop.dev"
+} else {
+    "com.timetracker.desktop"
+};
 const ACCOUNT_ACCESS: &str = "access_token";
 const ACCOUNT_REFRESH: &str = "refresh_token";
 

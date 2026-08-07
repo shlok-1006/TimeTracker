@@ -20,12 +20,12 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 # Native break-reminder notifications + launch-at-login (both driven from Rust,
 # so no frontend plugin plumbing needed).
-tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 # Local SQLite source-of-truth (Rule 1). Wired into a real db module in a later step.
 sqlx = { workspace = true }
 # SHA-384 of migration SQL variants — self-heal for line-ending-only checksum

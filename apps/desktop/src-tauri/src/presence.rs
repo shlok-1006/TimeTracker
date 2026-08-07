@@ -9,10 +9,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tauri::{AppHandle, State};
-use tauri_plugin_notification::NotificationExt;
 
 use crate::auth;
 use crate::http;
+use crate::reminder;
 use crate::timer::DesktopState;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(45);
@@ -51,12 +51,16 @@ pub fn derive_status(
 }
 
 #[tauri::command]
-pub fn set_break(state: State<'_, DesktopState>, on: bool) -> Result<(), String> {
+pub fn set_break(app: AppHandle, state: State<'_, DesktopState>, on: bool) -> Result<(), String> {
     state.on_break.store(on, Ordering::Relaxed);
     // Starting a fresh break re-enables reminders — a new break should nudge
     // again even if the previous one was muted with "Don't remind me".
     if on {
         state.break_reminders_muted.store(false, Ordering::Relaxed);
+    } else {
+        // Back from the break: whatever the reminder was asking has been done,
+        // so retract it instead of leaving a stale prompt to dismiss.
+        reminder::close(&app, "break ended");
     }
     Ok(())
 }
@@ -64,8 +68,13 @@ pub fn set_break(state: State<'_, DesktopState>, on: bool) -> Result<(), String>
 /// Silence break reminders for the CURRENT break (the "Don't remind me" action).
 /// The next break re-enables them.
 #[tauri::command]
-pub fn mute_break_reminders(state: State<'_, DesktopState>) -> Result<(), String> {
+pub fn mute_break_reminders(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
     state.break_reminders_muted.store(true, Ordering::Relaxed);
+    // Muting from inside the reminder window should also take it off screen.
+    reminder::close(&app, "break reminders muted");
     Ok(())
 }
 
@@ -113,9 +122,13 @@ pub async fn run(state: DesktopState) {
 }
 
 /// Background reminder: while a break is actually in progress (session running
-/// + on break) and the user hasn't muted it, send a native notification every
+/// + on break) and the user hasn't muted it, raise a reminder every
 /// `BREAK_REMINDER_INTERVAL` nudging them to resume. "Don't remind me" mutes the
 /// current break via `mute_break_reminders`.
+///
+/// The reminder is a persistent window rather than an OS notification: someone
+/// on a break is away from the screen, and a notification banner is gone in a
+/// few seconds. See `reminder` for the full reasoning.
 pub async fn run_break_reminders(app: AppHandle, state: DesktopState) {
     loop {
         tokio::time::sleep(BREAK_REMINDER_INTERVAL).await;
@@ -123,15 +136,7 @@ pub async fn run_break_reminders(app: AppHandle, state: DesktopState) {
         let muted = state.break_reminders_muted.load(Ordering::Relaxed);
         let tracking = state.tracker.lock().await.is_some();
         if on_break && tracking && !muted {
-            if let Err(e) = app
-                .notification()
-                .builder()
-                .title("Still on a break?")
-                .body("TimeTracker is paused. Resume when you're back — or pick \"Don't remind me\" in the app to silence this break.")
-                .show()
-            {
-                tracing::warn!("break reminder notification failed: {e}");
-            }
+            reminder::show(&app, reminder::Reminder::on_break());
         }
     }
 }
@@ -151,15 +156,7 @@ pub async fn run_not_tracking_reminders(app: AppHandle, state: DesktopState) {
         // "System is on but the app isn't": machine in active use with the timer
         // stopped.
         if !tracking && !state.idle.is_idle() {
-            if let Err(e) = app
-                .notification()
-                .builder()
-                .title("You haven't started the timer")
-                .body("Your computer is active but TimeTracker isn't recording. Open the app and click Start tracking.")
-                .show()
-            {
-                tracing::warn!("not-tracking reminder notification failed: {e}");
-            }
+            reminder::show(&app, reminder::Reminder::not_tracking());
         }
     }
 }

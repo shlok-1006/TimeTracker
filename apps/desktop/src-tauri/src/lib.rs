@@ -14,6 +14,7 @@ mod http;
 mod idle;
 mod interval_repository;
 mod presence;
+mod reminder;
 mod reports;
 mod screenshot;
 mod sync_worker;
@@ -38,12 +39,68 @@ fn app_info() -> AppInfo {
     }
 }
 
+/// Send `tracing` output somewhere a human can read it.
+///
+/// Without this the app calls `tracing::warn!` in a dozen places and every one
+/// of them is discarded — there is no subscriber, so a background worker can
+/// fail forever in total silence. That is precisely how reminders were able to
+/// stop working for a whole platform without leaving a trace. Logs go to a file
+/// next to the database (the release build is a windowed app with no console),
+/// and `RUST_LOG` still works for anyone debugging.
+fn init_logging(data_dir: &std::path::Path) {
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("timetracker_desktop_lib=info,warn"));
+
+    // Best-effort: a logging failure must never stop the app from starting.
+    let file_layer = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data_dir.join("timetracker.log"))
+        .ok()
+        .map(|f| {
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::sync::Mutex::new(f))
+                .with_ansi(false)
+        });
+
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(file_layer)
+        .try_init();
+}
+
 /// Open the local DB, migrate, manage state, and start the background workers.
 async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
-    let data_dir = handle
-        .path()
-        .app_data_dir()
-        .context("resolve app data dir")?;
+    let data_dir = {
+        let dir = handle
+            .path()
+            .app_data_dir()
+            .context("resolve app data dir")?;
+        // A debug build MUST NOT share state with the installed app. Tauri derives
+        // this path from the bundle identifier, so `tauri dev` and the shipped
+        // release land in the same folder and open the same SQLite file — a
+        // developer running the app locally would be reading and migrating the
+        // real database of whoever is using TimeTracker on that machine. Give
+        // debug builds their own sibling directory instead.
+        if cfg!(debug_assertions) {
+            let mut name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "com.timetracker.desktop".to_string());
+            name.push_str(".dev");
+            dir.with_file_name(name)
+        } else {
+            dir
+        }
+    };
+    // The data dir may not exist yet on a first run; the DB would create it, but
+    // logging wants it first so startup problems are captured too.
+    let _ = std::fs::create_dir_all(&data_dir);
+    init_logging(&data_dir);
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "TimeTracker starting");
     let db_path = data_dir.join("timetracker.db");
 
     let pool = db::connect(&db_path).await.context("open local database")?;
@@ -76,8 +133,8 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // Native break-reminder notifications.
-        .plugin(tauri_plugin_notification::init())
+        // Reminders are raised as a persistent window (see `reminder`), not as
+        // OS notifications — those auto-dismiss and cannot report delivery.
         // Launch at system login so tracking resumes when the machine starts.
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -122,6 +179,8 @@ pub fn run() {
             presence::is_on_break,
             presence::mute_break_reminders,
             presence::break_reminders_muted,
+            reminder::current_reminder,
+            reminder::dismiss_reminder,
             presence::set_meeting,
             presence::is_in_meeting,
             presence::current_status,

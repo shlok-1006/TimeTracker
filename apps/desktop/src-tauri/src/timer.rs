@@ -92,6 +92,7 @@ pub fn current_kind(
 
 #[tauri::command]
 pub async fn start_tracking(
+    app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     user_id: String,
     team_id: Option<String>,
@@ -115,6 +116,8 @@ pub async fn start_tracking(
         start_utc: Utc::now(),
         start_instant: Instant::now(),
     });
+    // The "you haven't started the timer" reminder has just been answered.
+    crate::reminder::close(&app, "tracking started");
     Ok(())
 }
 

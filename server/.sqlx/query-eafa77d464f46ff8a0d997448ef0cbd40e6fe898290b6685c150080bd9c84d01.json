@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE manual_tasks\n           SET title = COALESCE($2, title),\n               description = COALESCE($3, description),\n               weight = COALESCE($4, weight),\n               due_date = CASE WHEN $6 THEN NULL ELSE COALESCE($5, due_date) END,\n               updated_at = now()\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4",
+        "Date",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eafa77d464f46ff8a0d997448ef0cbd40e6fe898290b6685c150080bd9c84d01"
+}

@@ -180,6 +180,42 @@ pub async fn update(
     Ok(res.rows_affected() > 0)
 }
 
+/// Update a task's editable fields, with an explicit way to clear the due date.
+///
+/// `update` above is COALESCE-only, so it can set or change a due date but never
+/// take one off — for an assigner that is fine, but someone managing their OWN
+/// task must be able to decide a date no longer applies. `clear_due_date`
+/// separates "leave it alone" (false, `due_date: None`) from "make it
+/// open-ended" (true), which a single nullable argument cannot express.
+pub async fn update_fields(
+    pool: &PgPool,
+    id: Uuid,
+    title: Option<&str>,
+    description: Option<&str>,
+    weight: Option<i32>,
+    due_date: Option<NaiveDate>,
+    clear_due_date: bool,
+) -> Result<bool, AppError> {
+    let res = sqlx::query!(
+        r#"UPDATE manual_tasks
+           SET title = COALESCE($2, title),
+               description = COALESCE($3, description),
+               weight = COALESCE($4, weight),
+               due_date = CASE WHEN $6 THEN NULL ELSE COALESCE($5, due_date) END,
+               updated_at = now()
+           WHERE id = $1"#,
+        id,
+        title,
+        description,
+        weight,
+        due_date,
+        clear_due_date
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
 /// Set the task status (open / done). Returns whether a row was updated.
 pub async fn set_status(pool: &PgPool, id: Uuid, status: &str) -> Result<bool, AppError> {
     let res = sqlx::query!(

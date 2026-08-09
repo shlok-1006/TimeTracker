@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT u.id AS user_id, u.name, u.email,\n          COUNT(ad.*) FILTER (WHERE ad.status = 'present') AS \"present!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'partial') AS \"partial!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'absent')  AS \"absent!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'leave')   AS \"leave!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'holiday') AS \"holiday!\",\n          COUNT(ad.*) FILTER (WHERE ad.status = 'weekend') AS \"weekend!\",\n          CAST(COALESCE(SUM(ad.worked_seconds), 0) AS BIGINT) AS \"worked!\"\n        FROM users u\n        LEFT JOIN attendance_days ad\n               ON ad.user_id = u.id AND ad.day >= $1 AND ad.day <= $2\n        -- Everyone in scope, every range. There used to be a role filter here:\n        --   u.role = 'employee' OR EXISTS (attendance rows in this range)\n        -- which meant a PM or HR appeared ONLY in ranges where they happened to have tracked\n        -- time, and silently vanished from others. The same person showing up in Live status\n        -- and the directory but missing from Attendance — and moving in and out as you change\n        -- the dates — makes the headcount untrustworthy and hides real absence.\n        --\n        -- The LEFT JOIN already yields zeros for someone with no rows, so absence now renders\n        -- as 0 rather than as a missing row. \"No data\" and \"not a person\" are different facts\n        -- and should not look alike.\n        WHERE ($3::uuid IS NULL\n               OR EXISTS (SELECT 1 FROM user_managers um\n                          WHERE um.user_id = u.id AND um.manager_id = $3))\n        GROUP BY u.id, u.name, u.email\n        ORDER BY u.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "present!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "partial!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "absent!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "leave!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "holiday!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "weekend!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "worked!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Date",
+        "Date",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e0fb490f176e4a577fa5c8593848e1353222cfa85508b656fc4d0846665b5cd4"
+}

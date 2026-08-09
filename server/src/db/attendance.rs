@@ -293,10 +293,17 @@ pub async fn report(
         FROM users u
         LEFT JOIN attendance_days ad
                ON ad.user_id = u.id AND ad.day >= $1 AND ad.day <= $2
-        WHERE (u.role = 'employee'::user_role
-               OR EXISTS (SELECT 1 FROM attendance_days x
-                          WHERE x.user_id = u.id AND x.day >= $1 AND x.day <= $2))
-          AND ($3::uuid IS NULL
+        -- Everyone in scope, every range. There used to be a role filter here:
+        --   u.role = 'employee' OR EXISTS (attendance rows in this range)
+        -- which meant a PM or HR appeared ONLY in ranges where they happened to have tracked
+        -- time, and silently vanished from others. The same person showing up in Live status
+        -- and the directory but missing from Attendance — and moving in and out as you change
+        -- the dates — makes the headcount untrustworthy and hides real absence.
+        --
+        -- The LEFT JOIN already yields zeros for someone with no rows, so absence now renders
+        -- as 0 rather than as a missing row. "No data" and "not a person" are different facts
+        -- and should not look alike.
+        WHERE ($3::uuid IS NULL
                OR EXISTS (SELECT 1 FROM user_managers um
                           WHERE um.user_id = u.id AND um.manager_id = $3))
         GROUP BY u.id, u.name, u.email

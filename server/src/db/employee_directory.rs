@@ -15,6 +15,17 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// A team the person belongs to, as an ID-first reference.
+///
+/// Names are for humans; code must join on something that survives a rename. This used to be a
+/// bare `Vec<String>` of names, which made every consumer match on text — the exact fragility
+/// that breaks on casing, spacing and duplicate names.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamRef {
+    pub team_id: Uuid,
+    pub name: String,
+}
+
 /// One row of the directory listing: the core (tier-1) facts only.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirectoryEntry {
@@ -26,7 +37,7 @@ pub struct DirectoryEntry {
     pub department: Option<String>,
     pub designation: Option<String>,
     pub joined_on: Option<NaiveDate>,
-    pub teams: Vec<String>,
+    pub teams: Vec<TeamRef>,
     /// Whether an onboarding-form profile exists at all, so the UI can show
     /// "not submitted" rather than an empty tab that looks broken.
     pub has_profile: bool,
@@ -116,11 +127,12 @@ pub async fn list_directory(
         r#"SELECT u.id, u.name, u.email, u.role::text AS "role!",
                   u.employee_code, u.department, u.designation, u.joined_on,
                   COALESCE(
-                      ARRAY(SELECT t.name FROM user_teams ut
-                            JOIN teams t ON t.id = ut.team_id
-                            WHERE ut.user_id = u.id ORDER BY t.name),
-                      '{}'
-                  ) AS "teams!: Vec<String>",
+                      (SELECT json_agg(json_build_object('team_id', t.id, 'name', t.name)
+                                       ORDER BY t.name)
+                       FROM user_teams ut JOIN teams t ON t.id = ut.team_id
+                       WHERE ut.user_id = u.id),
+                      '[]'::json
+                  ) AS "teams!: sqlx::types::Json<Vec<TeamRef>>",
                   EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!"
            FROM users u
            WHERE ($1::uuid IS NULL
@@ -143,7 +155,7 @@ pub async fn list_directory(
             department: r.department,
             designation: r.designation,
             joined_on: r.joined_on,
-            teams: r.teams,
+            teams: r.teams.0,
             has_profile: r.has_profile,
         })
         .collect())
@@ -155,11 +167,12 @@ pub async fn get_entry(pool: &PgPool, user_id: Uuid) -> Result<Option<DirectoryE
         r#"SELECT u.id, u.name, u.email, u.role::text AS "role!",
                   u.employee_code, u.department, u.designation, u.joined_on,
                   COALESCE(
-                      ARRAY(SELECT t.name FROM user_teams ut
-                            JOIN teams t ON t.id = ut.team_id
-                            WHERE ut.user_id = u.id ORDER BY t.name),
-                      '{}'
-                  ) AS "teams!: Vec<String>",
+                      (SELECT json_agg(json_build_object('team_id', t.id, 'name', t.name)
+                                       ORDER BY t.name)
+                       FROM user_teams ut JOIN teams t ON t.id = ut.team_id
+                       WHERE ut.user_id = u.id),
+                      '[]'::json
+                  ) AS "teams!: sqlx::types::Json<Vec<TeamRef>>",
                   EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!"
            FROM users u WHERE u.id = $1"#,
         user_id
@@ -176,7 +189,7 @@ pub async fn get_entry(pool: &PgPool, user_id: Uuid) -> Result<Option<DirectoryE
         department: r.department,
         designation: r.designation,
         joined_on: r.joined_on,
-        teams: r.teams,
+        teams: r.teams.0,
         has_profile: r.has_profile,
     }))
 }

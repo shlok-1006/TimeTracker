@@ -37,12 +37,17 @@ fn team_scope(user: &AuthUser) -> Option<Uuid> {
 
 /// `GET /admin/teams` — teams with member counts. HR sees all teams; a project
 /// manager sees only teams containing their managed employees (SEC-09).
+/// `GET /admin/teams` — every team in scope WITH its roster and PMs, in one call.
+///
+/// Returns `members[]` and `pms[]` alongside the count so a consumer can render a team roster,
+/// or "the PM's team", without a request per team. Members carry `user_id` — code joins on the
+/// id, never the name.
 async fn admin_list_teams(
     State(state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
 ) -> Result<Json<Value>, AppError> {
     Ok(Json(json!(
-        teams::list_with_counts(&state.db, team_scope(&user)).await?
+        teams::list_detailed(&state.db, team_scope(&user)).await?
     )))
 }
 

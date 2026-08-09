@@ -1,7 +1,7 @@
 //! Teams repository (Feature 4, Rule 7): team catalogue + multi-team membership.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -347,4 +347,94 @@ pub async fn is_member(pool: &PgPool, user_id: Uuid, team_id: Uuid) -> Result<bo
     .fetch_one(pool)
     .await?;
     Ok(row.member)
+}
+
+/// A member of a team, as the roster needs them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamMemberRef {
+    pub user_id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub employee_code: Option<String>,
+}
+
+/// A team with its roster and the managers who cover it.
+#[derive(Debug, Clone, Serialize)]
+pub struct TeamDetail {
+    pub team_id: Uuid,
+    pub name: String,
+    pub description: String,
+    pub member_count: i64,
+    pub members: Vec<TeamMemberRef>,
+    /// The project managers who manage at least one of this team's members.
+    ///
+    /// DERIVED, not declared. TimeTracker has no team↔PM table: management is a person-to-person
+    /// relation (`user_managers`). So "this team's PMs" is computed as the managers of its
+    /// members, which is the truthful reading of the data we hold. If team-level PM assignment is
+    /// ever wanted as a first-class fact, it needs its own table — this field would then read from
+    /// that instead, without the shape changing.
+    pub pms: Vec<TeamMemberRef>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Every team with its members and PMs, in ONE query.
+///
+/// Callers previously had to list teams, then fetch each team's members separately — an N+1 that
+/// made rendering a roster (or "the PM's team") cost a request per team. Scope matches
+/// `list_with_counts`: HR sees every team in full; a PM sees only teams they manage someone on,
+/// and only the members they actually manage.
+pub async fn list_detailed(
+    pool: &PgPool,
+    manager_id: Option<Uuid>,
+) -> Result<Vec<TeamDetail>, AppError> {
+    let rows = sqlx::query!(
+        r#"WITH visible AS (
+               SELECT ut.team_id, u.id AS user_id, u.name, u.email, u.employee_code
+               FROM user_teams ut
+               JOIN users u ON u.id = ut.user_id
+               WHERE $1::uuid IS NULL
+                  OR EXISTS (SELECT 1 FROM user_managers um
+                             WHERE um.user_id = u.id AND um.manager_id = $1)
+           )
+           SELECT t.id, t.name, t.description, t.created_at,
+                  CAST(COUNT(v.user_id) AS BIGINT) AS "member_count!",
+                  COALESCE(
+                      json_agg(json_build_object(
+                          'user_id', v.user_id, 'name', v.name,
+                          'email', v.email, 'employee_code', v.employee_code
+                      ) ORDER BY v.name) FILTER (WHERE v.user_id IS NOT NULL),
+                      '[]'::json
+                  ) AS "members!: sqlx::types::Json<Vec<TeamMemberRef>>",
+                  COALESCE(
+                      (SELECT json_agg(DISTINCT jsonb_build_object(
+                                  'user_id', m.id, 'name', m.name,
+                                  'email', m.email, 'employee_code', m.employee_code))
+                       FROM user_teams ut2
+                       JOIN user_managers um2 ON um2.user_id = ut2.user_id
+                       JOIN users m ON m.id = um2.manager_id
+                       WHERE ut2.team_id = t.id)::json,
+                      '[]'::json
+                  ) AS "pms!: sqlx::types::Json<Vec<TeamMemberRef>>"
+           FROM teams t
+           LEFT JOIN visible v ON v.team_id = t.id
+           GROUP BY t.id, t.name, t.description, t.created_at
+           HAVING $1::uuid IS NULL OR COUNT(v.user_id) > 0
+           ORDER BY t.name"#,
+        manager_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| TeamDetail {
+            team_id: r.id,
+            name: r.name,
+            description: r.description,
+            member_count: r.member_count,
+            members: r.members.0,
+            pms: r.pms.0,
+            created_at: r.created_at,
+        })
+        .collect())
 }

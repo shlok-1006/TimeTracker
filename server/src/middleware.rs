@@ -4,7 +4,7 @@
 //!   1. `auth_middleware` validates the `Authorization: Bearer <jwt>` header,
 //!      decodes the claims, and attaches an `AuthUser` to the request extensions.
 //!   2. Handlers extract `AuthUser` (any authenticated user) or one of the guard
-//!      extractors (`RequireEmployee` / `RequireAdmin` / `RequireHr`) which
+//!      extractors (`RequireEmployee` / `RequireStaff` / `RequireHr`) which
 //!      enforce the role and return `403 Forbidden` on mismatch.
 
 use axum::{
@@ -75,13 +75,26 @@ pub fn require_employee(role: UserRole) -> Result<(), AppError> {
 }
 
 /// Allow admin-dashboard roles (HR or project manager).
-pub fn require_admin(role: UserRole) -> Result<(), AppError> {
+pub fn require_staff(role: UserRole) -> Result<(), AppError> {
     ensure(role.is_dashboard())
 }
 
-/// Allow only HR (highest privilege).
+/// Allow HR **or above** — i.e. HR and admin.
+///
+/// `at_least` rather than `== Hr`: an admin sits above HR precisely so it can do everything HR
+/// can, and an equality test here would have locked the top of the hierarchy out of most of the
+/// system. Every tier added above HR inherits these routes for free, which is the behaviour you
+/// want from a rank.
 pub fn require_hr(role: UserRole) -> Result<(), AppError> {
-    ensure(role == UserRole::Hr)
+    ensure(role.at_least(UserRole::Hr))
+}
+
+/// Allow only `admin` — the seat above HR.
+///
+/// Reserved for the things HR must not do to itself: removing an HR account, and creating another
+/// admin. Everything else HR can do, admin can do through `require_hr` above.
+pub fn require_admin(role: UserRole) -> Result<(), AppError> {
+    ensure(role == UserRole::Admin)
 }
 
 fn ensure(ok: bool) -> Result<(), AppError> {
@@ -138,8 +151,9 @@ macro_rules! guard_extractor {
 }
 
 guard_extractor!(RequireEmployee, require_employee);
-guard_extractor!(RequireAdmin, require_admin);
+guard_extractor!(RequireStaff, require_staff);
 guard_extractor!(RequireHr, require_hr);
+guard_extractor!(RequireAdmin, require_admin);
 
 #[cfg(test)]
 mod tests {
@@ -154,9 +168,9 @@ mod tests {
 
     #[test]
     fn admin_guard_allows_hr_and_pm() {
-        assert!(require_admin(UserRole::Hr).is_ok());
-        assert!(require_admin(UserRole::ProjectManager).is_ok());
-        assert!(require_admin(UserRole::Employee).is_err());
+        assert!(require_staff(UserRole::Hr).is_ok());
+        assert!(require_staff(UserRole::ProjectManager).is_ok());
+        assert!(require_staff(UserRole::Employee).is_err());
     }
 
     #[test]

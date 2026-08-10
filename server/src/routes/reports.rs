@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::db::analysis_reports;
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireAdmin};
+use crate::middleware::{AuthUser, RequireStaff};
 use crate::routes::admin::{authorize_view, team_scope};
 use crate::state::AppState;
 
@@ -39,7 +39,7 @@ fn resolve_day(q: &DayQuery) -> NaiveDate {
 /// project manager: only their team.
 async fn admin_reports(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Query(q): Query<DayQuery>,
 ) -> Result<Json<Value>, AppError> {
     let day = resolve_day(&q);
@@ -50,7 +50,7 @@ async fn admin_reports(
 /// `GET /admin/users/:id/report?day=` — one employee's report (HR any; PM team).
 async fn user_report(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<DayQuery>,
 ) -> Result<Json<Value>, AppError> {

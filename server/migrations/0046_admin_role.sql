@@ -1,0 +1,19 @@
+-- 0046_admin_role.sql — a tier above HR.
+--
+-- The system has had three roles: employee < project_manager < hr, with HR at the
+-- top. That leaves nobody able to oversee HR itself: any HR account could delete
+-- any other HR account, including the one that created it, and there was no seat
+-- that HR could not remove.
+--
+-- `admin` is that seat. It has everything HR has, plus two things HR does not:
+-- it may remove an HR account, and it cannot be removed BY one.
+--
+-- Naming note for whoever reads the code next: the extractor called
+-- `RequireAdmin` used to mean "PM or HR" — staff, not administrator. With a real
+-- admin role that name is a trap, so it was renamed `RequireStaff` in the same
+-- change and `RequireAdmin` now means what it says.
+--
+-- ADD VALUE only. Postgres cannot drop an enum value, so this is one-way — which
+-- is the right shape for a privilege tier: rolling it back would silently demote
+-- whoever holds it rather than failing loudly.
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'admin';

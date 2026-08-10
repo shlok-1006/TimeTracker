@@ -1,4 +1,4 @@
-//! Admin/dashboard routes (require HR or project-manager — `RequireAdmin`).
+//! Admin/dashboard routes (require HR or project-manager — `RequireStaff`).
 //!
 //! Scope (CLAUDE.md): HR sees everyone; a project manager sees only users they
 //! manage (the `user_managers` join table — an employee can have several
@@ -23,7 +23,7 @@ use crate::db::{
 };
 use crate::employment_type::EmploymentType;
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
+use crate::middleware::{AuthUser, RequireHr, RequireStaff};
 use crate::role::UserRole;
 use crate::state::AppState;
 use crate::{analysis_service, sampler};
@@ -33,9 +33,13 @@ const VIEW_URL_EXPIRES_SECS: u64 = 120;
 
 /// Which employees the caller may see in the team list (`None` = all).
 pub(crate) fn team_scope(user: &AuthUser) -> Option<Uuid> {
-    match user.role {
-        UserRole::Hr => None,
-        _ => Some(user.id), // project manager: own team
+    // `at_least`, not `== Hr`: admin sits ABOVE HR, and an equality test would have handed
+    // the top of the hierarchy a project manager's narrow scope. Every unrestricted-caller
+    // check in this codebase is written this way for that reason.
+    if user.role.at_least(UserRole::Hr) {
+        None
+    } else {
+        Some(user.id) // project manager: own team
     }
 }
 
@@ -46,7 +50,7 @@ pub(crate) async fn authorize_view(
     viewer: &AuthUser,
     target: Uuid,
 ) -> Result<(), AppError> {
-    if viewer.role == UserRole::Hr || viewer.id == target {
+    if viewer.role.at_least(UserRole::Hr) || viewer.id == target {
         return Ok(());
     }
     if users::is_manager_of(&state.db, viewer.id, target).await? {
@@ -59,7 +63,7 @@ pub(crate) async fn authorize_view(
 /// `GET /admin/team` — live team statuses + today's hours.
 async fn team(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
 ) -> Result<Json<Value>, AppError> {
     let members = presence::team(&state.db, team_scope(&user)).await?;
     let body: Vec<Value> = members
@@ -79,7 +83,7 @@ async fn team(
 /// `GET /admin/users/:id/hours` — drill-down hours for one employee.
 async fn user_hours(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     authorize_view(&state, &user, target).await?;
@@ -103,7 +107,7 @@ async fn user_hours(
 /// today (UTC). PM is team-scoped; HR sees anyone.
 async fn user_screenshots(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<SampleQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -128,7 +132,7 @@ struct TimelineQuery {
 /// window, for the colored timeline bar.
 async fn user_timeline(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<TimelineQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -161,7 +165,7 @@ struct SampleQuery {
 /// Idempotent: re-running returns the same stored set (the day is never resampled).
 async fn sample_day(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<SampleQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -201,7 +205,7 @@ async fn sample_day(
 /// (re-running upserts each `(job, screenshot)` result).
 async fn analyze_day(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<SampleQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -283,7 +287,7 @@ fn validate_range(q: &RangeQuery) -> Result<(), AppError> {
 /// per-run cap, so the UI can show a count/cost confirmation before starting.
 async fn analyze_range_preview(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<RangeQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -307,7 +311,7 @@ async fn analyze_range_preview(
 /// `run_id` the UI polls via `GET /admin/analysis-runs/:id`.
 async fn analyze_range(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<RangeQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -379,7 +383,7 @@ async fn analyze_range(
 /// the admin UI). PMs can only see runs for their own team members.
 async fn analysis_run_status(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     let run = analysis_runs::get(&state.db, run_id)
@@ -392,7 +396,7 @@ async fn analysis_run_status(
 /// `GET /admin/users/:id/analysis?day=YYYY-MM-DD` — stored analysis results.
 async fn analysis_for_day(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<SampleQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -439,8 +443,15 @@ async fn create_user(
     RequireHr(hr): RequireHr,
     Json(body): Json<CreateUser>,
 ) -> Result<Json<Value>, AppError> {
-    let role = UserRole::from_str(&body.role)
-        .map_err(|_| AppError::BadRequest("role must be employee, project_manager or hr".into()))?;
+    let role = UserRole::from_str(&body.role).map_err(|_| {
+        AppError::BadRequest("role must be employee, project_manager, hr or admin".into())
+    })?;
+    // Only an admin may mint another admin. Without this, any HR account could promote itself
+    // past the seat that oversees it simply by creating a new one — which would make the tier
+    // decorative.
+    if role == UserRole::Admin && hr.role != UserRole::Admin {
+        return Err(AppError::Forbidden);
+    }
     let employment_type = EmploymentType::from_str(&body.employment_type).map_err(|_| {
         AppError::BadRequest("employment type must be employee, contractor or intern".into())
     })?;
@@ -512,6 +523,12 @@ async fn delete_user(
     let removed = users::find_by_id(&state.db, id)
         .await?
         .ok_or(AppError::NotFound)?;
+    // The whole point of the tier: an admin oversees HR, so HR must not be able to remove that
+    // oversight. An admin may still remove another admin — a seat nobody can revoke is worse than
+    // one that needs a peer to revoke it.
+    if removed.role == UserRole::Admin && hr.role != UserRole::Admin {
+        return Err(AppError::Forbidden);
+    }
     if !users::delete(&state.db, id).await? {
         return Err(AppError::NotFound);
     }

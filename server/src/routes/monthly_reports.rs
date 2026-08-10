@@ -5,7 +5,7 @@
 //!   * project manager → their team (drill-down + roster)
 //!   * HR              → everyone
 //!
-//! Generation is HR/PM only (`RequireAdmin` + `authorize_view` for the target),
+//! Generation is HR/PM only (`RequireStaff` + `authorize_view` for the target),
 //! so an employee can read their month but never (re)write it. Every generation
 //! is audited — a monthly summary feeds performance conversations, so who asked
 //! for it and when must be traceable.
@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::db::{audit, monthly_reports};
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireAdmin};
+use crate::middleware::{AuthUser, RequireStaff};
 use crate::monthly_report_service as service;
 use crate::org_time;
 use crate::routes::admin::{authorize_view, team_scope};
@@ -55,7 +55,7 @@ async fn my_monthly(
 /// summary (HR anyone; PM only their own reports).
 async fn user_monthly(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<MonthQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -69,7 +69,7 @@ async fn user_monthly(
 /// on demand, for any month including the one still running.
 async fn generate_user_monthly(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<MonthQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -91,7 +91,7 @@ async fn generate_user_monthly(
 /// everyone; a project manager sees only their team.
 async fn monthly_roster(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Query(q): Query<MonthQuery>,
 ) -> Result<Json<Value>, AppError> {
     let month = resolve_month(&q);
@@ -104,7 +104,7 @@ async fn monthly_roster(
 /// team" button; per-employee failures are reported but never abort the batch.
 async fn generate_monthly_roster(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Query(q): Query<MonthQuery>,
 ) -> Result<Json<Value>, AppError> {
     let month = resolve_month(&q);

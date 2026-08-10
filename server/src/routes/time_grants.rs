@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::db::{audit, time_grants, users};
 use crate::error::AppError;
-use crate::middleware::RequireAdmin;
+use crate::middleware::RequireStaff;
 use crate::routes::admin::authorize_view;
 use crate::state::AppState;
 
@@ -39,7 +39,7 @@ struct NewGrant {
 
 async fn add_grant(
     State(state): State<AppState>,
-    RequireAdmin(actor): RequireAdmin,
+    RequireStaff(actor): RequireStaff,
     Path(target): Path<Uuid>,
     Json(body): Json<NewGrant>,
 ) -> Result<Json<Value>, AppError> {
@@ -77,7 +77,7 @@ async fn add_grant(
 
 async fn list_grants(
     State(state): State<AppState>,
-    RequireAdmin(actor): RequireAdmin,
+    RequireStaff(actor): RequireStaff,
     Path(target): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     authorize_view(&state, &actor, target).await?;
@@ -88,7 +88,7 @@ async fn list_grants(
 
 async fn delete_grant(
     State(state): State<AppState>,
-    RequireAdmin(actor): RequireAdmin,
+    RequireStaff(actor): RequireStaff,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     let owner = time_grants::owner(&state.db, id)

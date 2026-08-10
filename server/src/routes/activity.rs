@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::db::activity;
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireAdmin};
+use crate::middleware::{AuthUser, RequireStaff};
 use crate::routes::admin::authorize_view;
 use crate::state::AppState;
 use crate::validate::sanitize_line;
@@ -122,7 +122,7 @@ async fn my_activity(
 /// `GET /admin/users/:id/activity?day=` — drill-down (PM team-scoped, HR all).
 async fn user_activity(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<DayQuery>,
 ) -> Result<Json<Value>, AppError> {

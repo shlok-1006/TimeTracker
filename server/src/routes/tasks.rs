@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::db::{audit, manual_tasks, users};
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireAdmin};
+use crate::middleware::{AuthUser, RequireStaff};
 use crate::routes::admin::authorize_view;
 use crate::state::AppState;
 
@@ -63,7 +63,7 @@ struct CreateTask {
 
 async fn create_task(
     State(state): State<AppState>,
-    RequireAdmin(actor): RequireAdmin,
+    RequireStaff(actor): RequireStaff,
     Path(target): Path<Uuid>,
     Json(body): Json<CreateTask>,
 ) -> Result<Json<Value>, AppError> {
@@ -102,7 +102,7 @@ async fn create_task(
 
 async fn list_tasks(
     State(state): State<AppState>,
-    RequireAdmin(actor): RequireAdmin,
+    RequireStaff(actor): RequireStaff,
     Path(target): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     authorize_view(&state, &actor, target).await?;
@@ -127,7 +127,7 @@ struct UpdateTask {
 
 async fn update_task(
     State(state): State<AppState>,
-    RequireAdmin(actor): RequireAdmin,
+    RequireStaff(actor): RequireStaff,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateTask>,
 ) -> Result<Json<Value>, AppError> {
@@ -178,7 +178,7 @@ async fn update_task(
 
 async fn delete_task(
     State(state): State<AppState>,
-    RequireAdmin(actor): RequireAdmin,
+    RequireStaff(actor): RequireStaff,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     let task = manual_tasks::get(&state.db, id)

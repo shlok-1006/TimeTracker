@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::middleware::{auth_middleware, AuthUser, RequireAdmin, RequireEmployee, RequireHr};
+use crate::middleware::{auth_middleware, AuthUser, RequireEmployee, RequireHr, RequireStaff};
 use crate::state::AppState;
 
 /// Current authenticated principal (any role).
@@ -51,7 +51,7 @@ async fn desktop_ping(_guard: RequireEmployee) -> Json<Value> {
 }
 
 /// Admin-dashboard resource (HR or project manager). Wrong role => 403.
-async fn dashboard_ping(_guard: RequireAdmin) -> Json<Value> {
+async fn dashboard_ping(_guard: RequireStaff) -> Json<Value> {
     Json(json!({ "ok": true, "scope": "dashboard" }))
 }
 

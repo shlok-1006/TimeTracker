@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::attendance_service;
 use crate::db::{attendance, audit, users};
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
+use crate::middleware::{AuthUser, RequireHr, RequireStaff};
 use crate::role::UserRole;
 use crate::routes::admin::authorize_view;
 use crate::state::AppState;
@@ -71,7 +71,7 @@ async fn my_attendance(
 /// `GET /admin/users/:id/attendance` — drill-down for HR / the user's PM.
 async fn user_attendance(
     State(state): State<AppState>,
-    RequireAdmin(viewer): RequireAdmin,
+    RequireStaff(viewer): RequireStaff,
     Path(target): Path<Uuid>,
     Query(q): Query<RangeQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -86,11 +86,11 @@ async fn user_attendance(
 /// only their own team.
 async fn attendance_report(
     State(state): State<AppState>,
-    RequireAdmin(viewer): RequireAdmin,
+    RequireStaff(viewer): RequireStaff,
     Query(q): Query<RangeQuery>,
 ) -> Result<Json<Value>, AppError> {
     let (from, to) = resolve_range(&q)?;
-    let scope = if viewer.role == UserRole::Hr {
+    let scope = if viewer.role.at_least(UserRole::Hr) {
         None
     } else {
         Some(viewer.id)

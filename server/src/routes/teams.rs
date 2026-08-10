@@ -23,16 +23,17 @@ use uuid::Uuid;
 
 use crate::db::{attendance, audit, presence, teams, users};
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
+use crate::middleware::{AuthUser, RequireHr, RequireStaff};
 use crate::role::UserRole;
 use crate::state::AppState;
 
 /// Scope for team analytics: HR sees every member (`None`); a project manager
 /// is limited to the employees they manage (`Some(pm_id)`) — SEC-09.
 fn team_scope(user: &AuthUser) -> Option<Uuid> {
-    match user.role {
-        UserRole::Hr => None,
-        _ => Some(user.id),
+    if user.role.at_least(UserRole::Hr) {
+        None
+    } else {
+        Some(user.id)
     }
 }
 
@@ -49,7 +50,7 @@ async fn authorize_team(state: &AppState, user: &AuthUser, team_id: Uuid) -> Res
     teams::get(&state.db, team_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    if matches!(user.role, UserRole::Hr) {
+    if user.role.at_least(UserRole::Hr) {
         return Ok(());
     }
     if teams::is_team_pm(&state.db, team_id, user.id).await? {
@@ -71,7 +72,7 @@ struct RangeQuery {
 /// PM could see a teammate's score but not whether they had turned up.
 async fn team_attendance(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(id): Path<Uuid>,
     Query(q): Query<RangeQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -88,7 +89,7 @@ async fn team_attendance(
 /// `GET /admin/teams/:id/live` — live status for a team's members, same rows as `/admin/team`.
 async fn team_live(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     authorize_team(&state, &user, id).await?;
@@ -110,7 +111,7 @@ async fn team_live(
 /// `GET /admin/teams/:id/pms` — who runs this team.
 async fn list_team_pms(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     authorize_team(&state, &user, id).await?;
@@ -166,7 +167,7 @@ async fn remove_team_pm(
 /// id, never the name.
 async fn admin_list_teams(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
 ) -> Result<Json<Value>, AppError> {
     Ok(Json(json!(
         teams::list_detailed(&state.db, team_scope(&user)).await?
@@ -178,7 +179,7 @@ async fn admin_list_teams(
 /// a PM who manages nobody on the team gets a 404 (SEC-09).
 async fn team_summary(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     let scope = team_scope(&user);
@@ -257,7 +258,7 @@ async fn leave_team(
 /// `GET /admin/users/:id/teams` — an employee's teams (HR any; PM own team).
 async fn user_teams(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     crate::routes::admin::authorize_view(&state, &user, target).await?;

@@ -12,7 +12,7 @@
 //!
 //! The sealed tier is deliberately its own endpoint rather than a field on the
 //! profile response. Nothing that merely lists people can leak an account
-//! number, and a PM cannot reach it at all — `RequireHr`, not `RequireAdmin`.
+//! number, and a PM cannot reach it at all — `RequireHr`, not `RequireStaff`.
 
 use axum::{
     extract::{Path, State},
@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::db::{audit, employee_directory as repo};
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
+use crate::middleware::{AuthUser, RequireHr, RequireStaff};
 use crate::routes::admin::{authorize_view, team_scope};
 use crate::state::AppState;
 
@@ -44,7 +44,7 @@ async fn my_profile(
 /// people they manage.
 async fn directory(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
 ) -> Result<Json<Value>, AppError> {
     let people = repo::list_directory(&state.db, team_scope(&user)).await?;
     Ok(Json(json!({ "people": people })))
@@ -53,7 +53,7 @@ async fn directory(
 /// `GET /admin/directory/:id` — one person's full tier-2 record.
 async fn user_profile(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(target): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     authorize_view(&state, &user, target).await?;

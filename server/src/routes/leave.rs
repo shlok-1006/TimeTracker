@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::db::{audit, leave, users};
 use crate::error::AppError;
 use crate::leave_service;
-use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
+use crate::middleware::{AuthUser, RequireHr, RequireStaff};
 use crate::role::UserRole;
 use crate::state::AppState;
 
@@ -108,7 +108,7 @@ async fn authorize_approver(
     approver: &AuthUser,
     target: Uuid,
 ) -> Result<(), AppError> {
-    if approver.role == UserRole::Hr {
+    if approver.role.at_least(UserRole::Hr) {
         return Ok(());
     }
     if users::is_manager_of(&state.db, approver.id, target).await? {
@@ -120,10 +120,10 @@ async fn authorize_approver(
 
 async fn pending_requests(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
 ) -> Result<Json<Value>, AppError> {
     // HR sees all; a project manager sees only their team's.
-    let scope = if user.role == UserRole::Hr {
+    let scope = if user.role.at_least(UserRole::Hr) {
         None
     } else {
         Some(user.id)
@@ -162,7 +162,7 @@ async fn decide_request(
 
 async fn approve_request(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     decide_request(&state, &user, id, "approved").await
@@ -170,7 +170,7 @@ async fn approve_request(
 
 async fn reject_request(
     State(state): State<AppState>,
-    RequireAdmin(user): RequireAdmin,
+    RequireStaff(user): RequireStaff,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     decide_request(&state, &user, id, "rejected").await
@@ -389,7 +389,7 @@ async fn user_balance(
 
 async fn list_holidays(
     State(state): State<AppState>,
-    RequireAdmin(_u): RequireAdmin,
+    RequireStaff(_u): RequireStaff,
     Query(q): Query<YearQuery>,
 ) -> Result<Json<Value>, AppError> {
     Ok(Json(json!(leave::list_holidays(&state.db, q.year).await?)))

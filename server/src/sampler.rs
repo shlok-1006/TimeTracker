@@ -1,8 +1,22 @@
 //! Daily Screenshot Sampler (STEP 9).
 //!
-//! Picks 4–5 screenshots per employee per day for later analysis, spread across
-//! the workday. The day is split into five time-of-day buckets and one random
-//! screenshot is drawn from each non-empty bucket.
+//! How many screenshots a day gets is a function of how long the person actually
+//! worked: roughly one per `ANALYZER_MINUTES_PER_SHOT` of tracked time, so an
+//! eight-hour day is looked at about sixteen times and a two-hour day four.
+//!
+//! It used to be five fixed clock buckets with one shot each, which meant a full
+//! day and a two-hour day were reviewed in the same depth — five frames either
+//! way — and no amount of extra work could earn a closer look. A day's score was
+//! being decided by four or five frames out of hundreds.
+//!
+//! Tracked time comes from the same overlap-safe derivation the hours pages use
+//! (`attendance::day_activity`), so a second device recording the same minute
+//! cannot inflate the sample count either.
+//!
+//! SPREAD. The eligible shots, in capture order, are cut into `n` contiguous
+//! groups of near-equal SIZE and one is drawn at random from each. Equal-size
+//! rather than equal-clock-time on purpose: someone who works 09:00–12:00 and
+//! 16:00–18:00 should not spend slots on the four hours in between.
 //!
 //! Eligibility: only *Working* screenshots count (`captured_status = 'working'`).
 //! The desktop also captures during meetings (tagged `meeting`, Feature 2); those
@@ -11,38 +25,47 @@
 //! Idempotency (Rules: "never resample same day"): the chosen set is persisted in
 //! `analysis_job_samples` and `analysis_jobs` is UNIQUE per (user, day). Re-running
 //! `sample_screenshots` for a day that already has samples returns the stored set
-//! unchanged — it never re-rolls the random choice.
-//!
-//! Bucket boundaries are UTC clock hours and cover the full 24h day so no shot is
-//! ever ineligible. (They can later be shifted into each employee's local timezone.)
+//! unchanged — it never re-rolls the random choice, and never re-sizes a day that
+//! was already sampled under a different ratio.
 
 use argon2::password_hash::rand_core::{OsRng, RngCore};
-use chrono::{DateTime, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
 
-/// Ordered time-of-day buckets: `(name, start_hour_inclusive, end_hour_exclusive)`.
-/// They tile `[0, 24)` so every screenshot lands in exactly one bucket.
-const BUCKETS: [(&str, u32, u32); 5] = [
-    ("morning", 0, 10),
-    ("mid_morning", 10, 12),
-    ("noon", 12, 14),
-    ("afternoon", 14, 17),
-    ("late_afternoon", 17, 24),
-];
+/// Tracked minutes one screenshot is meant to stand for. 30 ⇒ an 8-hour day is
+/// sampled 16 times.
+const DEFAULT_MINUTES_PER_SHOT: i64 = 30;
+/// Floor, so a short-but-real day is still looked at properly rather than judged
+/// on one frame. Matches what a sparse day used to get.
+const DEFAULT_MIN_SHOTS: usize = 4;
+/// Ceiling. Every sample is a vision call, so this is the cost and wall-clock
+/// bound on one person-day; without it a 14-hour day would quietly cost triple.
+const DEFAULT_MAX_SHOTS: usize = 20;
 
-/// The bucket name for a UTC hour-of-day (always returns one — buckets tile the day).
-pub fn bucket_of(hour: u32) -> &'static str {
-    for (name, start, end) in BUCKETS {
-        if hour >= start && hour < end {
-            return name;
-        }
-    }
-    // Unreachable: BUCKETS tile [0, 24). Fall back to the last bucket defensively.
-    BUCKETS[BUCKETS.len() - 1].0
+fn env_num<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(default)
+}
+
+/// How many screenshots `worked_seconds` of tracked time earns.
+///
+/// Tunable without a deploy via `ANALYZER_MINUTES_PER_SHOT` / `ANALYZER_MIN_SHOTS`
+/// / `ANALYZER_MAX_SHOTS` — the right ratio is a judgement about cost against
+/// confidence, and that is worth being able to turn without a rebuild.
+pub fn shots_for_worked_seconds(worked_seconds: i64) -> usize {
+    let per_shot_minutes = env_num("ANALYZER_MINUTES_PER_SHOT", DEFAULT_MINUTES_PER_SHOT).max(1);
+    let min = env_num("ANALYZER_MIN_SHOTS", DEFAULT_MIN_SHOTS).max(1);
+    let max = env_num("ANALYZER_MAX_SHOTS", DEFAULT_MAX_SHOTS).max(min);
+
+    let worked_minutes = worked_seconds.max(0) as f64 / 60.0;
+    let want = (worked_minutes / per_shot_minutes as f64).round() as i64;
+    (want.max(0) as usize).clamp(min, max)
 }
 
 /// A job row (one per user per day).
@@ -89,24 +112,35 @@ fn pick_one<T>(items: &[T]) -> Option<&T> {
     Some(&items[idx])
 }
 
-/// Choose at most one screenshot per bucket (the pure sampling strategy).
+/// Choose up to `want` screenshots, one per contiguous slot of the day's eligible
+/// shots (the pure sampling strategy).
+///
+/// Sorts by capture time itself rather than trusting the caller's `ORDER BY`:
+/// the slots only mean "early in the day" through "late in the day" if the input
+/// is ordered, and that is too quiet a thing to fail if a query is ever edited.
 /// Applies `is_eligible` first (defense in depth on top of the SQL filter), so
 /// non-working shots can never be chosen even if the query were loosened.
-/// Returns `(bucket, screenshot_id)` in bucket order — between 0 and 5 entries.
-fn choose_samples(shots: &[CandidateShot]) -> Vec<(&'static str, Uuid)> {
-    let mut chosen = Vec::with_capacity(BUCKETS.len());
-    for (name, _, _) in BUCKETS {
-        let in_bucket: Vec<Uuid> = shots
-            .iter()
-            .filter(|s| is_eligible(s))
-            .filter(|s| bucket_of(s.taken_at.hour()) == name)
-            .map(|s| s.id)
-            .collect();
-        if let Some(id) = pick_one(&in_bucket) {
-            chosen.push((name, *id));
-        }
+///
+/// Returns `(slot_name, screenshot_id)` in time order, `min(want, eligible)`
+/// entries: fewer shots than slots means one per shot, never a duplicate.
+fn choose_samples(shots: &[CandidateShot], want: usize) -> Vec<(String, Uuid)> {
+    let mut eligible: Vec<&CandidateShot> = shots.iter().filter(|s| is_eligible(s)).collect();
+    eligible.sort_by_key(|s| s.taken_at);
+    let want = want.min(eligible.len());
+    if want == 0 {
+        return Vec::new();
     }
-    chosen
+
+    // Slot i covers [i*len/want, (i+1)*len/want) — integer maths distributes the
+    // remainder across slots rather than piling it on the last one, and the bounds
+    // are strictly increasing so no slot is ever empty.
+    (0..want)
+        .filter_map(|i| {
+            let lo = i * eligible.len() / want;
+            let hi = (i + 1) * eligible.len() / want;
+            pick_one(&eligible[lo..hi]).map(|s| (format!("slot_{:02}", i + 1), s.id))
+        })
+        .collect()
 }
 
 /// UTC `[start, end)` bounds of a calendar day.
@@ -205,11 +239,13 @@ async fn load_samples(pool: &PgPool, job_id: Uuid) -> Result<Vec<SampledShot>, A
         .collect())
 }
 
-/// Sample 4–5 working screenshots for `(user, day)`, spread across the day.
+/// Sample working screenshots for `(user, day)` in proportion to time tracked,
+/// spread across the day.
 ///
 /// Idempotent: if the day already has a sampled set, it is returned unchanged
-/// (the day is never resampled). Otherwise one screenshot is drawn at random per
-/// non-empty time bucket, persisted, and the job marked `sampled`.
+/// (the day is never resampled). Otherwise the count is derived from the day's
+/// tracked time, one screenshot is drawn at random per slot, persisted, and the
+/// job marked `sampled`.
 pub async fn sample_screenshots(
     pool: &PgPool,
     user_id: Uuid,
@@ -247,7 +283,25 @@ pub async fn sample_screenshots(
         })
         .collect();
 
-    for (bucket, screenshot_id) in choose_samples(&shots) {
+    // How much of the day to review is decided by how much of it was worked. Read
+    // from intervals rather than the attendance rollup so sampling does not depend
+    // on the nightly job having run first.
+    let worked = crate::db::attendance::day_activity(pool, user_id, from, to)
+        .await
+        .map(|a| a.worked_seconds)
+        // A failure here must not silently collapse the day to the floor without
+        // saying so — the count would look deliberate and be nothing of the kind.
+        .unwrap_or_else(|e| {
+            tracing::warn!(%user_id, %day, "sampler: worked-time read failed, using the floor: {e}");
+            0
+        });
+    let want = shots_for_worked_seconds(worked);
+    tracing::info!(
+        %user_id, %day, worked_seconds = worked, candidates = shots.len(), want,
+        "sampling screenshots"
+    );
+
+    for (bucket, screenshot_id) in choose_samples(&shots, want) {
         sqlx::query!(
             "INSERT INTO analysis_job_samples (job_id, screenshot_id, bucket)
              VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
@@ -283,29 +337,40 @@ mod tests {
         }
     }
 
-    fn shot(id: u8, hour: u32) -> CandidateShot {
-        shot_with_status(id, hour, "working")
+    /// The ratio itself. Env-tunable, so these assert the shipped defaults —
+    /// 30 min/shot, floor 4, ceiling 20.
+    #[test]
+    fn the_count_tracks_the_hours_worked() {
+        let h = |hours: f64| shots_for_worked_seconds((hours * 3600.0) as i64);
+        assert_eq!(h(8.0), 16, "a full day is looked at 16 times, not 5");
+        assert_eq!(h(4.0), 8);
+        assert_eq!(h(2.0), 4);
+        assert_eq!(h(1.0), 4, "the floor holds a short day up");
+        assert_eq!(
+            h(0.0),
+            4,
+            "and a day with no tracked time still gets the floor"
+        );
+        assert_eq!(h(14.0), 20, "the ceiling caps cost on a very long day");
+        assert_eq!(h(100.0), 20, "and cannot be blown past");
     }
 
     #[test]
-    fn buckets_tile_every_hour() {
-        for h in 0..24 {
-            assert!(!bucket_of(h).is_empty(), "hour {h} has no bucket");
+    fn the_count_is_monotonic_in_time_worked() {
+        // Longer worked never yields fewer samples — obvious, and exactly the kind of
+        // thing rounding quietly breaks.
+        let mut prev = 0;
+        for minutes in 0..(16 * 60) {
+            let n = shots_for_worked_seconds(minutes * 60);
+            assert!(n >= prev, "{minutes} min gave {n} after {prev}");
+            prev = n;
         }
     }
 
     #[test]
-    fn bucket_boundaries_are_correct() {
-        assert_eq!(bucket_of(0), "morning");
-        assert_eq!(bucket_of(9), "morning");
-        assert_eq!(bucket_of(10), "mid_morning");
-        assert_eq!(bucket_of(11), "mid_morning");
-        assert_eq!(bucket_of(12), "noon");
-        assert_eq!(bucket_of(13), "noon");
-        assert_eq!(bucket_of(14), "afternoon");
-        assert_eq!(bucket_of(16), "afternoon");
-        assert_eq!(bucket_of(17), "late_afternoon");
-        assert_eq!(bucket_of(23), "late_afternoon");
+    fn negative_or_absurd_input_cannot_escape_the_bounds() {
+        assert_eq!(shots_for_worked_seconds(-5_000), 4);
+        assert_eq!(shots_for_worked_seconds(i64::MAX), 20);
     }
 
     #[test]
@@ -318,60 +383,80 @@ mod tests {
         assert!(pick_one(&empty).is_none());
     }
 
-    #[test]
-    fn full_day_yields_one_per_bucket() {
-        // One shot in each of the five buckets → exactly 5 chosen, one per bucket.
-        let shots = vec![
-            shot(1, 8),
-            shot(2, 11),
-            shot(3, 13),
-            shot(4, 15),
-            shot(5, 19),
-        ];
-        let chosen = choose_samples(&shots);
-        assert_eq!(chosen.len(), 5);
-        let buckets: Vec<&str> = chosen.iter().map(|(b, _)| *b).collect();
-        assert_eq!(
-            buckets,
-            vec![
-                "morning",
-                "mid_morning",
-                "noon",
-                "afternoon",
-                "late_afternoon"
-            ]
-        );
+    /// `n` working shots one minute apart from 09:00, ids 1..=n — so index order
+    /// and capture order are the same thing, which is what the slot assertions read.
+    fn run(n: u16) -> Vec<CandidateShot> {
+        let d = NaiveDate::from_ymd_opt(2026, 6, 8).unwrap();
+        let base = Utc.from_utc_datetime(&d.and_hms_opt(9, 0, 0).unwrap());
+        (1..=n)
+            .map(|i| CandidateShot {
+                id: Uuid::from_u128(i as u128),
+                taken_at: base + chrono::Duration::minutes(i as i64),
+                captured_status: "working".to_string(),
+            })
+            .collect()
     }
 
     #[test]
-    fn sparse_day_skips_empty_buckets() {
-        // Activity only in morning + afternoon → 2 chosen.
-        let shots = vec![shot(1, 7), shot(2, 9), shot(3, 15)];
-        let chosen = choose_samples(&shots);
-        assert_eq!(chosen.len(), 2);
-        assert_eq!(chosen[0].0, "morning");
-        assert_eq!(chosen[1].0, "afternoon");
-        // The morning pick is one of the two morning shots.
-        assert!([Uuid::from_u128(1), Uuid::from_u128(2)].contains(&chosen[0].1));
+    fn a_full_day_is_sampled_sixteen_times() {
+        // 120 candidate shots, 8 hours worked → 16 slots, one pick each, all distinct.
+        let shots = run(120);
+        let chosen = choose_samples(&shots, shots_for_worked_seconds(8 * 3600));
+        assert_eq!(chosen.len(), 16);
+
+        let ids: std::collections::HashSet<Uuid> = chosen.iter().map(|(_, id)| *id).collect();
+        assert_eq!(ids.len(), 16, "no screenshot may be picked twice");
+
+        let names: Vec<&str> = chosen.iter().map(|(b, _)| b.as_str()).collect();
+        assert_eq!(names.first(), Some(&"slot_01"));
+        assert_eq!(names.last(), Some(&"slot_16"));
+    }
+
+    #[test]
+    fn slots_are_spread_across_the_day_in_order() {
+        // Each pick must come from its own stretch of the day: slot 1 from the first
+        // tenth, slot 10 from the last. Otherwise "more samples" would just mean
+        // "more of the same hour".
+        let shots = run(100);
+        let chosen = choose_samples(&shots, 10);
+        assert_eq!(chosen.len(), 10);
+        for (i, (_, id)) in chosen.iter().enumerate() {
+            let pos = shots.iter().position(|s| s.id == *id).expect("picked shot");
+            assert!(
+                pos >= i * 10 && pos < (i + 1) * 10,
+                "slot {} picked index {pos}, outside its tenth",
+                i + 1
+            );
+        }
+    }
+
+    #[test]
+    fn fewer_shots_than_slots_yields_one_per_shot() {
+        // A day with 3 candidates cannot produce 16 samples — and must not repeat one
+        // to reach the number.
+        let shots = run(3);
+        let chosen = choose_samples(&shots, 16);
+        assert_eq!(chosen.len(), 3);
+        let ids: std::collections::HashSet<Uuid> = chosen.iter().map(|(_, id)| *id).collect();
+        assert_eq!(ids.len(), 3, "no duplicates when padding out slots");
     }
 
     #[test]
     fn no_screenshots_yields_empty() {
-        assert!(choose_samples(&[]).is_empty());
+        assert!(choose_samples(&[], 16).is_empty());
     }
 
     #[test]
     fn meeting_shots_are_never_sampled() {
-        // Working at 09:00 + meeting at 11:00 and 15:00 → ONLY the working shot
-        // is chosen, even though the meeting shots sit in otherwise-empty buckets.
+        // Working at 09:00 + meeting at 11:00 and 15:00 → ONLY the working shot is
+        // chosen, however many slots are asked for.
         let shots = vec![
             shot_with_status(1, 9, "working"),
             shot_with_status(2, 11, "meeting"),
             shot_with_status(3, 15, "meeting"),
         ];
-        let chosen = choose_samples(&shots);
+        let chosen = choose_samples(&shots, 16);
         assert_eq!(chosen.len(), 1);
-        assert_eq!(chosen[0].0, "morning");
         assert_eq!(chosen[0].1, Uuid::from_u128(1));
     }
 
@@ -392,6 +477,6 @@ mod tests {
             shot_with_status(1, 9, "meeting"),
             shot_with_status(2, 13, "meeting"),
         ];
-        assert!(choose_samples(&shots).is_empty());
+        assert!(choose_samples(&shots, 16).is_empty());
     }
 }

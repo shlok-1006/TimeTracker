@@ -224,3 +224,105 @@ async fn rolls_up_a_month_from_attendance_and_daily_reports() {
         .await
         .ok();
 }
+
+/// The nightly job now writes a report for EVERY day — weekends, holidays and
+/// leave included — so most months carry a dozen rows with `total_analyzed = 0`.
+/// Those must not count as analysed days: each would otherwise contribute a 0.0
+/// to the month's average, and a person who simply took the weekend off would
+/// watch their score fall for it.
+#[tokio::test]
+async fn days_off_carry_a_report_but_are_not_analysed_days() {
+    let Some(pool) = real_pool().await else {
+        eprintln!("DATABASE_URL unset — skipping days-off monthly test");
+        return;
+    };
+
+    let uid = Uuid::new_v4();
+    sqlx::query!(
+        "INSERT INTO users (id, name, email, password_hash, role)
+         VALUES ($1, 'Days Off Test', $2, 'x', 'employee')",
+        uid,
+        format!("daysoff-{uid}@test.local")
+    )
+    .execute(&pool)
+    .await
+    .expect("seed user");
+
+    let month = NaiveDate::from_ymd_opt(2020, 6, 1).unwrap();
+    // Two worked days, then a weekend and a day of leave.
+    for (d, status, secs) in [
+        (1, "present", 28_800),
+        (2, "present", 28_800),
+        (6, "weekend", 0),
+        (8, "leave", 0),
+    ] {
+        sqlx::query!(
+            "INSERT INTO attendance_days (user_id, day, status, worked_seconds, idle_seconds, note)
+             VALUES ($1, $2, $3, $4, 0, '')",
+            uid,
+            NaiveDate::from_ymd_opt(2020, 6, d).unwrap(),
+            status,
+            secs as i32
+        )
+        .execute(&pool)
+        .await
+        .expect("seed attendance");
+    }
+
+    // A report on all four days — the worked ones with real analysis, the days off
+    // with none, exactly as the nightly run now produces them.
+    for (d, analyzed, score) in [(1, 4, 80.0_f64), (2, 4, 60.0), (6, 0, 0.0), (8, 0, 0.0)] {
+        let job = Uuid::new_v4();
+        let day = NaiveDate::from_ymd_opt(2020, 6, d).unwrap();
+        sqlx::query!(
+            "INSERT INTO analysis_jobs (id, user_id, day) VALUES ($1, $2, $3)",
+            job,
+            uid,
+            day
+        )
+        .execute(&pool)
+        .await
+        .expect("seed job");
+        sqlx::query!(
+            "INSERT INTO analysis_reports
+               (user_id, day, job_id, total_analyzed, aligned_count, partially_count,
+                not_aligned_count, inconclusive_count, alignment_score, summary_text, model)
+             VALUES ($1,$2,$3,$4,0,0,0,0,$5,'test','test-model')",
+            uid,
+            day,
+            job,
+            analyzed,
+            score
+        )
+        .execute(&pool)
+        .await
+        .expect("seed report");
+    }
+
+    let report = server::monthly_report_service::build(&pool, uid, month, None)
+        .await
+        .expect("build monthly report");
+
+    assert_eq!(report.days_weekend, 1);
+    assert_eq!(report.days_leave, 1);
+    assert_eq!(
+        report.days_analyzed, 2,
+        "only the two days that actually analysed something"
+    );
+    assert_eq!(report.screenshots_analyzed, 8, "2 days × 4 shots");
+    let avg = report.avg_alignment_score.expect("average present");
+    assert!(
+        (avg - 70.0).abs() < 1e-9,
+        "average must be (80+60)/2 = 70, not (80+60+0+0)/4 = 35 — got {avg}"
+    );
+    assert_eq!(
+        report.days.len(),
+        4,
+        "every day still appears in the series"
+    );
+
+    sqlx::query!("DELETE FROM users WHERE id = $1", uid)
+        .execute(&pool)
+        .await
+        .ok();
+}

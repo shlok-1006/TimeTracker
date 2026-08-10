@@ -108,7 +108,12 @@ pub async fn build(
             _ => {}
         }
         let report = by_day.get(&d.day);
-        if let Some(r) = report {
+        // Only a day that actually analysed something counts as an analysed day.
+        // The nightly job now writes a report for every day including weekends,
+        // holidays and leave; those carry `total_analyzed = 0`, and counting them
+        // would add a 0.0 to the average for every day nobody was expected to
+        // work — turning "took the weekend off" into a fall in the month's score.
+        if let Some(r) = report.filter(|r| r.total_analyzed > 0) {
             out.days_analyzed += 1;
             out.screenshots_analyzed += r.total_analyzed;
             score_sum += r.alignment_score;
@@ -129,11 +134,13 @@ pub async fn build(
     // hasn't run for that day yet). Count it so "days analysed" never under-reports.
     for r in &reports {
         if !attendance_days.iter().any(|d| d.day == r.day) {
-            out.days_analyzed += 1;
-            out.screenshots_analyzed += r.total_analyzed;
-            score_sum += r.alignment_score;
-            if r.alignment_score >= threshold {
-                out.days_above_threshold += 1;
+            if r.total_analyzed > 0 {
+                out.days_analyzed += 1;
+                out.screenshots_analyzed += r.total_analyzed;
+                score_sum += r.alignment_score;
+                if r.alignment_score >= threshold {
+                    out.days_above_threshold += 1;
+                }
             }
             out.days.push(MonthDay {
                 day: r.day,

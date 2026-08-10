@@ -2,12 +2,24 @@
 //! analyzes, and builds reports for the *previous* ORG-LOCAL (IST) day —
 //! `RUN_HOUR_UTC` = 2 is 07:30 IST, safely after the IST day closes.
 //!
-//! Selection (changes: nightly coverage, agreed with HRMS): the union of
-//!   * everyone whose attendance for the day is present/partial — a present
-//!     employee with few/no working screenshots still gets a report
-//!     (`total_analyzed = 0`; the report endpoint returns it, never 404), and
-//!   * everyone with working screenshots — covers weekend workers, whose
-//!     attendance stays `weekend` even when they track time.
+//! Selection: EVERY day gets a report for every employee — Saturdays, Sundays,
+//! holidays and leave days included. A day off is a fact about the day, not a
+//! gap in the record, and HR reading a month should see a complete series rather
+//! than one with holes they have to interpret.
+//!
+//! This deliberately does not consult attendance. It used to, and that had two
+//! faults: attendance for yesterday is written by the rollup at 03:00 UTC, an
+//! hour AFTER this job runs at 02:00, so the rows were not there to read yet;
+//! and selecting on `present`/`partial` excluded exactly the days now wanted.
+//! `attendance_rollup_ids` answers "who could have worked that day" straight
+//! from accounts and intervals, which needs no other job to have run first.
+//!
+//! A day with nothing to analyse costs nothing: the sampler finds no working
+//! screenshots, no vision call is made, and the report is stored with
+//! `total_analyzed = 0`. Downstream, a zero-analysis report is NOT counted as an
+//! analysed day (see `monthly_report_service`), so empty weekends cannot drag a
+//! monthly average down; and the low-score alert already requires scored signal,
+//! so nobody is emailed about a Sunday.
 //!
 //! Idempotent: sampling never resamples a day and `build_report` upserts, so a
 //! repeated run (e.g. after a restart) is safe.
@@ -16,7 +28,7 @@ use chrono::{Duration, TimeZone, Utc};
 
 use crate::analysis_service;
 use crate::db::analysis_reports::{self, AnalysisReport};
-use crate::db::{attendance, screenshots, users};
+use crate::db::{screenshots, users};
 use crate::email_service;
 use crate::org_time;
 use crate::report_service;
@@ -63,23 +75,30 @@ async fn run_once(state: &AppState) {
         return;
     }
     let yesterday = org_time::yesterday();
-    let mut users = match screenshots::working_user_ids_on_day(&state.db, yesterday).await {
+    let (from, to) = org_time::day_bounds_utc(yesterday);
+
+    // Everyone who could have worked that day: every employee account that existed,
+    // plus any HR/PM who actually tracked. Not filtered by attendance status, so
+    // weekends, holidays and leave days produce a report like any other day.
+    let mut users = match users::attendance_rollup_ids(&state.db, from, to).await {
         Ok(u) => u,
         Err(e) => {
             tracing::warn!("nightly analysis: could not list users: {e}");
             return;
         }
     };
-    // Union in attendance-selected users (present/partial with no working shots).
-    match attendance::user_ids_present_on_day(&state.db, yesterday).await {
-        Ok(present) => {
-            for id in present {
+    // Union in anyone with working screenshots. Belt and braces: covers a tracker
+    // whose account rules put them outside the list above, so a person who plainly
+    // worked can never be missed.
+    match screenshots::working_user_ids_on_day(&state.db, yesterday).await {
+        Ok(shooters) => {
+            for id in shooters {
                 if !users.contains(&id) {
                     users.push(id);
                 }
             }
         }
-        Err(e) => tracing::warn!("nightly analysis: attendance selection failed: {e}"),
+        Err(e) => tracing::warn!("nightly analysis: screenshot selection failed: {e}"),
     }
     tracing::info!(day = %yesterday, employees = users.len(), "nightly analysis: starting");
     for user_id in users {

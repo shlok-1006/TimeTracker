@@ -41,6 +41,14 @@ pub struct DirectoryEntry {
     /// Whether an onboarding-form profile exists at all, so the UI can show
     /// "not submitted" rather than an empty tab that looks broken.
     pub has_profile: bool,
+    /// The form response this person's profile was built from, or None if the
+    /// profile predates the watermark (or does not exist).
+    ///
+    /// On the LIST row on purpose: the scheduled sync needs to know, for everyone
+    /// at once, which responses it has already applied. Without it here the sync
+    /// would have to fetch each person's bundle every run just to find out it had
+    /// nothing to do.
+    pub form_response_id: Option<String>,
 }
 
 /// Personal details (tier 2). One per person.
@@ -62,6 +70,12 @@ pub struct EmployeeProfile {
     pub extra: serde_json::Value,
     pub verified_at: Option<DateTime<Utc>>,
     pub verified_by: Option<Uuid>,
+    /// Which onboarding-form response produced this row (see migration 0043).
+    /// The scheduled sync writes it and then uses it to leave the row alone.
+    #[serde(default)]
+    pub form_response_id: Option<String>,
+    #[serde(default)]
+    pub form_submitted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,7 +147,9 @@ pub async fn list_directory(
                        WHERE ut.user_id = u.id),
                       '[]'::json
                   ) AS "teams!: sqlx::types::Json<Vec<TeamRef>>",
-                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!"
+                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!",
+                  (SELECT p.form_response_id FROM employee_profiles p WHERE p.user_id = u.id)
+                      AS "form_response_id?"
            FROM users u
            WHERE ($1::uuid IS NULL
                   OR EXISTS (SELECT 1 FROM user_managers um
@@ -157,6 +173,7 @@ pub async fn list_directory(
             joined_on: r.joined_on,
             teams: r.teams.0,
             has_profile: r.has_profile,
+            form_response_id: r.form_response_id,
         })
         .collect())
 }
@@ -173,7 +190,9 @@ pub async fn get_entry(pool: &PgPool, user_id: Uuid) -> Result<Option<DirectoryE
                        WHERE ut.user_id = u.id),
                       '[]'::json
                   ) AS "teams!: sqlx::types::Json<Vec<TeamRef>>",
-                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!"
+                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!",
+                  (SELECT p.form_response_id FROM employee_profiles p WHERE p.user_id = u.id)
+                      AS "form_response_id?"
            FROM users u WHERE u.id = $1"#,
         user_id
     )
@@ -191,6 +210,7 @@ pub async fn get_entry(pool: &PgPool, user_id: Uuid) -> Result<Option<DirectoryE
         joined_on: r.joined_on,
         teams: r.teams.0,
         has_profile: r.has_profile,
+        form_response_id: r.form_response_id,
     }))
 }
 
@@ -204,7 +224,8 @@ pub async fn get_bundle(pool: &PgPool, user_id: Uuid) -> Result<Option<ProfileBu
     let profile = sqlx::query!(
         r#"SELECT date_of_birth, gender, marital_status, blood_group, personal_email, phone,
                   current_address, permanent_address, emergency_name, emergency_phone,
-                  emergency_relation, extra, verified_at, verified_by
+                  emergency_relation, extra, verified_at, verified_by,
+                  form_response_id, form_submitted_at
            FROM employee_profiles WHERE user_id = $1"#,
         user_id
     )
@@ -225,6 +246,8 @@ pub async fn get_bundle(pool: &PgPool, user_id: Uuid) -> Result<Option<ProfileBu
         extra: r.extra,
         verified_at: r.verified_at,
         verified_by: r.verified_by,
+        form_response_id: r.form_response_id,
+        form_submitted_at: r.form_submitted_at,
     });
 
     let education = sqlx::query!(
@@ -322,8 +345,8 @@ pub async fn upsert_profile(
         r#"INSERT INTO employee_profiles
              (user_id, date_of_birth, gender, marital_status, blood_group, personal_email,
               phone, current_address, permanent_address, emergency_name, emergency_phone,
-              emergency_relation, extra)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+              emergency_relation, extra, form_response_id, form_submitted_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
            ON CONFLICT (user_id) DO UPDATE SET
              date_of_birth = EXCLUDED.date_of_birth,
              gender = EXCLUDED.gender,
@@ -337,6 +360,14 @@ pub async fn upsert_profile(
              emergency_phone = EXCLUDED.emergency_phone,
              emergency_relation = EXCLUDED.emergency_relation,
              extra = EXCLUDED.extra,
+             -- COALESCE, not EXCLUDED: an HR edit comes through this same upsert with
+             -- no response id, and blanking the watermark would make the next
+             -- scheduled sync think the row was never synced and overwrite that edit.
+             -- Keeping the old id is what makes a manual correction stick.
+             form_response_id = COALESCE(EXCLUDED.form_response_id,
+                                         employee_profiles.form_response_id),
+             form_submitted_at = COALESCE(EXCLUDED.form_submitted_at,
+                                          employee_profiles.form_submitted_at),
              updated_at = now()"#,
         user_id,
         p.date_of_birth,
@@ -350,7 +381,9 @@ pub async fn upsert_profile(
         p.emergency_name,
         p.emergency_phone,
         p.emergency_relation,
-        p.extra
+        p.extra,
+        p.form_response_id,
+        p.form_submitted_at
     )
     .execute(pool)
     .await?;

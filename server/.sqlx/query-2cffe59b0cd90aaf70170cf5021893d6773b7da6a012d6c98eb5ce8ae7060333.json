@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.id, u.name, u.email, u.role::text AS \"role!\",\n                  u.employee_code, u.department, u.designation, u.joined_on,\n                  COALESCE(\n                      (SELECT json_agg(json_build_object('team_id', t.id, 'name', t.name)\n                                       ORDER BY t.name)\n                       FROM user_teams ut JOIN teams t ON t.id = ut.team_id\n                       WHERE ut.user_id = u.id),\n                      '[]'::json\n                  ) AS \"teams!: sqlx::types::Json<Vec<TeamRef>>\",\n                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS \"has_profile!\"\n           FROM users u WHERE u.id = $1",
+  "query": "SELECT u.id, u.name, u.email, u.role::text AS \"role!\",\n                  u.employee_code, u.department, u.designation, u.joined_on,\n                  COALESCE(\n                      (SELECT json_agg(json_build_object('team_id', t.id, 'name', t.name)\n                                       ORDER BY t.name)\n                       FROM user_teams ut JOIN teams t ON t.id = ut.team_id\n                       WHERE ut.user_id = u.id),\n                      '[]'::json\n                  ) AS \"teams!: sqlx::types::Json<Vec<TeamRef>>\",\n                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS \"has_profile!\",\n                  (SELECT p.form_response_id FROM employee_profiles p WHERE p.user_id = u.id)\n                      AS \"form_response_id?\"\n           FROM users u WHERE u.id = $1",
   "describe": {
     "columns": [
       {
@@ -52,6 +52,11 @@
         "ordinal": 9,
         "name": "has_profile!",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "form_response_id?",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -69,8 +74,9 @@
       true,
       true,
       null,
+      null,
       null
     ]
   },
-  "hash": "0e4616af4c5f985ca8a1b600fc33462f216a299f07c2a8d617ebe7d78ca0cc4c"
+  "hash": "2cffe59b0cd90aaf70170cf5021893d6773b7da6a012d6c98eb5ce8ae7060333"
 }

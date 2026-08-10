@@ -43,15 +43,25 @@ pub async fn day_activity(
 ) -> Result<DayActivity, AppError> {
     let r = sqlx::query!(
         r#"
+        -- `interval_seconds` (migration 0044) unions the day's intervals instead of
+        -- adding their lengths up, so two devices recording the same minute produce
+        -- one minute. First-in/last-out are edges, not durations, so they are read
+        -- straight from the rows.
+        WITH s AS (
+          SELECT * FROM interval_seconds($1, $2, $3, NULL)
+        ),
+        edges AS (
+          SELECT MIN(GREATEST(start_utc,$2)) FILTER (WHERE kind IN ('active','meeting')) AS first_in,
+                 MAX(LEAST(end_utc,$3))      FILTER (WHERE kind IN ('active','meeting')) AS last_out
+          FROM intervals
+          WHERE user_id = $1 AND end_utc > $2 AND start_utc < $3
+        )
         SELECT
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (LEAST(end_utc,$3) - GREATEST(start_utc,$2))))
-               FILTER (WHERE kind IN ('active','meeting')), 0) AS BIGINT) AS "worked!",
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (LEAST(end_utc,$3) - GREATEST(start_utc,$2))))
-               FILTER (WHERE kind = 'idle'), 0) AS BIGINT) AS "idle!",
-          MIN(GREATEST(start_utc,$2)) FILTER (WHERE kind IN ('active','meeting')) AS first_in,
-          MAX(LEAST(end_utc,$3))      FILTER (WHERE kind IN ('active','meeting')) AS last_out
-        FROM intervals
-        WHERE user_id = $1 AND end_utc > $2 AND start_utc < $3
+          CAST(s.active + s.meeting AS BIGINT) AS "worked!",
+          CAST(s.idle               AS BIGINT) AS "idle!",
+          edges.first_in,
+          edges.last_out
+        FROM s, edges
         "#,
         user_id,
         day_start,

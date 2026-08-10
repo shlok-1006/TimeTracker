@@ -275,18 +275,26 @@ pub async fn status_breakdown(
     manager_id: Option<Uuid>,
 ) -> Result<StatusBreakdown, AppError> {
     let r = sqlx::query!(
-        r#"SELECT
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind IN ('active','meeting')),0) AS BIGINT) AS "total!",
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind='active'),0) AS BIGINT) AS "active!",
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind='idle'),0) AS BIGINT) AS "idle!",
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind='meeting'),0) AS BIGINT) AS "meeting!",
-             CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind='break'),0) AS BIGINT) AS "brk!"
-           FROM intervals i
-           JOIN users u ON u.id = i.user_id
-           WHERE i.team_id = $1
-             AND ($2::uuid IS NULL
-                  OR EXISTS (SELECT 1 FROM user_managers um
-                             WHERE um.user_id = u.id AND um.manager_id = $2))"#,
+        // Per member, then added up: overlap is a per-person problem (one person's two
+        // devices), so unioning across the whole team would wrongly merge two different
+        // people working the same hour.
+        r#"WITH per_member AS (
+             SELECT s.*
+             FROM users u
+             JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = $1
+             CROSS JOIN LATERAL interval_seconds(
+               u.id, '-infinity'::timestamptz, 'infinity'::timestamptz, $1) s
+             WHERE $2::uuid IS NULL
+                OR EXISTS (SELECT 1 FROM user_managers um
+                           WHERE um.user_id = u.id AND um.manager_id = $2)
+           )
+           SELECT
+             CAST(COALESCE(SUM(active + meeting),0) AS BIGINT) AS "total!",
+             CAST(COALESCE(SUM(active),0)  AS BIGINT) AS "active!",
+             CAST(COALESCE(SUM(idle),0)    AS BIGINT) AS "idle!",
+             CAST(COALESCE(SUM(meeting),0) AS BIGINT) AS "meeting!",
+             CAST(COALESCE(SUM(brk),0)     AS BIGINT) AS "brk!"
+           FROM per_member"#,
         team_id,
         manager_id
     )
@@ -310,14 +318,14 @@ pub async fn member_totals(
 ) -> Result<Vec<MemberTotal>, AppError> {
     let rows = sqlx::query!(
         r#"SELECT u.id, u.name, u.email,
-                  CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (i.end_utc-i.start_utc))) FILTER (WHERE i.kind IN ('active','meeting')),0) AS BIGINT) AS "worked!"
+                  CAST(s.active + s.meeting AS BIGINT) AS "worked!"
            FROM users u
            JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = $1
-           LEFT JOIN intervals i ON i.user_id = u.id AND i.team_id = $1
+           CROSS JOIN LATERAL interval_seconds(
+             u.id, '-infinity'::timestamptz, 'infinity'::timestamptz, $1) s
            WHERE $2::uuid IS NULL
               OR EXISTS (SELECT 1 FROM user_managers um
                          WHERE um.user_id = u.id AND um.manager_id = $2)
-           GROUP BY u.id, u.name, u.email
            ORDER BY 4 DESC, u.name"#,
         team_id,
         manager_id

@@ -116,31 +116,46 @@ pub async fn hours_summary(pool: &PgPool, user_id: Uuid) -> Result<HoursSummary,
 
     let r = sqlx::query!(
         r#"
+        -- Each window is unioned, not summed: `interval_seconds` (migration 0044)
+        -- counts a wall-clock second once even when two devices recorded it. Without
+        -- that, a second install signed in as the same person doubles these figures.
+        --
+        -- The windows are now half-open ranges rather than "everything from the
+        -- boundary onward", so a session spanning the 4 AM boundary contributes its
+        -- part to each side instead of landing wholly in the day it began. That makes
+        -- the day and week windows disjoint, which is what lets them be unioned
+        -- independently without one swallowing the other.
         WITH b AS (
           SELECT
             ((date_trunc('day',  (now() AT TIME ZONE $2::text) - interval '4 hours') + interval '4 hours') AT TIME ZONE $2::text) AS day_start,
             ((date_trunc('week', (now() AT TIME ZONE $2::text) - interval '4 hours') + interval '4 hours') AT TIME ZONE $2::text) AS week_start
-        )
+        ),
+        w AS (
+          SELECT day_start, day_start  + interval '1 day'  AS day_end,
+                 week_start, week_start + interval '7 days' AS week_end
+          FROM b
+        ),
+        d AS (SELECT * FROM w, LATERAL interval_seconds($1, w.day_start,  w.day_end,  NULL)),
+        k AS (SELECT * FROM w, LATERAL interval_seconds($1, w.week_start, w.week_end, NULL)),
+        t AS (SELECT * FROM interval_seconds($1, '-infinity'::timestamptz, 'infinity'::timestamptz, NULL))
         SELECT
-          -- Today (active+idle+meeting) + breakdown
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','idle','meeting') AND start_utc >= b.day_start),0) AS BIGINT) AS "today!",
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='active'  AND start_utc >= b.day_start),0) AS BIGINT) AS "today_active!",
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='idle'    AND start_utc >= b.day_start),0) AS BIGINT) AS "today_idle!",
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='meeting' AND start_utc >= b.day_start),0) AS BIGINT) AS "today_meeting!",
-          -- This week (active+idle+meeting) + breakdown
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','idle','meeting') AND start_utc >= b.week_start),0) AS BIGINT) AS "week!",
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='active'  AND start_utc >= b.week_start),0) AS BIGINT) AS "week_active!",
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='idle'    AND start_utc >= b.week_start),0) AS BIGINT) AS "week_idle!",
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind='meeting' AND start_utc >= b.week_start),0) AS BIGINT) AS "week_meeting!",
-          -- All-time worked (reconcile line)
-          CAST(COALESCE(SUM(EXTRACT(EPOCH FROM (end_utc-start_utc))) FILTER (WHERE kind IN ('active','idle','meeting')),0) AS BIGINT) AS "total!"
-        FROM intervals, b WHERE user_id = $1
-        GROUP BY b.day_start, b.week_start
+          CAST(d.active + d.idle + d.meeting AS BIGINT) AS "today!",
+          CAST(d.active  AS BIGINT) AS "today_active!",
+          CAST(d.idle    AS BIGINT) AS "today_idle!",
+          CAST(d.meeting AS BIGINT) AS "today_meeting!",
+          CAST(k.active + k.idle + k.meeting AS BIGINT) AS "week!",
+          CAST(k.active  AS BIGINT) AS "week_active!",
+          CAST(k.idle    AS BIGINT) AS "week_idle!",
+          CAST(k.meeting AS BIGINT) AS "week_meeting!",
+          CAST(t.active + t.idle + t.meeting AS BIGINT) AS "total!"
+        FROM d, k, t
         "#,
         user_id,
         tz
     )
-    .fetch_optional(pool)
+    // Always a row now: the aggregate used to GROUP BY and vanish for a person with
+    // no intervals, whereas `interval_seconds` answers zero.
+    .fetch_one(pool)
     .await?;
 
     // Manual "grace" time granted for the CURRENT business week — added to the
@@ -158,32 +173,19 @@ pub async fn hours_summary(pool: &PgPool, user_id: Uuid) -> Result<HoursSummary,
     .fetch_one(pool)
     .await?;
 
-    // No intervals yet → all zeros (the GROUP BY yields no row) — but grace still applies.
-    Ok(match r {
-        Some(r) => HoursSummary {
-            today_seconds: r.today,
-            today_active_seconds: r.today_active,
-            today_idle_seconds: r.today_idle,
-            today_meeting_seconds: r.today_meeting,
-            week_seconds: r.week + grace,
-            week_active_seconds: r.week_active,
-            week_idle_seconds: r.week_idle,
-            week_meeting_seconds: r.week_meeting,
-            week_grace_seconds: grace,
-            total_seconds: r.total + grace,
-        },
-        None => HoursSummary {
-            today_seconds: 0,
-            today_active_seconds: 0,
-            today_idle_seconds: 0,
-            today_meeting_seconds: 0,
-            week_seconds: grace,
-            week_active_seconds: 0,
-            week_idle_seconds: 0,
-            week_meeting_seconds: 0,
-            week_grace_seconds: grace,
-            total_seconds: grace,
-        },
+    // Someone with no intervals reads as zeros — and grace still applies on top,
+    // which is why it is fetched separately rather than joined into the query above.
+    Ok(HoursSummary {
+        today_seconds: r.today,
+        today_active_seconds: r.today_active,
+        today_idle_seconds: r.today_idle,
+        today_meeting_seconds: r.today_meeting,
+        week_seconds: r.week + grace,
+        week_active_seconds: r.week_active,
+        week_idle_seconds: r.week_idle,
+        week_meeting_seconds: r.week_meeting,
+        week_grace_seconds: grace,
+        total_seconds: r.total + grace,
     })
 }
 

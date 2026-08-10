@@ -63,10 +63,12 @@ pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMem
                     WHEN EXTRACT(EPOCH FROM (now() - p.last_seen_at))::double precision > $2 THEN 'not_logged_in'
                     ELSE p.status::text END AS "status!",
                p.last_seen_at AS "last_seen_at?",
-               CAST(COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (i.end_utc - i.start_utc)))
-                              FROM intervals i
-                              WHERE i.user_id = u.id AND i.kind IN ('active','meeting')
-                                AND i.start_utc >= date_trunc('day', now())), 0) AS BIGINT) AS "today_seconds!"
+               -- Unioned, not summed (migration 0044): two devices signed in as the same person
+               -- each record the same minute, and adding those up put someone's live card at
+               -- nearly double their real day.
+               CAST((SELECT s.active + s.meeting
+                     FROM interval_seconds(u.id, date_trunc('day', now()), 'infinity'::timestamptz, NULL) s)
+                    AS BIGINT) AS "today_seconds!"
         FROM users u
         LEFT JOIN presence p ON p.user_id = u.id
         WHERE ($1::uuid IS NULL OR u.id = $1
@@ -75,6 +77,51 @@ pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMem
         ORDER BY u.name
         "#,
         manager_id,
+        GRACE_SECONDS
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| TeamMember {
+            id: r.id,
+            name: r.name,
+            email: r.email,
+            role: r.role,
+            status: r.status,
+            last_seen_at: r.last_seen_at,
+            today_seconds: r.today_seconds,
+        })
+        .collect())
+}
+
+/// Live status for the members of ONE team — the same rows as [`team`], scoped by
+/// membership rather than by who manages whom.
+///
+/// The HRMS asked for this because the two disagreed: a PM could see a teammate's performance
+/// score (team-scoped on their side) but not whether that person had shown up (manager-scoped on
+/// ours), so the halves of one dashboard described different groups of people.
+///
+/// Membership only, deliberately: `team_pms` says who may ask, `user_teams` says who is listed.
+/// A PM is not staff of their own team unless someone also put them on it.
+pub async fn team_members(pool: &PgPool, team_id: Uuid) -> Result<Vec<TeamMember>, AppError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT u.id, u.name, u.email, u.role::text AS "role!",
+               CASE WHEN p.last_seen_at IS NULL THEN 'not_logged_in'
+                    WHEN EXTRACT(EPOCH FROM (now() - p.last_seen_at))::double precision > $2 THEN 'not_logged_in'
+                    ELSE p.status::text END AS "status!",
+               p.last_seen_at AS "last_seen_at?",
+               CAST((SELECT s.active + s.meeting
+                     FROM interval_seconds(u.id, date_trunc('day', now()), 'infinity'::timestamptz, NULL) s)
+                    AS BIGINT) AS "today_seconds!"
+        FROM users u
+        JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = $1
+        LEFT JOIN presence p ON p.user_id = u.id
+        ORDER BY u.name
+        "#,
+        team_id,
         GRACE_SECONDS
     )
     .fetch_all(pool)

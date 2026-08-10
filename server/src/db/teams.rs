@@ -374,13 +374,13 @@ pub struct TeamDetail {
     pub description: String,
     pub member_count: i64,
     pub members: Vec<TeamMemberRef>,
-    /// The project managers who manage at least one of this team's members.
+    /// The project managers assigned to this team (`team_pms`, migration 0045).
     ///
-    /// DERIVED, not declared. TimeTracker has no team↔PM table: management is a person-to-person
-    /// relation (`user_managers`). So "this team's PMs" is computed as the managers of its
-    /// members, which is the truthful reading of the data we hold. If team-level PM assignment is
-    /// ever wanted as a first-class fact, it needs its own table — this field would then read from
-    /// that instead, without the shape changing.
+    /// This used to be DERIVED — the managers of the team's members — because management was only
+    /// ever a person-to-person relation here. That could not express a PM who manages nobody on
+    /// the team, and let a member with two managers contribute both to a PM set nobody chose.
+    /// It is now declared, and the shape is unchanged: the migration seeds the table with exactly
+    /// what the derivation used to return, so this field reads the same on day one.
     pub pms: Vec<TeamMemberRef>,
     pub created_at: DateTime<Utc>,
 }
@@ -414,13 +414,13 @@ pub async fn list_detailed(
                       '[]'::json
                   ) AS "members!: sqlx::types::Json<Vec<TeamMemberRef>>",
                   COALESCE(
-                      (SELECT json_agg(DISTINCT jsonb_build_object(
+                      (SELECT json_agg(jsonb_build_object(
                                   'user_id', m.id, 'name', m.name,
-                                  'email', m.email, 'employee_code', m.employee_code))
-                       FROM user_teams ut2
-                       JOIN user_managers um2 ON um2.user_id = ut2.user_id
-                       JOIN users m ON m.id = um2.manager_id
-                       WHERE ut2.team_id = t.id)::json,
+                                  'email', m.email, 'employee_code', m.employee_code)
+                              ORDER BY m.name)::json
+                       FROM team_pms tp
+                       JOIN users m ON m.id = tp.pm_user_id
+                       WHERE tp.team_id = t.id),
                       '[]'::json
                   ) AS "pms!: sqlx::types::Json<Vec<TeamMemberRef>>"
            FROM teams t
@@ -445,4 +445,76 @@ pub async fn list_detailed(
             created_at: r.created_at,
         })
         .collect())
+}
+
+// ─────────────────────────── team ↔ PM (migration 0045) ───────────────────────────
+
+/// Is `user_id` a project manager of `team_id`?
+///
+/// THE authorization primitive for every team-scoped read. Deliberately its own function rather
+/// than a clause repeated at each call site: "may this caller ask about this team" is one question
+/// and should have one answer, so a new endpoint cannot accidentally invent a looser version of it.
+pub async fn is_team_pm(pool: &PgPool, team_id: Uuid, user_id: Uuid) -> Result<bool, AppError> {
+    let hit = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT 1 FROM team_pms WHERE team_id = $1 AND pm_user_id = $2)",
+        team_id,
+        user_id
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(hit.unwrap_or(false))
+}
+
+/// The PMs assigned to one team, by name.
+pub async fn pms_of(pool: &PgPool, team_id: Uuid) -> Result<Vec<TeamMemberRef>, AppError> {
+    let rows = sqlx::query!(
+        "SELECT u.id, u.name, u.email, u.employee_code
+         FROM team_pms tp JOIN users u ON u.id = tp.pm_user_id
+         WHERE tp.team_id = $1 ORDER BY u.name",
+        team_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| TeamMemberRef {
+            user_id: r.id,
+            name: r.name,
+            email: r.email,
+            employee_code: r.employee_code,
+        })
+        .collect())
+}
+
+/// Assign a PM to a team. Idempotent, so a retry after a timeout is safe and the
+/// caller needs no bookkeeping of its own.
+pub async fn add_pm(
+    pool: &PgPool,
+    team_id: Uuid,
+    pm_user_id: Uuid,
+    added_by: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query!(
+        "INSERT INTO team_pms (team_id, pm_user_id, added_by) VALUES ($1, $2, $3)
+         ON CONFLICT (team_id, pm_user_id) DO NOTHING",
+        team_id,
+        pm_user_id,
+        added_by
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Unassign a PM. Also idempotent — removing someone who is already not a PM is
+/// the state the caller wanted, not an error.
+pub async fn remove_pm(pool: &PgPool, team_id: Uuid, pm_user_id: Uuid) -> Result<(), AppError> {
+    sqlx::query!(
+        "DELETE FROM team_pms WHERE team_id = $1 AND pm_user_id = $2",
+        team_id,
+        pm_user_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }

@@ -342,6 +342,62 @@ pub async fn report(
         .collect())
 }
 
+/// The same summary as [`report`], for the members of ONE team.
+///
+/// Separate from `report`'s `manager_id` scope rather than another optional parameter, because it
+/// answers a different question: `report` asks "the people this PM manages", this asks "the people
+/// on this team". Those are different sets — that difference is the whole point of the HRMS's ask
+/// — and folding both into one function with two nullable filters would invite a caller to pass
+/// neither and quietly get the company.
+///
+/// Membership only: `team_pms` decides who may CALL this, `user_teams` decides who appears in it.
+/// A team's PMs are not counted as its staff.
+pub async fn report_for_team(
+    pool: &PgPool,
+    from: NaiveDate,
+    to: NaiveDate,
+    team_id: Uuid,
+) -> Result<Vec<UserAttendanceSummary>, AppError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT u.id AS user_id, u.name, u.email,
+          COUNT(ad.*) FILTER (WHERE ad.status = 'present') AS "present!",
+          COUNT(ad.*) FILTER (WHERE ad.status = 'partial') AS "partial!",
+          COUNT(ad.*) FILTER (WHERE ad.status = 'absent')  AS "absent!",
+          COUNT(ad.*) FILTER (WHERE ad.status = 'leave')   AS "leave!",
+          COUNT(ad.*) FILTER (WHERE ad.status = 'holiday') AS "holiday!",
+          COUNT(ad.*) FILTER (WHERE ad.status = 'weekend') AS "weekend!",
+          CAST(COALESCE(SUM(ad.worked_seconds), 0) AS BIGINT) AS "worked!"
+        FROM users u
+        JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = $3
+        LEFT JOIN attendance_days ad
+               ON ad.user_id = u.id AND ad.day >= $1 AND ad.day <= $2
+        GROUP BY u.id, u.name, u.email
+        ORDER BY u.name
+        "#,
+        from,
+        to,
+        team_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| UserAttendanceSummary {
+            user_id: r.user_id,
+            name: r.name,
+            email: r.email,
+            present: r.present,
+            partial: r.partial,
+            absent: r.absent,
+            leave: r.leave,
+            holiday: r.holiday,
+            weekend: r.weekend,
+            worked_seconds: r.worked,
+        })
+        .collect())
+}
+
 /// Users whose attendance for `day` is present or partial — the nightly analyzer's
 /// selection base (changes: nightly coverage). Attendance-based selection means a
 /// present employee with few/no working screenshots still gets a daily report;

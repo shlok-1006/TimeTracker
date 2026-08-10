@@ -12,15 +12,16 @@
 //! All guarded by `RequireHr` and audit-logged.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     routing::{get, post},
     Json, Router,
 };
+use chrono::NaiveDate;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::db::{audit, teams};
+use crate::db::{attendance, audit, presence, teams, users};
 use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireAdmin, RequireHr};
 use crate::role::UserRole;
@@ -33,6 +34,127 @@ fn team_scope(user: &AuthUser) -> Option<Uuid> {
         UserRole::Hr => None,
         _ => Some(user.id),
     }
+}
+
+/// May `user` read this team's data? HR always; a PM only if assigned to it (`team_pms`).
+///
+/// The HRMS proposed we skip this and trust the caller, on the grounds that their proxy already
+/// knows who owns which team. We declined, and this function is why it costs nothing: a PM holds
+/// a real access token and can call this API directly, so a check performed only by one client is
+/// not a check at all. Front-end checks are for UX; this is the one that counts.
+///
+/// 404 rather than 403 for a team out of scope — a distinguishable error would confirm the team
+/// exists, which is a small leak but a free one to avoid.
+async fn authorize_team(state: &AppState, user: &AuthUser, team_id: Uuid) -> Result<(), AppError> {
+    teams::get(&state.db, team_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if matches!(user.role, UserRole::Hr) {
+        return Ok(());
+    }
+    if teams::is_team_pm(&state.db, team_id, user.id).await? {
+        return Ok(());
+    }
+    Err(AppError::NotFound)
+}
+
+#[derive(Deserialize)]
+struct RangeQuery {
+    from: NaiveDate,
+    to: NaiveDate,
+}
+
+/// `GET /admin/teams/:id/attendance?from=&to=` — the attendance summary for a team's MEMBERS.
+///
+/// Same row shape as `/admin/attendance`; the only difference is the employee set. That matters
+/// on the HRMS side, where performance is team-scoped while attendance was manager-scoped, so a
+/// PM could see a teammate's score but not whether they had turned up.
+async fn team_attendance(
+    State(state): State<AppState>,
+    RequireAdmin(user): RequireAdmin,
+    Path(id): Path<Uuid>,
+    Query(q): Query<RangeQuery>,
+) -> Result<Json<Value>, AppError> {
+    authorize_team(&state, &user, id).await?;
+    if q.from > q.to {
+        return Err(AppError::BadRequest("from must be on or before to".into()));
+    }
+    let employees = attendance::report_for_team(&state.db, q.from, q.to, id).await?;
+    Ok(Json(
+        json!({ "from": q.from, "to": q.to, "employees": employees }),
+    ))
+}
+
+/// `GET /admin/teams/:id/live` — live status for a team's members, same rows as `/admin/team`.
+async fn team_live(
+    State(state): State<AppState>,
+    RequireAdmin(user): RequireAdmin,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, AppError> {
+    authorize_team(&state, &user, id).await?;
+    let members = presence::team_members(&state.db, id).await?;
+    let body: Vec<Value> = members
+        .into_iter()
+        .map(|m| {
+            json!({
+                "user": { "id": m.id, "name": m.name, "email": m.email, "role": m.role },
+                "status": m.status,
+                "last_seen_at": m.last_seen_at,
+                "today_seconds": m.today_seconds,
+            })
+        })
+        .collect();
+    Ok(Json(Value::Array(body)))
+}
+
+/// `GET /admin/teams/:id/pms` — who runs this team.
+async fn list_team_pms(
+    State(state): State<AppState>,
+    RequireAdmin(user): RequireAdmin,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, AppError> {
+    authorize_team(&state, &user, id).await?;
+    Ok(Json(json!(teams::pms_of(&state.db, id).await?)))
+}
+
+#[derive(Deserialize)]
+struct PmBody {
+    pm_user_id: Uuid,
+}
+
+/// `POST /admin/teams/:id/pms` — assign a PM. HR only: this grants someone sight of a team.
+async fn add_team_pm(
+    State(state): State<AppState>,
+    RequireHr(actor): RequireHr,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PmBody>,
+) -> Result<Json<Value>, AppError> {
+    teams::get(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let target = users::find_by_id(&state.db, body.pm_user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    // An employee cannot reach /admin/* at all, so a row for one would grant nothing and read as
+    // a broken assignment rather than a refused one. Say so instead of storing it.
+    if matches!(target.role, UserRole::Employee) {
+        return Err(AppError::BadRequest(
+            "that account is an employee — change their role to project_manager first".into(),
+        ));
+    }
+    teams::add_pm(&state.db, id, body.pm_user_id, actor.id).await?;
+    audit::log(&state.db, actor.id, "team.pm.add", "team", Some(id)).await;
+    Ok(Json(json!(teams::pms_of(&state.db, id).await?)))
+}
+
+/// `DELETE /admin/teams/:id/pms/:pm_id` — unassign a PM. HR only, and audited: this REMOVES
+/// someone's sight of a team, which is exactly the kind of change that needs a name against it.
+async fn remove_team_pm(
+    State(state): State<AppState>,
+    RequireHr(actor): RequireHr,
+    Path((id, pm_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Value>, AppError> {
+    teams::remove_pm(&state.db, id, pm_id).await?;
+    audit::log(&state.db, actor.id, "team.pm.remove", "team", Some(id)).await;
+    Ok(Json(json!(teams::pms_of(&state.db, id).await?)))
 }
 
 /// `GET /admin/teams` — teams with member counts. HR sees all teams; a project
@@ -269,6 +391,13 @@ pub fn router() -> Router<AppState> {
         .route("/me/teams/:id/leave", post(leave_team))
         .route("/admin/teams", get(admin_list_teams))
         .route("/admin/teams/:id/summary", get(team_summary))
+        .route("/admin/teams/:id/attendance", get(team_attendance))
+        .route("/admin/teams/:id/live", get(team_live))
+        .route("/admin/teams/:id/pms", get(list_team_pms).post(add_team_pm))
+        .route(
+            "/admin/teams/:id/pms/:pm_id",
+            axum::routing::delete(remove_team_pm),
+        )
         .route("/admin/users/:id/teams", get(user_teams))
         .route("/teams", get(list_teams).post(create_team))
         .route(

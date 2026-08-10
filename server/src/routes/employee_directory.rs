@@ -182,7 +182,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me/directory/profile", get(my_profile))
         .route("/admin/directory", get(directory))
-        .route("/admin/directory/:id", get(user_profile).put(update_profile))
+        .route(
+            "/admin/directory/:id",
+            get(user_profile).put(update_profile),
+        )
         .route("/admin/directory/:id/verify", post(verify_profile))
         .route("/admin/directory/:id/bank", get(bank).put(set_bank))
 }

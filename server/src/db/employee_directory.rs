@@ -41,6 +41,13 @@ pub struct DirectoryEntry {
     /// Whether an onboarding-form profile exists at all, so the UI can show
     /// "not submitted" rather than an empty tab that looks broken.
     pub has_profile: bool,
+    /// `None` for a current employee; the moment they left otherwise (migration 0047).
+    ///
+    /// The roster LIST excludes leavers entirely, so this is always `None` there — the HRMS can
+    /// stop hardcoding a green "active" pill and just trust that a person in the list is current.
+    /// The per-person fetch does NOT exclude them, so this is where an Alumni view reads the real
+    /// status and departure date.
+    pub deactivated_at: Option<DateTime<Utc>>,
 }
 
 /// Personal details (tier 2). One per person.
@@ -133,9 +140,14 @@ pub async fn list_directory(
                        WHERE ut.user_id = u.id),
                       '[]'::json
                   ) AS "teams!: sqlx::types::Json<Vec<TeamRef>>",
-                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!"
+                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!",
+                  u.deactivated_at
            FROM users u
-           WHERE ($1::uuid IS NULL
+           -- The roster is "who is a CURRENT employee", so a leaver drops out here. The HRMS
+           -- People page is built on this, which is what lets a departure vanish from it with no
+           -- flag of its own — one home for "is this person still here", and it is this WHERE.
+           WHERE u.deactivated_at IS NULL
+             AND ($1::uuid IS NULL
                   OR EXISTS (SELECT 1 FROM user_managers um
                              WHERE um.user_id = u.id AND um.manager_id = $1))
            ORDER BY u.name"#,
@@ -157,6 +169,7 @@ pub async fn list_directory(
             joined_on: r.joined_on,
             teams: r.teams.0,
             has_profile: r.has_profile,
+            deactivated_at: r.deactivated_at,
         })
         .collect())
 }
@@ -173,7 +186,11 @@ pub async fn get_entry(pool: &PgPool, user_id: Uuid) -> Result<Option<DirectoryE
                        WHERE ut.user_id = u.id),
                       '[]'::json
                   ) AS "teams!: sqlx::types::Json<Vec<TeamRef>>",
-                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!"
+                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS "has_profile!",
+                  u.deactivated_at
+           -- NO deactivated filter here on purpose: a person fetched by id still returns after
+           -- they leave, so an Alumni view can read their details and `deactivated_at` tells the
+           -- caller they are a former employee. The LIST hides them; the RECORD keeps them.
            FROM users u WHERE u.id = $1"#,
         user_id
     )
@@ -191,6 +208,7 @@ pub async fn get_entry(pool: &PgPool, user_id: Uuid) -> Result<Option<DirectoryE
         joined_on: r.joined_on,
         teams: r.teams.0,
         has_profile: r.has_profile,
+        deactivated_at: r.deactivated_at,
     }))
 }
 

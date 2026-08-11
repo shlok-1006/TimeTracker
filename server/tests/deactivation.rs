@@ -184,3 +184,57 @@ async fn reactivating_continues_the_record_rather_than_restarting_it() {
         .await
         .ok();
 }
+
+#[tokio::test]
+async fn a_leaver_drops_from_the_directory_list_but_the_record_remains() {
+    // The HRMS roster is built on the directory LIST, and an Alumni view reads the per-person
+    // RECORD. So a departure must vanish from the list while still being fetchable by id — the
+    // exact split Tapan's People page and Alumni view depend on.
+    let Some(pool) = real_pool().await else {
+        eprintln!("DATABASE_URL unset — skipping directory-status test");
+        return;
+    };
+    use server::db::employee_directory as dir;
+
+    let (id, _) = seed(&pool).await;
+    let hr = seed_hr(&pool).await;
+
+    // Present in the roster, and no departure stamp, while active.
+    assert!(dir::list_directory(&pool, None)
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.user_id == id));
+    let before = dir::get_entry(&pool, id).await.unwrap().expect("entry");
+    assert!(
+        before.deactivated_at.is_none(),
+        "a current employee has no departure date"
+    );
+
+    users::deactivate(&pool, id, hr).await.expect("deactivate");
+
+    // Gone from the LIST — this is what makes them vanish from the People page automatically.
+    assert!(
+        !dir::list_directory(&pool, None)
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| e.user_id == id),
+        "a leaver must drop out of the roster list"
+    );
+    // Still fetchable by id, now carrying the real status — this is what the Alumni view reads.
+    let after = dir::get_entry(&pool, id)
+        .await
+        .unwrap()
+        .expect("record still returns after leaving");
+    assert!(
+        after.deactivated_at.is_some(),
+        "the per-person record must survive and report WHEN they left, so an Alumni view is possible"
+    );
+
+    sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        .bind(vec![id, hr])
+        .execute(&pool)
+        .await
+        .ok();
+}

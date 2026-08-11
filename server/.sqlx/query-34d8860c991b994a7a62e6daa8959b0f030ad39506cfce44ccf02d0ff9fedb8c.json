@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id, u.name, u.email, u.role::text AS \"role!\",\n                  u.employee_code, u.department, u.designation, u.joined_on,\n                  COALESCE(\n                      (SELECT json_agg(json_build_object('team_id', t.id, 'name', t.name)\n                                       ORDER BY t.name)\n                       FROM user_teams ut JOIN teams t ON t.id = ut.team_id\n                       WHERE ut.user_id = u.id),\n                      '[]'::json\n                  ) AS \"teams!: sqlx::types::Json<Vec<TeamRef>>\",\n                  EXISTS (SELECT 1 FROM employee_profiles p WHERE p.user_id = u.id) AS \"has_profile!\",\n                  u.deactivated_at\n           FROM users u\n           -- The roster is \"who is a CURRENT employee\", so a leaver drops out here. The HRMS\n           -- People page is built on this, which is what lets a departure vanish from it with no\n           -- flag of its own — one home for \"is this person still here\", and it is this WHERE.\n           WHERE u.deactivated_at IS NULL\n             AND ($1::uuid IS NULL\n                  OR EXISTS (SELECT 1 FROM user_managers um\n                             WHERE um.user_id = u.id AND um.manager_id = $1))\n           ORDER BY u.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "role!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "employee_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "department",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "designation",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "joined_on",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 8,
+        "name": "teams!: sqlx::types::Json<Vec<TeamRef>>",
+        "type_info": "Json"
+      },
+      {
+        "ordinal": 9,
+        "name": "has_profile!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "deactivated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "34d8860c991b994a7a62e6daa8959b0f030ad39506cfce44ccf02d0ff9fedb8c"
+}

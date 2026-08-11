@@ -130,7 +130,8 @@ pub async fn send_hours_shortfall_digest(
         week_start,
         week_end
     );
-    let mut body = format!(
+    // ── Plain-text fallback (also what shows in dev log-mode) ──
+    let mut plain = format!(
         "Hi,\n\nThe following {} employee(s) did not complete their expected working hours for \
          the week of {ws} to {we}.\nExpected = 8h x working days (Mon-Fri, excluding holidays \
          and approved leave), so a full week is 40h.\n\n",
@@ -139,20 +140,93 @@ pub async fn send_hours_shortfall_digest(
         we = week_end,
     );
     for r in rows {
-        let name = sanitize_line(&r.name, 200);
-        let email = sanitize_line(&r.email, 320);
-        body.push_str(&format!(
+        plain.push_str(&format!(
             "- {name} ({email}): worked {wk} of {req} over {wd} working day(s) - short {sf}\n",
-            name = name,
-            email = email,
+            name = sanitize_line(&r.name, 200),
+            email = sanitize_line(&r.email, 320),
             wk = fmt_hm(r.worked_seconds),
             req = fmt_hm(r.required_seconds),
             wd = r.working_days,
             sf = fmt_hm(r.shortfall_seconds),
         ));
     }
-    body.push_str("\nPlease follow up with the employees.\n\n(TimeTracker)\n");
-    send_plain(recipients, &subject, &body).await
+    plain.push_str("\nPlease follow up with the employees.\n\n(TimeTracker)\n");
+
+    // ── HTML: a real report table ──
+    // Only the columns we actually hold for this report. A table padded with "Timeout / Manual /
+    // Meeting Mode" columns we do not measure would be a wall of zeros pretending to be data.
+    let mut trows = String::new();
+    for (i, r) in rows.iter().enumerate() {
+        let name = html_escape(&sanitize_line(&r.name, 200));
+        let email = html_escape(&sanitize_line(&r.email, 320));
+        // Percentage of the expected hours actually worked (required > 0 for anyone in a shortfall
+        // list, so no divide-by-zero). Colour-graded so the worst cases read at a glance.
+        let pct = if r.required_seconds > 0 {
+            (r.worked_seconds as f64 / r.required_seconds as f64 * 100.0).round() as i64
+        } else {
+            0
+        };
+        let pct_bg = if pct < 50 {
+            "#FDECEC"
+        } else if pct < 80 {
+            "#FEF6E8"
+        } else {
+            "#E9F8F1"
+        };
+        let pct_fg = if pct < 50 {
+            "#D93A3A"
+        } else if pct < 80 {
+            "#B26A00"
+        } else {
+            "#0C9A6E"
+        };
+        let zebra = if i % 2 == 1 { "#FAFAFD" } else { "#FFFFFF" };
+        trows.push_str(&format!(
+            "<tr style=\"background:{zebra};\">\
+               <td style=\"padding:9px 12px;border-bottom:1px solid #EEE;\">\
+                 <div style=\"font-weight:700;color:#191532;\">{name}</div>\
+                 <div style=\"font-size:11px;color:#8B8DA0;\">{email}</div></td>\
+               <td style=\"padding:9px 12px;border-bottom:1px solid #EEE;text-align:center;color:#54566A;\">{wd}</td>\
+               <td style=\"padding:9px 12px;border-bottom:1px solid #EEE;text-align:right;font-family:Consolas,monospace;color:#54566A;\">{req}</td>\
+               <td style=\"padding:9px 12px;border-bottom:1px solid #EEE;text-align:right;font-family:Consolas,monospace;color:#191532;font-weight:700;\">{wk}</td>\
+               <td style=\"padding:9px 12px;border-bottom:1px solid #EEE;text-align:right;font-family:Consolas,monospace;color:#D93A3A;font-weight:700;\">-{sf}</td>\
+               <td style=\"padding:9px 12px;border-bottom:1px solid #EEE;text-align:center;\">\
+                 <span style=\"display:inline-block;padding:2px 9px;border-radius:999px;background:{pct_bg};color:{pct_fg};font-weight:700;font-size:12px;\">{pct}%</span></td>\
+             </tr>",
+            zebra = zebra, name = name, email = email, wd = r.working_days,
+            req = fmt_hm(r.required_seconds), wk = fmt_hm(r.worked_seconds),
+            sf = fmt_hm(r.shortfall_seconds), pct = pct, pct_bg = pct_bg, pct_fg = pct_fg,
+        ));
+    }
+    let n = rows.len();
+    let html = format!(
+        "<div style=\"font-family:Arial,Helvetica,sans-serif;background:#F4F4F8;padding:24px;\">\
+          <div style=\"max-width:660px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;border:1px solid #EBEBF1;\">\
+            <div style=\"background:linear-gradient(135deg,#6E31DB,#8A47F5);padding:20px 24px;\">\
+              <div style=\"color:#fff;font-size:18px;font-weight:800;\">Weekly hours shortfall</div>\
+              <div style=\"color:#E9DEFB;font-size:13px;margin-top:2px;\">{n} employee(s) below expected hours &middot; {ws} to {we}</div>\
+            </div>\
+            <div style=\"padding:20px 24px;\">\
+              <p style=\"margin:0 0 14px;color:#54566A;font-size:13px;line-height:1.5;\">\
+                Expected = <b>8h &times; working days</b> (Mon&ndash;Fri, excluding holidays and approved leave), so a full week is 40h.</p>\
+              <table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\" style=\"border-collapse:collapse;font-size:13px;\">\
+                <thead><tr style=\"background:#F1EBFF;\">\
+                  <th style=\"padding:9px 12px;text-align:left;color:#6E31DB;font-size:11px;text-transform:uppercase;letter-spacing:.04em;\">Employee</th>\
+                  <th style=\"padding:9px 12px;text-align:center;color:#6E31DB;font-size:11px;text-transform:uppercase;letter-spacing:.04em;\">Days</th>\
+                  <th style=\"padding:9px 12px;text-align:right;color:#6E31DB;font-size:11px;text-transform:uppercase;letter-spacing:.04em;\">Expected</th>\
+                  <th style=\"padding:9px 12px;text-align:right;color:#6E31DB;font-size:11px;text-transform:uppercase;letter-spacing:.04em;\">Worked</th>\
+                  <th style=\"padding:9px 12px;text-align:right;color:#6E31DB;font-size:11px;text-transform:uppercase;letter-spacing:.04em;\">Short by</th>\
+                  <th style=\"padding:9px 12px;text-align:center;color:#6E31DB;font-size:11px;text-transform:uppercase;letter-spacing:.04em;\">of expected</th>\
+                </tr></thead><tbody>{trows}</tbody></table>\
+              <p style=\"margin:16px 0 0;color:#8B8DA0;font-size:12px;\">Please follow up with the employees.</p>\
+            </div>\
+            <div style=\"padding:12px 24px;background:#FAFAFD;border-top:1px solid #F1F1F6;color:#B9BAC7;font-size:11px;\">TimeTracker &middot; automated weekly report</div>\
+          </div>\
+        </div>",
+        n = n, ws = week_start, we = week_end, trows = trows,
+    );
+
+    send_html(recipients, &subject, &html, &plain).await
 }
 
 /// Details for a low daily-score alert to HR.
@@ -317,6 +391,65 @@ pub async fn send_plain(recipients: &[String], subject: &str, body: &str) -> any
     Ok(())
 }
 
+/// Send an HTML message with a plain-text fallback (multipart/alternative), so a client that
+/// cannot render HTML still shows something sensible and a spam filter does not dock it for being
+/// HTML-only. Mirrors `send_plain`'s SMTP setup and its dev log-mode.
+pub async fn send_html(
+    recipients: &[String],
+    subject: &str,
+    html: &str,
+    plain: &str,
+) -> anyhow::Result<()> {
+    let host = std::env::var("SMTP_HOST").unwrap_or_default();
+    if host.is_empty() {
+        tracing::info!(
+            "[email:log-mode] to={:?} | {}\n{}",
+            recipients,
+            subject,
+            plain
+        );
+        return Ok(());
+    }
+    if recipients.is_empty() {
+        return Ok(());
+    }
+
+    let from = std::env::var("SMTP_FROM").unwrap_or_else(|_| "timetracker@localhost".to_string());
+    let port: u16 = std::env::var("SMTP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(587);
+    let user = std::env::var("SMTP_USER").unwrap_or_default();
+    let pass = std::env::var("SMTP_PASS").unwrap_or_default();
+
+    let mut builder = if port == 465 {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&host)?
+    } else {
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host)?
+    }
+    .port(port);
+    if !user.is_empty() {
+        builder = builder.credentials(Credentials::new(user, pass));
+    }
+    let transport = builder.build();
+
+    for to in recipients {
+        let message = Message::builder()
+            .from(from.parse()?)
+            .to(to.parse()?)
+            .subject(subject)
+            // Plain part FIRST: multipart/alternative is "prefer the last part the client can
+            // render", so the HTML must come second to be the one shown.
+            .multipart(
+                MultiPart::alternative()
+                    .singlepart(SinglePart::plain(plain.to_string()))
+                    .singlepart(SinglePart::html(html.to_string())),
+            )?;
+        transport.send(message).await?;
+    }
+    Ok(())
+}
+
 /// Send a plaintext message with one file attached. Falls back to logging when
 /// SMTP isn't configured (dev), mirroring `send_plain`.
 pub async fn send_with_attachment(
@@ -384,4 +517,22 @@ pub async fn send_with_attachment(
 fn fmt_hm(seconds: i64) -> String {
     let s = seconds.max(0);
     format!("{}h {:02}m", s / 3600, (s % 3600) / 60)
+}
+
+/// Escape the five characters that matter in HTML text/attribute context. Names and emails come
+/// from the DB, but a stray `&` or `<` would still corrupt the rendered table, and rendering
+/// unescaped user text in HTML mail is exactly the habit that turns into an injection later.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }

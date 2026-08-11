@@ -7,7 +7,7 @@
 
 use axum::{
     extract::{Path, Query, State},
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
 use chrono::{DateTime, NaiveDate, Utc};
@@ -507,7 +507,16 @@ async fn create_user(
     Ok(Json(json!(user)))
 }
 
-/// `DELETE /admin/users/:id` — delete a user (HR only). Logged to audit_logs.
+/// `DELETE /admin/users/:id` — remove an employee (HR only). Logged to audit_logs.
+///
+/// DEACTIVATES rather than deletes (migration 0047). This used to be a real delete, and every
+/// foreign key cascaded with it: the person's intervals, screenshots, attendance days and reports
+/// went too, so a past month that included them quietly changed shape afterwards. Now they stop
+/// being current — no login, off every roster, no more attendance — and everything they did stays
+/// exactly where it is.
+///
+/// The verb is left as DELETE so existing callers keep working and immediately stop destroying
+/// data; `POST /admin/users/:id/reactivate` is the way back.
 async fn delete_user(
     State(state): State<AppState>,
     RequireHr(hr): RequireHr,
@@ -515,36 +524,49 @@ async fn delete_user(
 ) -> Result<Json<Value>, AppError> {
     if id == hr.id {
         return Err(AppError::BadRequest(
-            "you cannot delete your own account".into(),
+            "you cannot deactivate your own account".into(),
         ));
     }
-    // Capture the identity BEFORE the cascade delete, so the Alumni log retains
-    // the removed employee even though their user row and data are gone.
-    let removed = users::find_by_id(&state.db, id)
+    let target = users::find_by_id(&state.db, id)
         .await?
         .ok_or(AppError::NotFound)?;
     // The whole point of the tier: an admin oversees HR, so HR must not be able to remove that
     // oversight. An admin may still remove another admin — a seat nobody can revoke is worse than
     // one that needs a peer to revoke it.
-    if removed.role == UserRole::Admin && hr.role != UserRole::Admin {
+    if target.role == UserRole::Admin && hr.role != UserRole::Admin {
         return Err(AppError::Forbidden);
     }
-    if !users::delete(&state.db, id).await? {
+    if !users::deactivate(&state.db, id, hr.id).await? {
+        // Already deactivated. The caller asked for a state that already holds, so this is not an
+        // error — and reporting one would make a double-click look like a failure.
+        return Ok(Json(json!({ "deactivated": true, "already": true })));
+    }
+    // Their sessions die with the account; otherwise a signed-in leaver keeps working until their
+    // token happens to expire.
+    refresh_tokens::revoke_all_for_user(&state.db, id)
+        .await
+        .ok();
+    audit::log(&state.db, hr.id, "user.deactivate", "user", Some(id)).await;
+    Ok(Json(json!({ "deactivated": true })))
+}
+
+/// `POST /admin/users/:id/reactivate` — they're back (HR only).
+///
+/// Same id, same history, same teams: the record continues rather than restarting. They will need
+/// a password reset if they no longer have theirs, but nothing about their past is re-created.
+async fn reactivate_user(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, AppError> {
+    if users::find_by_id(&state.db, id).await?.is_none() {
         return Err(AppError::NotFound);
     }
-    alumni::record(
-        &state.db,
-        removed.id,
-        &removed.name,
-        &removed.email,
-        removed.role.as_str(),
-        removed.team_id,
-        removed.created_at,
-        hr.id,
-    )
-    .await?;
-    audit::log(&state.db, hr.id, "user.delete", "user", Some(id)).await;
-    Ok(Json(json!({ "deleted": true })))
+    let changed = users::reactivate(&state.db, id).await?;
+    if changed {
+        audit::log(&state.db, hr.id, "user.reactivate", "user", Some(id)).await;
+    }
+    Ok(Json(json!({ "reactivated": true, "already": !changed })))
 }
 
 #[derive(Deserialize)]
@@ -684,12 +706,23 @@ async fn set_employment_type(
     Ok(Json(json!({ "employment_type": et.as_str() })))
 }
 
-/// `GET /admin/alumni` (HR only) — former employees, most recently removed first.
+/// `GET /admin/alumni` (HR only) — former employees, most recently departed first.
+///
+/// Two populations, deliberately kept apart rather than blended into one list:
+///
+///   * `deactivated` — people whose rows still exist. Their history is intact and they can be
+///     put back with one call, which is what makes this the normal path now.
+///   * `deleted` — the `alumni` table (migration 0025): people hard-deleted under the old
+///     behaviour. Those rows are genuinely gone and cannot be recovered, so offering a
+///     "reactivate" button for them would be a lie.
 async fn list_alumni(
     State(state): State<AppState>,
     RequireHr(_hr): RequireHr,
 ) -> Result<Json<Value>, AppError> {
-    Ok(Json(json!(alumni::list(&state.db).await?)))
+    Ok(Json(json!({
+        "deactivated": users::list_deactivated(&state.db).await?,
+        "deleted": alumni::list(&state.db).await?,
+    })))
 }
 
 pub fn router() -> Router<AppState> {
@@ -698,6 +731,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/alumni", get(list_alumni))
         .route("/admin/users", get(list_users).post(create_user))
         .route("/admin/users/:id", delete(delete_user))
+        .route("/admin/users/:id/reactivate", post(reactivate_user))
         .route(
             "/admin/users/:id/reset-password",
             axum::routing::post(reset_password),

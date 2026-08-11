@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, name, email, role::text AS \"role!\",\n                  employment_type::text AS \"employment_type!\",\n                  manager_id, team_id, created_at\n           FROM users ORDER BY name",
+  "query": "SELECT id, name, email, role::text AS \"role!\",\n                  employment_type::text AS \"employment_type!\",\n                  manager_id, team_id, created_at\n           FROM users WHERE deactivated_at IS NULL ORDER BY name",
   "describe": {
     "columns": [
       {
@@ -58,5 +58,5 @@
       false
     ]
   },
-  "hash": "eea9a0b86c46d79eabab64359fd423eafe9b4f7786c700becb83edf93f436f5f"
+  "hash": "28bfbb596504ae4ca92909ba0eaef74cf40ed484c72a6aa96239a6d23a6207f1"
 }

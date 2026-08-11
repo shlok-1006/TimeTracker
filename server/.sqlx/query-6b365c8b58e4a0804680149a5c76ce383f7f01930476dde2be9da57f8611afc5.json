@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, name, email, password_hash, role::text AS \"role!\",\n               employment_type::text AS \"employment_type!\",\n               manager_id, team_id, created_at, updated_at\n        FROM users\n        WHERE email = $1\n        ",
+  "query": "\n        SELECT id, name, email, password_hash, role::text AS \"role!\",\n               employment_type::text AS \"employment_type!\",\n               manager_id, team_id, created_at, updated_at\n        FROM users\n        -- A deactivated account does not resolve AT ALL, so it cannot sign in and no caller can\n        -- forget to check. Filtering here rather than at the login route means every future\n        -- consumer of \"find the user with this email\" inherits the rule for free.\n        WHERE email = $1 AND deactivated_at IS NULL\n        ",
   "describe": {
     "columns": [
       {
@@ -72,5 +72,5 @@
       false
     ]
   },
-  "hash": "ca567cef3463d70a2ad3023b8d17dc2c3820f6c6a7ed0b3f0707ed463c87cd66"
+  "hash": "6b365c8b58e4a0804680149a5c76ce383f7f01930476dde2be9da57f8611afc5"
 }

@@ -156,7 +156,10 @@ pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, A
                employment_type::text AS "employment_type!",
                manager_id, team_id, created_at, updated_at
         FROM users
-        WHERE email = $1
+        -- A deactivated account does not resolve AT ALL, so it cannot sign in and no caller can
+        -- forget to check. Filtering here rather than at the login route means every future
+        -- consumer of "find the user with this email" inherits the rule for free.
+        WHERE email = $1 AND deactivated_at IS NULL
         "#,
         email
     )
@@ -266,7 +269,7 @@ pub async fn list_all(pool: &PgPool) -> Result<Vec<UserSummary>, AppError> {
         r#"SELECT id, name, email, role::text AS "role!",
                   employment_type::text AS "employment_type!",
                   manager_id, team_id, created_at
-           FROM users ORDER BY name"#
+           FROM users WHERE deactivated_at IS NULL ORDER BY name"#
     )
     .fetch_all(pool)
     .await?;
@@ -289,9 +292,12 @@ pub async fn list_all(pool: &PgPool) -> Result<Vec<UserSummary>, AppError> {
 
 /// IDs of all employees (for batch jobs like the nightly attendance rollup).
 pub async fn employee_ids(pool: &PgPool) -> Result<Vec<Uuid>, AppError> {
-    let rows = sqlx::query!("SELECT id FROM users WHERE role = 'employee'::user_role")
-        .fetch_all(pool)
-        .await?;
+    // Leavers stop accruing 'absent' days the moment they are deactivated.
+    let rows = sqlx::query!(
+        "SELECT id FROM users WHERE role = 'employee'::user_role AND deactivated_at IS NULL"
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows.into_iter().map(|r| r.id).collect())
 }
 
@@ -307,7 +313,7 @@ pub async fn attendance_rollup_ids(
     let rows = sqlx::query!(
         r#"
         SELECT id AS "id!" FROM users
-        WHERE role = 'employee'::user_role AND created_at < $2
+        WHERE role = 'employee'::user_role AND created_at < $2 AND deactivated_at IS NULL
         UNION
         SELECT DISTINCT i.user_id AS "id!" FROM intervals i
         WHERE i.start_utc >= $1 AND i.start_utc < $2
@@ -328,7 +334,9 @@ pub async fn contacts_with_role(
 ) -> Result<Vec<(String, String)>, AppError> {
     let role_str = role.as_str();
     let rows = sqlx::query!(
-        r#"SELECT name, email FROM users WHERE role = $1::text::user_role ORDER BY name"#,
+        r#"SELECT name, email FROM users
+           WHERE role = $1::text::user_role AND deactivated_at IS NULL
+           ORDER BY name"#,
         role_str
     )
     .fetch_all(pool)
@@ -393,11 +401,91 @@ pub async fn create(
 
 /// Delete a user (cascades intervals/presence/screenshots/etc). Returns whether
 /// a row was removed.
+/// HARD delete — the row and everything joined to it.
+///
+/// Kept because a genuine erasure request (a person asking to be forgotten) needs it, but it is
+/// no longer what "remove this employee" does: see [`deactivate`]. Every cascade fires, so their
+/// intervals, screenshots, attendance and reports go with them and any past period that included
+/// them silently changes shape.
 pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
     let res = sqlx::query!("DELETE FROM users WHERE id = $1", id)
         .execute(pool)
         .await?;
     Ok(res.rows_affected() > 0)
+}
+
+/// Remove someone from the company without removing what they did.
+///
+/// They stop resolving for login, drop out of every roster, and stop accruing attendance — while
+/// their intervals, screenshots and past reports stay exactly where they are, so a report covering
+/// a period they worked still adds up.
+///
+/// Idempotent, and it does NOT re-stamp someone already deactivated: `deactivated_at` is when they
+/// left, and a second click should not quietly move that date.
+pub async fn deactivate(pool: &PgPool, id: Uuid, by: Uuid) -> Result<bool, AppError> {
+    let res = sqlx::query!(
+        "UPDATE users SET deactivated_at = now(), deactivated_by = $2, updated_at = now()
+         WHERE id = $1 AND deactivated_at IS NULL",
+        id,
+        by
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// They're back. Clears the timestamp and they are simply current again — same id, same history,
+/// same teams. This is the reason deactivation beats deletion: rehiring is not a re-creation that
+/// starts someone's record over.
+pub async fn reactivate(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
+    let res = sqlx::query!(
+        "UPDATE users SET deactivated_at = NULL, deactivated_by = NULL, updated_at = now()
+         WHERE id = $1 AND deactivated_at IS NOT NULL",
+        id
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// A former employee: still a real user row, just not a current one.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FormerUser {
+    pub user_id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub role: String,
+    pub joined_at: DateTime<Utc>,
+    pub deactivated_at: DateTime<Utc>,
+    pub deactivated_by: Option<Uuid>,
+}
+
+/// Everyone deactivated, most recent departure first — the Alumni list.
+///
+/// Distinct from the `alumni` TABLE, which holds people hard-deleted under the old behaviour and
+/// whose rows are genuinely gone. These can be reactivated; those cannot.
+pub async fn list_deactivated(pool: &PgPool) -> Result<Vec<FormerUser>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT id, name, email, role::text AS "role!", created_at,
+                  deactivated_at AS "deactivated_at!", deactivated_by
+           FROM users
+           WHERE deactivated_at IS NOT NULL
+           ORDER BY deactivated_at DESC"#
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| FormerUser {
+            user_id: r.id,
+            name: r.name,
+            email: r.email,
+            role: r.role,
+            joined_at: r.created_at,
+            deactivated_at: r.deactivated_at,
+            deactivated_by: r.deactivated_by,
+        })
+        .collect())
 }
 
 /// Replace a user's password hash. Returns whether a row was updated.

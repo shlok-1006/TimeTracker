@@ -101,6 +101,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | DSK-04 | **"You haven't started the timer" nudge.** Fires only when signed-in, machine active (not idle), timer stopped. | **5m** (300 s) | `code` | `apps/desktop/src-tauri/src/presence.rs:23` |
 | DSK-05 | **Presence heartbeat interval.** | **45 s** | `code` | `apps/desktop/src-tauri/src/presence.rs:18` |
 | DSK-06 | **Offline / stale presence.** A user shows `not_logged_in` if no heartbeat for this long. | **90 s** | `code` | `server/src/db/presence.rs:12` |
+| DSK-07 | **Launch at login + single instance.** The app auto-starts at system login and runs as a single instance — a second launch (e.g. autostart firing while it's already open) focuses the existing window instead of opening a duplicate. | Autostart on; single-instance | `code` | `apps/desktop/src-tauri/src/lib.rs` |
 
 ---
 
@@ -175,6 +176,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | 2026-07-30 | Shlok | HRS-06 | Meeting mode now captures screenshots (labelled "meeting"), but the AI still never analyses them. Ships in the next desktop release. |
 | 2026-07-30 | Shlok | ATT-07 | Backfill (migration 0039): existing weekend days saved as present/partial are corrected to "weekend" (HR overrides untouched), so the rule applies to past data too. |
 | 2026-08-03 | Shlok | HRS-07 | Weekly shortfall mail consolidated: ONE company-wide digest to HR listing every employee below their required hours, plus one team digest per PM — instead of a separate mail per employee. Threshold unchanged (8h × working days, Mon–Fri, minus holidays/leave). |
+| 2026-08-03 | Shlok | DSK-07 | Single-instance guard added: with launch-at-login on, a second launch no longer opens a duplicate — it focuses the running window. Ships in the next desktop release. |
 
 *(HR: add a row whenever you edit a Value. The agent appends a row for every reconciliation it performs.)*
 

@@ -132,7 +132,23 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Single-instance guard. The app launches at login (autostart, below), so if
+    // a copy is already running when the machine boots — or the user opens it
+    // again — don't start a second one: the new process exits and, instead, the
+    // already-running instance brings its window to the front. Must be registered
+    // FIRST so it intercepts the second launch before any other setup runs.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         // Reminders are raised as a persistent window (see `reminder`), not as
         // OS notifications — those auto-dismiss and cannot report delivery.
         // Launch at system login so tracking resumes when the machine starts.

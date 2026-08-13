@@ -112,7 +112,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | TSK-01 | **Task importance weight** range + default. | **1–10**, default **5** | `code` | `server/migrations/0030_manual_tasks_weight_due_date.sql:4`; `server/src/db/manual_tasks.rs:24` |
 | TSK-02 | **Due date.** Optional calendar day. (Known limitation: cannot be cleared back to open-ended once set.) | Optional | `code` | `server/src/db/manual_tasks.rs:150` |
 | TSK-03 | **Task statuses.** | `open · done` | `code` | `server/src/db/manual_tasks.rs:11` |
-| TSK-04 | **Who can assign.** Tasks are created by HR/PM and assigned to an employee. | HR & PM | `code` | `server/src/db/manual_tasks.rs:60` |
+| TSK-04 | **Who can assign.** HR/PM assign tasks to any employee (PM team-scoped). An employee can also **self-assign** their own tasks and mark them done from the desktop app (`POST /me/tasks`, `PATCH /me/tasks/:id`). | HR, PM, and self | `code` | `server/src/routes/tasks.rs` |
 
 ---
 
@@ -177,6 +177,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | 2026-07-30 | Shlok | ATT-07 | Backfill (migration 0039): existing weekend days saved as present/partial are corrected to "weekend" (HR overrides untouched), so the rule applies to past data too. |
 | 2026-08-03 | Shlok | HRS-07 | Weekly shortfall mail consolidated: ONE company-wide digest to HR listing every employee below their required hours, plus one team digest per PM — instead of a separate mail per employee. Threshold unchanged (8h × working days, Mon–Fri, minus holidays/leave). |
 | 2026-08-03 | Shlok | DSK-07 | Single-instance guard added: with launch-at-login on, a second launch no longer opens a duplicate — it focuses the running window. Ships in the next desktop release. |
+| 2026-08-03 | Shlok | TSK-04 | Employees can now self-assign tasks (and mark them done) from the desktop app, in addition to HR/PM assignment. Server ships on next VM deploy; desktop UI in next release. |
 
 *(HR: add a row whenever you edit a Value. The agent appends a row for every reconciliation it performs.)*
 

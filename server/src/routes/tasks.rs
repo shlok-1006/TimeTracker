@@ -191,9 +191,79 @@ async fn delete_task(
     Ok(Json(json!({ "deleted": true })))
 }
 
+// ---- Employee self-service: assign a task to yourself + mark it done ----
+
+/// `POST /me/tasks` — an employee assigns a task to themselves. Same shape as the
+/// HR/PM assign flow, but the owner and creator are the caller. Fed to the AI
+/// analysis as work context, like an HR-assigned task.
+async fn create_my_task(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<CreateTask>,
+) -> Result<Json<Value>, AppError> {
+    let title = body.title.trim();
+    if title.is_empty() {
+        return Err(AppError::BadRequest("title is required".into()));
+    }
+    validate_weight(body.weight)?;
+    let task = manual_tasks::create(
+        &state.db,
+        user.id,
+        user.id,
+        title,
+        body.description.trim(),
+        body.weight,
+        body.due_date,
+    )
+    .await?;
+    audit::log(
+        &state.db,
+        user.id,
+        "task.create.self",
+        "manual_task",
+        Some(task.id),
+    )
+    .await;
+    Ok(Json(json!(task)))
+}
+
+#[derive(Deserialize)]
+struct MyTaskStatus {
+    status: String,
+}
+
+/// `PATCH /me/tasks/:id` — the employee marks one of their own tasks done/open.
+/// Status only (title/weight/due stay with whoever assigned it); scoped to the
+/// caller's own tasks.
+async fn set_my_task_status(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<MyTaskStatus>,
+) -> Result<Json<Value>, AppError> {
+    let task = manual_tasks::get(&state.db, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if task.user_id != user.id {
+        return Err(AppError::Forbidden);
+    }
+    if !manual_tasks::is_valid_status(&body.status) {
+        return Err(AppError::BadRequest(
+            "status must be 'open' or 'done'".into(),
+        ));
+    }
+    manual_tasks::set_status(&state.db, id, &body.status).await?;
+    audit::log(&state.db, user.id, "task.status.self", "manual_task", Some(id)).await;
+    let updated = manual_tasks::get(&state.db, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(json!(updated)))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/me/tasks", get(my_tasks))
+        .route("/me/tasks", get(my_tasks).post(create_my_task))
+        .route("/me/tasks/:id", axum::routing::patch(set_my_task_status))
         .route("/admin/users/:id/tasks", get(list_tasks).post(create_task))
         .route(
             "/admin/tasks/:id",

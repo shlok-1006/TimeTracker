@@ -67,6 +67,34 @@ pub async fn me_tasks() -> Result<Value, String> {
     http::get_json("/me/tasks").await
 }
 
+/// `POST /me/tasks` — assign a task to yourself (self-service). Weight and
+/// due date are optional; the server defaults an unset weight to 5.
+#[tauri::command]
+pub async fn create_my_task(
+    title: String,
+    description: Option<String>,
+    weight: Option<i64>,
+    due_date: Option<String>,
+) -> Result<Value, String> {
+    let mut body = serde_json::json!({ "title": title });
+    if let Some(d) = description {
+        body["description"] = serde_json::json!(d);
+    }
+    if let Some(w) = weight {
+        body["weight"] = serde_json::json!(w);
+    }
+    if let Some(dd) = due_date {
+        body["due_date"] = serde_json::json!(dd);
+    }
+    http::post_json("/me/tasks", body).await
+}
+
+/// `PATCH /me/tasks/:id` — mark one of your own tasks done or open again.
+#[tauri::command]
+pub async fn set_my_task_status(id: String, status: String) -> Result<Value, String> {
+    http::patch_json(&format!("/me/tasks/{id}"), serde_json::json!({ "status": status })).await
+}
+
 /// `GET /me/attendance?from=&to=` — own derived attendance calendar (Feature 6C).
 #[tauri::command]
 pub async fn me_attendance(from: String, to: String) -> Result<Value, String> {

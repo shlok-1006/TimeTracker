@@ -1,6 +1,7 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoker } from "@/lib/tauri";
 
 type Task = {
@@ -35,18 +36,56 @@ function isOverdue(day: string, status: string): boolean {
   return day < todayStr;
 }
 
-/** HR/PM-assigned tasks shown on the employee dashboard (read-only). These are
- *  analysed by the AI like tickets, but never appear in Linear. */
+/** Tasks the employee is working on: assigned by HR/PM, or self-assigned here.
+ *  These feed the AI analysis as work context (like tickets), never Linear. */
 export function MyTasks() {
+  const qc = useQueryClient();
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [weight, setWeight] = useState(5);
+  const [due, setDue] = useState("");
+
   const tasks = useQuery({
     queryKey: ["me_tasks"],
     queryFn: async () => (await invoker())<Task[]>("me_tasks"),
     refetchInterval: 60_000,
   });
 
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["me_tasks"] });
+
+  const add = useMutation({
+    mutationFn: async () => {
+      const inv = await invoker();
+      return inv("create_my_task", {
+        title: title.trim(),
+        description: description.trim() || null,
+        weight,
+        dueDate: due || null,
+      });
+    },
+    onSuccess: () => {
+      setTitle("");
+      setDescription("");
+      setWeight(5);
+      setDue("");
+      invalidate();
+    },
+  });
+
+  const toggle = useMutation({
+    mutationFn: async (v: { id: string; status: string }) => {
+      const inv = await invoker();
+      return inv("set_my_task_status", { id: v.id, status: v.status });
+    },
+    onSuccess: invalidate,
+  });
+
+  const inputCls =
+    "rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm dark:border-slate-700";
+
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-slate-200 p-6 dark:border-slate-800">
-      <h2 className="font-semibold">Assigned tasks</h2>
+      <h2 className="font-semibold">Your tasks</h2>
 
       {tasks.isLoading && <p className="text-sm text-slate-500">Loading…</p>}
       {tasks.error && (
@@ -56,7 +95,7 @@ export function MyTasks() {
       )}
       {tasks.data && tasks.data.length === 0 && (
         <p className="rounded-md bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-800/40">
-          No tasks assigned to you.
+          No tasks yet — add one below.
         </p>
       )}
 
@@ -70,9 +109,7 @@ export function MyTasks() {
               <p className={`font-medium ${t.status === "done" ? "line-through" : ""}`}>
                 {t.title}
               </p>
-              {t.description && (
-                <p className="text-sm text-slate-500">{t.description}</p>
-              )}
+              {t.description && <p className="text-sm text-slate-500">{t.description}</p>}
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                 <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                   Weight {t.weight}/10
@@ -91,18 +128,79 @@ export function MyTasks() {
                 )}
               </div>
             </div>
-            <span
-              className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                t.status === "done"
-                  ? "bg-green-100 text-green-800"
-                  : "bg-amber-100 text-amber-800"
-              }`}
+            <button
+              type="button"
+              onClick={() =>
+                toggle.mutate({ id: t.id, status: t.status === "done" ? "open" : "done" })
+              }
+              disabled={toggle.isPending}
+              className="shrink-0 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
             >
-              {t.status}
-            </span>
+              {t.status === "done" ? "Reopen" : "Mark done"}
+            </button>
           </li>
         ))}
       </ul>
+
+      {/* Self-assign a task */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (title.trim()) add.mutate();
+        }}
+        className="mt-1 flex flex-col gap-2 rounded-md border border-slate-200 p-3 dark:border-slate-700"
+      >
+        <p className="text-sm font-medium">Add a task for yourself</p>
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="What are you working on?"
+          className={inputCls}
+        />
+        <input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Description (optional)"
+          className={inputCls}
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-xs text-slate-500">
+            Weight{" "}
+            <select
+              value={weight}
+              onChange={(e) => setWeight(Number(e.target.value))}
+              className="rounded-md border border-slate-200 bg-transparent px-2 py-1 text-sm dark:border-slate-700"
+            >
+              {Array.from({ length: 10 }, (_, i) => i + 1).map((w) => (
+                <option key={w} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-slate-500">
+            Due{" "}
+            <input
+              type="date"
+              value={due}
+              onChange={(e) => setDue(e.target.value)}
+              className="rounded-md border border-slate-200 bg-transparent px-2 py-1 text-sm dark:border-slate-700"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={add.isPending || !title.trim()}
+            className="ml-auto rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 dark:bg-white dark:text-slate-900"
+          >
+            {add.isPending ? "Adding…" : "Add task"}
+          </button>
+        </div>
+        {add.error && (
+          <p className="text-sm text-red-600">
+            {add.error instanceof Error ? add.error.message : String(add.error)}
+          </p>
+        )}
+      </form>
     </section>
   );
 }

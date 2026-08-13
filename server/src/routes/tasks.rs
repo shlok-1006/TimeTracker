@@ -42,11 +42,23 @@ fn validate_weight(weight: i32) -> Result<(), AppError> {
     }
 }
 
-/// `GET /me/tasks` — the authenticated employee's own manual tasks.
+/// `GET /me/tasks` — the authenticated employee's own manual tasks. Each task is
+/// flagged `self_created` (created by the employee vs assigned by HR/PM) so the
+/// desktop only offers Delete on the employee's own.
 async fn my_tasks(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, AppError> {
-    Ok(Json(json!(
-        manual_tasks::list_for_user(&state.db, user.id).await?
-    )))
+    let tasks = manual_tasks::list_for_user(&state.db, user.id).await?;
+    let out: Vec<Value> = tasks
+        .into_iter()
+        .map(|t| {
+            let self_created = t.created_by == Some(user.id);
+            let mut v = serde_json::to_value(&t).unwrap_or_else(|_| json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("self_created".to_string(), json!(self_created));
+            }
+            v
+        })
+        .collect();
+    Ok(Json(json!(out)))
 }
 
 #[derive(Deserialize)]
@@ -260,10 +272,32 @@ async fn set_my_task_status(
     Ok(Json(json!(updated)))
 }
 
+/// `DELETE /me/tasks/:id` — remove one of your OWN self-created tasks. A task
+/// HR/PM assigned to you can't be deleted here (only marked done), so an employee
+/// can't hide assigned work.
+async fn delete_my_task(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, AppError> {
+    let task = manual_tasks::get(&state.db, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if task.created_by != Some(user.id) {
+        return Err(AppError::Forbidden);
+    }
+    manual_tasks::delete(&state.db, id).await?;
+    audit::log(&state.db, user.id, "task.delete.self", "manual_task", Some(id)).await;
+    Ok(Json(json!({ "deleted": true })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me/tasks", get(my_tasks).post(create_my_task))
-        .route("/me/tasks/:id", axum::routing::patch(set_my_task_status))
+        .route(
+            "/me/tasks/:id",
+            axum::routing::patch(set_my_task_status).delete(delete_my_task),
+        )
         .route("/admin/users/:id/tasks", get(list_tasks).post(create_task))
         .route(
             "/admin/tasks/:id",

@@ -82,3 +82,7 @@ pub async fn post_json(path: &str, body: Value) -> Result<Value, String> {
 pub async fn patch_json(path: &str, body: Value) -> Result<Value, String> {
     parse_json(authed(reqwest::Method::PATCH, path, Some(body)).await?).await
 }
+
+pub async fn delete_json(path: &str) -> Result<Value, String> {
+    parse_json(authed(reqwest::Method::DELETE, path, None).await?).await
+}

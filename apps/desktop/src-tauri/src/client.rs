@@ -95,6 +95,12 @@ pub async fn set_my_task_status(id: String, status: String) -> Result<Value, Str
     http::patch_json(&format!("/me/tasks/{id}"), serde_json::json!({ "status": status })).await
 }
 
+/// `DELETE /me/tasks/:id` — remove one of your own self-created tasks.
+#[tauri::command]
+pub async fn delete_my_task(id: String) -> Result<Value, String> {
+    http::delete_json(&format!("/me/tasks/{id}")).await
+}
+
 /// `GET /me/attendance?from=&to=` — own derived attendance calendar (Feature 6C).
 #[tauri::command]
 pub async fn me_attendance(from: String, to: String) -> Result<Value, String> {

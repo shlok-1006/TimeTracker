@@ -6,11 +6,12 @@ import { useSession } from "@/lib/session";
 import { useEmployeeSession } from "@/components/use-employee-session";
 import { Controls } from "@/components/controls";
 import { Dashboard } from "@/components/dashboard";
-import { DayReport } from "@/components/day-report";
+// Hidden for now (My Day / Leave / Attendance) — code kept, just not mounted.
+// import { DayReport } from "@/components/day-report";
 import { MyTeams } from "@/components/my-teams";
 import { MyTasks } from "@/components/my-tasks";
-import { MyLeave } from "@/components/my-leave";
-import { MyAttendance } from "@/components/my-attendance";
+// import { MyLeave } from "@/components/my-leave";
+// import { MyAttendance } from "@/components/my-attendance";
 import { Tickets } from "@/components/tickets";
 import { RecordingIndicator } from "@/components/recording-indicator";
 import { UpdateBanner } from "@/components/update-banner";
@@ -25,10 +26,11 @@ const ROLE_LABEL: Record<string, string> = {
 
 const NAV: { key: View; label: string }[] = [
   { key: "dashboard", label: "Dashboard" },
-  { key: "myday", label: "My Day" },
+  // Hidden for now — code kept, just not shown in the nav.
+  // { key: "myday", label: "My Day" },
   { key: "work", label: "Tasks & Tickets" },
-  { key: "leave", label: "Leave" },
-  { key: "attendance", label: "Attendance" },
+  // { key: "leave", label: "Leave" },
+  // { key: "attendance", label: "Attendance" },
 ];
 
 export default function DashboardPage() {
@@ -103,15 +105,16 @@ export default function DashboardPage() {
               <Dashboard userId={session.id} />
             </>
           )}
-          {view === "myday" && <DayReport />}
+          {/* Hidden for now — code kept, just not rendered. */}
+          {/* {view === "myday" && <DayReport />} */}
           {view === "work" && (
             <>
               <MyTasks />
               <Tickets />
             </>
           )}
-          {view === "leave" && <MyLeave />}
-          {view === "attendance" && <MyAttendance />}
+          {/* {view === "leave" && <MyLeave />} */}
+          {/* {view === "attendance" && <MyAttendance />} */}
         </div>
       </main>
     </div>

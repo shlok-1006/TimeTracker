@@ -20,6 +20,9 @@ const KEYRING_SERVICE: &str = if cfg!(debug_assertions) {
 };
 const ACCOUNT_ACCESS: &str = "access_token";
 const ACCOUNT_REFRESH: &str = "refresh_token";
+/// Cached user profile (id/name/email/role) so a session can be restored on
+/// launch even when the server is momentarily unreachable (offline / VPN not up).
+const ACCOUNT_PROFILE: &str = "profile";
 
 /// Default API base URL, resolved at compile time. **Release** builds (the
 /// installers employees run) point at the hosted backend so a fresh install
@@ -78,6 +81,18 @@ fn store_tokens(access: &str, refresh: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Cache the signed-in user's profile so `restore_session` can bring them back
+/// even when `/me` can't be reached at launch. Best-effort.
+fn store_profile(s: &EmployeeSession) {
+    if let Ok(json) = serde_json::to_string(s) {
+        let _ = write(ACCOUNT_PROFILE, &json);
+    }
+}
+
+fn stored_profile() -> Option<EmployeeSession> {
+    serde_json::from_str(&read(ACCOUNT_PROFILE)?).ok()
+}
+
 // ---- Wire types ----
 
 #[derive(Serialize)]
@@ -121,7 +136,7 @@ struct ApiTokenPair {
     refresh_token: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct EmployeeSession {
     pub id: String,
     pub name: String,
@@ -156,12 +171,14 @@ pub async fn login(email: String, password: String) -> Result<EmployeeSession, S
         .map_err(|e| format!("unexpected server response: {e}"))?;
 
     store_tokens(&body.access_token, &body.refresh_token)?;
-    Ok(EmployeeSession {
+    let session = EmployeeSession {
         id: body.user.id,
         name: body.user.name,
         email: body.user.email,
         role: body.user.role,
-    })
+    };
+    store_profile(&session);
+    Ok(session)
 }
 
 /// Change the password (verifying the current one) and log in with the new one.
@@ -205,12 +222,14 @@ pub async fn change_password(
         .map_err(|e| format!("unexpected server response: {e}"))?;
 
     store_tokens(&body.access_token, &body.refresh_token)?;
-    Ok(EmployeeSession {
+    let session = EmployeeSession {
         id: body.user.id,
         name: body.user.name,
         email: body.user.email,
         role: body.user.role,
-    })
+    };
+    store_profile(&session);
+    Ok(session)
 }
 
 /// Rotate the refresh token for a fresh access token. Returns Err if there is
@@ -239,6 +258,7 @@ pub async fn do_refresh() -> Result<(), String> {
             // in again.
             delete(ACCOUNT_ACCESS);
             delete(ACCOUNT_REFRESH);
+            delete(ACCOUNT_PROFILE);
         }
         return Err(format!("refresh rejected ({})", resp.status()));
     }
@@ -246,35 +266,54 @@ pub async fn do_refresh() -> Result<(), String> {
     store_tokens(&pair.access_token, &pair.refresh_token)
 }
 
-/// Restore a session on launch (verifies/refreshes the token via `/me`).
+/// Restore a session on launch. Keeps the user signed in across restarts for as
+/// long as the (long-lived) refresh token survives — the short-lived access token
+/// having expired overnight is fine, `http` refreshes it.
+///
+/// Crucially, a *transient* failure to reach `/me` at launch (offline, VPN not
+/// connected yet, or the auth endpoint briefly rate-limited) must NOT force a
+/// re-login — that was the "log in every morning" bug. We restore from the cached
+/// profile and let the 60s `session_alive` check re-verify once the network is
+/// back. Only a genuine token rejection (which clears the tokens) logs out.
 #[tauri::command]
 pub async fn restore_session() -> Result<Option<EmployeeSession>, String> {
-    if stored_access().is_none() {
+    // The refresh token — not the 5-minute access token — is what determines
+    // whether there is a session to restore.
+    if stored_refresh().is_none() {
         return Ok(None);
     }
     match crate::http::get_json("/me").await {
         Ok(v) => {
-            let id = v
-                .get("id")
-                .and_then(|x| x.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let role = v
-                .get("role")
-                .and_then(|x| x.as_str())
-                .unwrap_or("employee")
-                .to_string();
-            if id.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some(EmployeeSession {
-                id,
+            // Freshen id/role from the server; name/email come from the cached
+            // profile (`/me` doesn't return them). Re-cache for next launch.
+            let mut session = stored_profile().unwrap_or_else(|| EmployeeSession {
+                id: String::new(),
                 name: "Employee".to_string(),
                 email: String::new(),
-                role,
-            }))
+                role: "employee".to_string(),
+            });
+            if let Some(id) = v.get("id").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
+                session.id = id.to_string();
+            }
+            if let Some(role) = v.get("role").and_then(|x| x.as_str()) {
+                session.role = role.to_string();
+            }
+            if session.id.is_empty() {
+                return Ok(None);
+            }
+            store_profile(&session);
+            Ok(Some(session))
         }
-        Err(_) => Ok(None), // token invalid and refresh failed → treat as logged out
+        Err(_) => {
+            // If the refresh token was rejected, `do_refresh` deleted the tokens →
+            // genuinely logged out. Otherwise the failure was transient: stay
+            // signed in from the cached profile.
+            if stored_refresh().is_none() {
+                Ok(None)
+            } else {
+                Ok(stored_profile())
+            }
+        }
     }
 }
 
@@ -323,5 +362,6 @@ pub async fn logout() -> Result<(), String> {
     }
     delete(ACCOUNT_ACCESS);
     delete(ACCOUNT_REFRESH);
+    delete(ACCOUNT_PROFILE);
     Ok(())
 }

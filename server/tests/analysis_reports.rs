@@ -148,7 +148,8 @@ async fn build_report_computes_score_from_results() {
         .expect("job");
 
     // Verdicts: aligned, aligned, partially_aligned, not_aligned, inconclusive
-    // → weighted (1+1+0.5+0)=2.5 over scored=4 → 62.5; inconclusive excluded.
+    // → weighted (1+1+0.75+0)=2.75 over scored=4 → 68.75; inconclusive excluded.
+    // (partial credit is the generous 0.75, favouring the employee.)
     let verdicts = [
         "aligned",
         "aligned",
@@ -185,7 +186,7 @@ async fn build_report_computes_score_from_results() {
     assert_eq!(report.not_aligned_count, 1);
     assert_eq!(report.inconclusive_count, 1);
     assert!(
-        (report.alignment_score - 62.5).abs() < 1e-9,
+        (report.alignment_score - 68.75).abs() < 1e-9,
         "score was {}",
         report.alignment_score
     );

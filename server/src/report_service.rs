@@ -4,10 +4,15 @@
 //! aggregate persisted in `analysis_reports`: verdict counts plus a 0–100
 //! alignment score.
 //!
-//! Scoring weights: `aligned` = 1, `partially_aligned` = 0.5, `not_aligned` = 0.
-//! `inconclusive` verdicts are EXCLUDED from the score (they still count toward
-//! `total_analyzed`). The score is the weighted average of the *scored* verdicts
-//! multiplied by 100.
+//! Scoring weights: `aligned` = 1, `partially_aligned` = `PARTIAL_WEIGHT`,
+//! `not_aligned` = 0. `inconclusive` verdicts are EXCLUDED from the score (they
+//! still count toward `total_analyzed`). The score is the weighted average of the
+//! *scored* verdicts multiplied by 100.
+//!
+//! Partial credit is deliberately generous (0.75, not 0.5): the analyzer emits
+//! `partially_aligned` for genuine work it cannot pin to a specific ticket — a
+//! sub-task, research, or supporting activity — and that is real work, so it
+//! should score close to fully aligned rather than halfway to unproductive.
 
 use chrono::NaiveDate;
 use sqlx::PgPool;
@@ -21,6 +26,11 @@ use crate::summary_generator::{self, SummaryProvider};
 /// Alignment score (0–100) below which HR is alerted about a daily report.
 /// Overridable via `TIMETRACKER_LOW_SCORE_THRESHOLD`.
 pub const DEFAULT_LOW_SCORE_THRESHOLD: f64 = 35.0;
+
+/// Score credit for a `partially_aligned` verdict — genuine work the analyzer
+/// could not tie to a specific ticket (a sub-task or supporting activity).
+/// Set generously in the employee's favour: much closer to aligned than to zero.
+pub const PARTIAL_WEIGHT: f64 = 0.75;
 
 /// The configured low-score alert threshold (0–100), env-overridable.
 pub fn low_score_threshold() -> f64 {
@@ -68,7 +78,7 @@ pub fn aggregate(verdicts: &[String]) -> ReportAggregate {
             }
             "partially_aligned" => {
                 partial += 1;
-                weighted_sum += 0.5;
+                weighted_sum += PARTIAL_WEIGHT;
                 scored += 1.0;
             }
             "not_aligned" => {
@@ -201,9 +211,15 @@ mod tests {
     }
 
     #[test]
-    fn aligned_and_partial_is_75() {
-        // (1 + 0.5) / 2 * 100
-        assert_eq!(score(&["aligned", "partially_aligned"]), 75.0);
+    fn aligned_and_partial_is_875() {
+        // (1 + 0.75) / 2 * 100 — partial credit is the generous 0.75.
+        assert_eq!(score(&["aligned", "partially_aligned"]), 87.5);
+    }
+
+    #[test]
+    fn one_partial_alone_is_the_partial_weight() {
+        // A day of nothing but unattributed-but-genuine work still scores well.
+        assert_eq!(score(&["partially_aligned"]), PARTIAL_WEIGHT * 100.0);
     }
 
     #[test]
@@ -231,7 +247,7 @@ mod tests {
 
     #[test]
     fn full_mix_counts_and_score() {
-        // weighted = 1 + 1 + 0.5 + 0 = 2.5 ; scored = 4 → 62.5
+        // weighted = 1 + 1 + 0.75 + 0 = 2.75 ; scored = 4 → 68.75
         let a = aggregate(&v(&[
             "aligned",
             "aligned",
@@ -244,7 +260,7 @@ mod tests {
         assert_eq!(a.partially_count, 1);
         assert_eq!(a.not_aligned_count, 1);
         assert_eq!(a.inconclusive_count, 1);
-        assert_eq!(a.alignment_score, 62.5);
+        assert_eq!(a.alignment_score, 68.75);
     }
 
     #[test]

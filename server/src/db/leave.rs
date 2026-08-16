@@ -404,6 +404,67 @@ pub async fn balances(pool: &PgPool, user_id: Uuid, year: i32) -> Result<Vec<Bal
         .collect())
 }
 
+/// Total remaining **paid** leave days per user for `year`, in ONE query — the
+/// "leaves left" column of the HR monthly attendance report. Calling
+/// [`balances`] per employee would be N round-trips; this rolls the same
+/// allotted-minus-approved arithmetic up across every user and every paid type.
+///
+/// Scope mirrors [`crate::db::attendance::report`]: `manager_id = Some(pm)`
+/// restricts to that PM's managed users, `None` (HR) is the whole company.
+/// Deactivated users are excluded — they are off the roster (see migration 0047).
+///
+/// Unpaid types (e.g. leave-without-pay, which can carry a huge nominal
+/// allotment) are deliberately left out: "leaves left" means the paid balance an
+/// employee can still draw on. A user with no leave rows returns their full
+/// allotment; a user absent from the map (no paid types at all) is treated as 0
+/// by the caller.
+pub async fn remaining_paid_by_user(
+    pool: &PgPool,
+    year: i32,
+    manager_id: Option<Uuid>,
+) -> Result<std::collections::HashMap<Uuid, f64>, AppError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT u.id AS user_id,
+          COALESCE(SUM(
+            COALESCE(
+                la.allotted_days,
+                CASE
+                    WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)
+                        THEN lt.default_days
+                    WHEN u.employment_type = 'contractor'::employment_type
+                        THEN lt.default_days_contractor
+                    WHEN u.employment_type = 'intern'::employment_type
+                        THEN lt.default_days_intern
+                    ELSE lt.default_days
+                END
+            )
+            - COALESCE((
+                SELECT SUM(lr.days) FROM leave_requests lr
+                WHERE lr.user_id = u.id AND lr.leave_type_id = lt.id
+                  AND lr.status = 'approved'
+                  AND EXTRACT(YEAR FROM lr.start_date)::int = $1
+            ), 0)
+          ), 0) AS "remaining!"
+        FROM users u
+        CROSS JOIN leave_types lt
+        LEFT JOIN leave_allocations la
+               ON la.leave_type_id = lt.id AND la.user_id = u.id AND la.year = $1
+        WHERE lt.paid = TRUE
+          AND u.deactivated_at IS NULL
+          AND ($2::uuid IS NULL
+               OR EXISTS (SELECT 1 FROM user_managers um
+                          WHERE um.user_id = u.id AND um.manager_id = $2))
+        GROUP BY u.id
+        "#,
+        year,
+        manager_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.user_id, r.remaining)).collect())
+}
+
 // ---- Requests ----
 
 #[allow(clippy::too_many_arguments)]

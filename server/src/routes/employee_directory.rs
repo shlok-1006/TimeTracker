@@ -15,20 +15,134 @@
 //! number, and a PM cannot reach it at all — `RequireHr`, not `RequireStaff`.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     routing::{get, post},
     Json, Router,
 };
-use chrono::NaiveDate;
-use serde::Deserialize;
+use chrono::{Datelike, Duration, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::db::employee_directory::CelebrationSource;
 use crate::db::{audit, employee_directory as repo};
 use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireHr, RequireStaff};
 use crate::routes::admin::{authorize_view, team_scope};
 use crate::state::AppState;
+
+/// India is UTC+5:30; the team's "today" for a celebrations reminder is the IST day.
+const IST_OFFSET: Duration = Duration::minutes(330);
+/// Default reminder window (the Claude design's "7-day reminder").
+const DEFAULT_CELEBRATION_DAYS: i64 = 7;
+/// A sane upper bound so `?days=` can't ask us to walk a decade.
+const MAX_CELEBRATION_DAYS: i64 = 62;
+
+/// One upcoming celebration, shaped for the HRMS "Upcoming events" card.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Celebration {
+    /// "birthday" or "anniversary".
+    pub kind: String,
+    pub name: String,
+    /// The upcoming occurrence as `YYYY-MM-DD` (IST calendar).
+    pub date: String,
+    /// Anniversaries only: completed years this occurrence marks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub years: Option<i32>,
+}
+
+/// Birthdays and work anniversaries falling within `[today, today + days]`, matched on
+/// MONTH-DAY so a 1994-07-28 birthday recurs every year. Sorted by date. Pure (takes
+/// `today`) so the window logic is testable without a clock.
+///
+/// The birth YEAR is never emitted — only the upcoming month-day — so the feed can be
+/// company-wide without broadcasting anyone's age. A joining year IS used, but only to
+/// count completed years, and the join date itself (year 0) is not an anniversary.
+fn upcoming_celebrations(
+    sources: &[CelebrationSource],
+    today: NaiveDate,
+    days: i64,
+) -> Vec<Celebration> {
+    let mut out = Vec::new();
+    for i in 0..=days {
+        let Some(d) = today.checked_add_signed(Duration::days(i)) else {
+            break;
+        };
+        let (mm, dd) = (d.month(), d.day());
+        for s in sources {
+            if let Some(dob) = s.date_of_birth {
+                if dob.month() == mm && dob.day() == dd {
+                    out.push(Celebration {
+                        kind: "birthday".into(),
+                        name: s.name.clone(),
+                        date: d.format("%Y-%m-%d").to_string(),
+                        years: None,
+                    });
+                }
+            }
+            if let Some(joined) = s.joined_on {
+                if joined.month() == mm && joined.day() == dd {
+                    let years = d.year() - joined.year();
+                    if years > 0 {
+                        out.push(Celebration {
+                            kind: "anniversary".into(),
+                            name: s.name.clone(),
+                            date: d.format("%Y-%m-%d").to_string(),
+                            years: Some(years),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+#[derive(Deserialize)]
+struct CelebrationQuery {
+    days: Option<i64>,
+}
+
+fn clamp_days(days: Option<i64>) -> i64 {
+    days.unwrap_or(DEFAULT_CELEBRATION_DAYS)
+        .clamp(0, MAX_CELEBRATION_DAYS)
+}
+
+/// `GET /me/celebrations?days=7` — the same upcoming birthdays and work anniversaries, for
+/// EVERY authenticated user (employees included), so the celebrations card can live on their
+/// dashboard too. Company-wide on purpose: celebrations are a shared, social feature, and the
+/// response carries only names and the month-day of the occurrence — never a birth year, never
+/// any other personal field — so it exposes nothing the org roster wouldn't.
+async fn my_celebrations(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(q): Query<CelebrationQuery>,
+) -> Result<Json<Value>, AppError> {
+    let days = clamp_days(q.days);
+    let today = (Utc::now() + IST_OFFSET).date_naive();
+    let sources = repo::celebration_sources(&state.db, None).await?;
+    let events = upcoming_celebrations(&sources, today, days);
+    Ok(Json(
+        json!({ "days": days, "from": today, "celebrations": events }),
+    ))
+}
+
+/// `GET /admin/directory/celebrations?days=7` — upcoming birthdays and work anniversaries
+/// from the onboarding form's dates, for the celebrations card. HR sees everyone; a PM sees
+/// only the people they manage. `days` defaults to 7 and is clamped to a sane range.
+async fn celebrations(
+    State(state): State<AppState>,
+    RequireStaff(user): RequireStaff,
+    Query(q): Query<CelebrationQuery>,
+) -> Result<Json<Value>, AppError> {
+    let days = clamp_days(q.days);
+    let today = (Utc::now() + IST_OFFSET).date_naive();
+    let sources = repo::celebration_sources(&state.db, team_scope(&user)).await?;
+    let events = upcoming_celebrations(&sources, today, days);
+    Ok(Json(
+        json!({ "days": days, "from": today, "celebrations": events }),
+    ))
+}
 
 /// `GET /me/directory/profile` — the caller's own record. Employees have no
 /// other way to see what the onboarding form recorded about them.
@@ -178,10 +292,97 @@ async fn set_bank(
     Ok(Json(json!({ "ok": true })))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    fn src(name: &str, dob: Option<NaiveDate>, joined: Option<NaiveDate>) -> CelebrationSource {
+        CelebrationSource {
+            name: name.into(),
+            date_of_birth: dob,
+            joined_on: joined,
+        }
+    }
+
+    #[test]
+    fn a_birthday_inside_the_window_shows_with_this_years_date_and_no_year() {
+        let today = ymd(2026, 7, 25);
+        let people = [src("Asha", Some(ymd(1994, 7, 28)), None)];
+        let got = upcoming_celebrations(&people, today, 7);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].kind, "birthday");
+        assert_eq!(got[0].date, "2026-07-28", "recurs on this year's month-day");
+        assert!(got[0].years.is_none(), "a birthday must not leak the birth year");
+    }
+
+    #[test]
+    fn an_anniversary_reports_completed_years() {
+        let today = ymd(2026, 8, 14);
+        let people = [src("Ben", None, Some(ymd(2022, 8, 16)))];
+        let got = upcoming_celebrations(&people, today, 7);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].kind, "anniversary");
+        assert_eq!(got[0].date, "2026-08-16");
+        assert_eq!(got[0].years, Some(4));
+    }
+
+    #[test]
+    fn the_joining_day_itself_is_not_an_anniversary() {
+        // Someone who joins today has completed zero years — no celebration.
+        let today = ymd(2026, 8, 16);
+        let people = [src("Newbie", None, Some(ymd(2026, 8, 16)))];
+        assert!(upcoming_celebrations(&people, today, 7).is_empty());
+    }
+
+    #[test]
+    fn dates_outside_the_window_are_excluded_and_today_is_included() {
+        let today = ymd(2026, 7, 25);
+        let people = [
+            src("EdgeIn", Some(ymd(1990, 8, 1)), None),  // +7 days, inside
+            src("EdgeOut", Some(ymd(1990, 8, 2)), None), // +8 days, outside a 7-day window
+            src("Today", Some(ymd(1990, 7, 25)), None),  // day 0, inside
+        ];
+        let got = upcoming_celebrations(&people, today, 7);
+        let names: Vec<&str> = got.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"EdgeIn"));
+        assert!(names.contains(&"Today"));
+        assert!(!names.contains(&"EdgeOut"), "the 8th day is past a 7-day reminder");
+    }
+
+    #[test]
+    fn the_window_wraps_across_a_year_boundary() {
+        // Late December looking forward into January must still match.
+        let today = ymd(2026, 12, 30);
+        let people = [src("NewYear", Some(ymd(1988, 1, 2)), Some(ymd(2020, 1, 2)))];
+        let got = upcoming_celebrations(&people, today, 7);
+        assert_eq!(got.len(), 2, "both a birthday and an anniversary on 2 Jan");
+        assert!(got.iter().all(|c| c.date == "2027-01-02"), "dated in the next year");
+    }
+
+    #[test]
+    fn results_are_sorted_by_date() {
+        let today = ymd(2026, 7, 25);
+        let people = [
+            src("Later", Some(ymd(1990, 7, 30)), None),
+            src("Sooner", Some(ymd(1990, 7, 26)), None),
+        ];
+        let got = upcoming_celebrations(&people, today, 7);
+        assert_eq!(got[0].name, "Sooner");
+        assert_eq!(got[1].name, "Later");
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me/directory/profile", get(my_profile))
+        .route("/me/celebrations", get(my_celebrations))
         .route("/admin/directory", get(directory))
+        // Static segment registered before `/:id` so "celebrations" is never parsed as a UUID.
+        .route("/admin/directory/celebrations", get(celebrations))
         .route(
             "/admin/directory/:id",
             get(user_profile).put(update_profile),

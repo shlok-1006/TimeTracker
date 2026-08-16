@@ -174,6 +174,48 @@ pub async fn list_directory(
         .collect())
 }
 
+/// Just the two dates the celebrations feed needs — birthday and joining date —
+/// for every active in-scope person who has filled at least one of them on the
+/// onboarding form. `date_of_birth` lives in the tier-2 profile and `joined_on`
+/// on the core row; this is the one place they are read together, and it returns
+/// nothing else, so a company-wide birthday feed never carries the rest of the
+/// personal record. Scope mirrors [`list_directory`].
+#[derive(Debug, Clone)]
+pub struct CelebrationSource {
+    pub name: String,
+    pub date_of_birth: Option<NaiveDate>,
+    pub joined_on: Option<NaiveDate>,
+}
+
+pub async fn celebration_sources(
+    pool: &PgPool,
+    manager_id: Option<Uuid>,
+) -> Result<Vec<CelebrationSource>, AppError> {
+    let rows = sqlx::query!(
+        // `name!` asserts non-null (users.name is NOT NULL per migration 0001); the LEFT JOIN would
+        // otherwise let some dev databases infer it nullable.
+        r#"SELECT u.name AS "name!", p.date_of_birth, u.joined_on
+           FROM users u
+           LEFT JOIN employee_profiles p ON p.user_id = u.id
+           WHERE u.deactivated_at IS NULL
+             AND (p.date_of_birth IS NOT NULL OR u.joined_on IS NOT NULL)
+             AND ($1::uuid IS NULL
+                  OR EXISTS (SELECT 1 FROM user_managers um
+                             WHERE um.user_id = u.id AND um.manager_id = $1))"#,
+        manager_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| CelebrationSource {
+            name: r.name,
+            date_of_birth: r.date_of_birth,
+            joined_on: r.joined_on,
+        })
+        .collect())
+}
+
 /// One person's directory row, or None if there is no such user.
 pub async fn get_entry(pool: &PgPool, user_id: Uuid) -> Result<Option<DirectoryEntry>, AppError> {
     let row = sqlx::query!(

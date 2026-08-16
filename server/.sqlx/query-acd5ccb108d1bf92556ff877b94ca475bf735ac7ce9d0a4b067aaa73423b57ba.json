@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.name AS \"name!\", p.date_of_birth, u.joined_on\n           FROM users u\n           LEFT JOIN employee_profiles p ON p.user_id = u.id\n           WHERE u.deactivated_at IS NULL\n             AND (p.date_of_birth IS NOT NULL OR u.joined_on IS NOT NULL)\n             AND ($1::uuid IS NULL\n                  OR EXISTS (SELECT 1 FROM user_managers um\n                             WHERE um.user_id = u.id AND um.manager_id = $1))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "date_of_birth",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 2,
+        "name": "joined_on",
+        "type_info": "Date"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "acd5ccb108d1bf92556ff877b94ca475bf735ac7ce9d0a4b067aaa73423b57ba"
+}

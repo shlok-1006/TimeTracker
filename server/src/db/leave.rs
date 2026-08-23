@@ -566,6 +566,70 @@ pub async fn list_pending(
         .collect())
 }
 
+/// One leave for the month-register grid: who, which type, the span, how many days, its status,
+/// and the reason. Deliberately leaner than [`PendingRequest`] (no email/created_at) — the grid
+/// only needs to draw a block and open a detail popover.
+#[derive(Debug, Clone, Serialize)]
+pub struct CalendarLeave {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub employee_name: String,
+    pub leave_type_name: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub days: f64,
+    pub status: String,
+    pub reason: String,
+}
+
+/// Every leave that OVERLAPS `[from, to]` and is `approved` or `pending` — the leave register.
+/// Rejected/cancelled requests are excluded (nobody is on leave for those). A leave overlaps the
+/// window when it starts on or before `to` and ends on or after `from`, so a multi-day leave that
+/// straddles either edge is still returned in full (the UI clips it to the visible days).
+///
+/// Same scope as [`list_pending`]: `manager_id = None` (HR) is everyone; `Some(pm)` is that PM's
+/// team only.
+pub async fn list_in_range(
+    pool: &PgPool,
+    from: NaiveDate,
+    to: NaiveDate,
+    manager_id: Option<Uuid>,
+) -> Result<Vec<CalendarLeave>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT lr.id, lr.user_id, u.name AS employee_name,
+                  lt.name AS leave_type_name, lr.start_date, lr.end_date, lr.days,
+                  lr.status, lr.reason
+           FROM leave_requests lr
+           JOIN users u        ON u.id = lr.user_id
+           JOIN leave_types lt ON lt.id = lr.leave_type_id
+           WHERE lr.status IN ('approved', 'pending')
+             AND lr.start_date <= $2 AND lr.end_date >= $1
+             AND ($3::uuid IS NULL
+                  OR EXISTS (SELECT 1 FROM user_managers um
+                             WHERE um.user_id = u.id AND um.manager_id = $3))
+           ORDER BY lr.start_date, u.name"#,
+        from,
+        to,
+        manager_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| CalendarLeave {
+            id: r.id,
+            user_id: r.user_id,
+            employee_name: r.employee_name,
+            leave_type_name: r.leave_type_name,
+            start_date: r.start_date,
+            end_date: r.end_date,
+            days: r.days,
+            status: r.status,
+            reason: r.reason,
+        })
+        .collect())
+}
+
 /// (user_id, status) of a request, for authorization + workflow checks.
 pub async fn owner_and_status(pool: &PgPool, id: Uuid) -> Result<Option<(Uuid, String)>, AppError> {
     let row = sqlx::query!(

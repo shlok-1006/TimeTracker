@@ -131,6 +131,33 @@ async fn pending_requests(
     Ok(Json(json!(leave::list_pending(&state.db, scope).await?)))
 }
 
+#[derive(Deserialize)]
+struct CalendarQuery {
+    from: NaiveDate,
+    to: NaiveDate,
+}
+
+/// `GET /admin/leave/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD` — every approved/pending leave that
+/// overlaps the window, for the month-register grid. HR sees everyone; a PM sees only their team
+/// (same scope as the pending queue).
+async fn leave_calendar(
+    State(state): State<AppState>,
+    RequireStaff(user): RequireStaff,
+    Query(q): Query<CalendarQuery>,
+) -> Result<Json<Value>, AppError> {
+    if q.to < q.from {
+        return Err(AppError::BadRequest("`to` is before `from`".into()));
+    }
+    let scope = if user.role.at_least(UserRole::Hr) {
+        None
+    } else {
+        Some(user.id)
+    };
+    Ok(Json(json!(
+        leave::list_in_range(&state.db, q.from, q.to, scope).await?
+    )))
+}
+
 async fn decide_request(
     state: &AppState,
     approver: &AuthUser,
@@ -436,6 +463,7 @@ pub fn router() -> Router<AppState> {
         .route("/me/leave/requests/:id/cancel", post(cancel_leave))
         // Approver
         .route("/admin/leave/requests", get(pending_requests))
+        .route("/admin/leave/calendar", get(leave_calendar))
         .route("/admin/leave/requests/:id/approve", post(approve_request))
         .route("/admin/leave/requests/:id/reject", post(reject_request))
         // HR configuration

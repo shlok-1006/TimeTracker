@@ -71,7 +71,10 @@ pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMem
                     AS BIGINT) AS "today_seconds!"
         FROM users u
         LEFT JOIN presence p ON p.user_id = u.id
-        WHERE ($1::uuid IS NULL OR u.id = $1
+        -- A deactivated account is off the roster everywhere else (directory, Manage users,
+        -- attendance); the live board must drop them too, or a leaver lingers here forever.
+        WHERE u.deactivated_at IS NULL
+          AND ($1::uuid IS NULL OR u.id = $1
                OR EXISTS (SELECT 1 FROM user_managers um
                           WHERE um.user_id = u.id AND um.manager_id = $1))
         ORDER BY u.name
@@ -119,6 +122,7 @@ pub async fn team_members(pool: &PgPool, team_id: Uuid) -> Result<Vec<TeamMember
         FROM users u
         JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = $1
         LEFT JOIN presence p ON p.user_id = u.id
+        WHERE u.deactivated_at IS NULL
         ORDER BY u.name
         "#,
         team_id,

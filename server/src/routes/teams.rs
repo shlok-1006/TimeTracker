@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::db::{attendance, audit, presence, teams, users};
+use crate::db::{attendance, audit, manual_tasks, presence, teams, users};
 use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireHr, RequireStaff};
 use crate::role::UserRole;
@@ -106,6 +106,31 @@ async fn team_live(
         })
         .collect();
     Ok(Json(Value::Array(body)))
+}
+
+#[derive(Deserialize)]
+struct TeamTasksQuery {
+    /// `1`/`true` → only tasks that carry a PR (the engine's default). Absent → all team tasks.
+    #[serde(default)]
+    has_pr: Option<String>,
+}
+
+/// `GET /admin/teams/:id/tasks?has_pr=1` — the team's manual tasks for the HRMS performance engine.
+///
+/// Returns `{ task_id, user_id, user_email, title, weight, due_date, status, pr_links[], updated_at }`
+/// per task. With `has_pr=1` only PR-bearing tasks are returned — the set the engine scores. Same
+/// team scope as the other `/admin/teams/:id/*` reads (HR any team; a PM only their own), so the
+/// engine authenticates with an HR/service account token exactly like the directory-sync.
+async fn team_tasks(
+    State(state): State<AppState>,
+    RequireStaff(user): RequireStaff,
+    Path(id): Path<Uuid>,
+    Query(q): Query<TeamTasksQuery>,
+) -> Result<Json<Value>, AppError> {
+    authorize_team(&state, &user, id).await?;
+    let only_with_pr = matches!(q.has_pr.as_deref(), Some("1") | Some("true"));
+    let tasks = manual_tasks::list_for_team(&state.db, id, only_with_pr).await?;
+    Ok(Json(json!({ "team_id": id, "has_pr": only_with_pr, "tasks": tasks })))
 }
 
 /// `GET /admin/teams/:id/pms` — who runs this team.
@@ -394,6 +419,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/teams/:id/summary", get(team_summary))
         .route("/admin/teams/:id/attendance", get(team_attendance))
         .route("/admin/teams/:id/live", get(team_live))
+        .route("/admin/teams/:id/tasks", get(team_tasks))
         .route("/admin/teams/:id/pms", get(list_team_pms).post(add_team_pm))
         .route(
             "/admin/teams/:id/pms/:pm_id",

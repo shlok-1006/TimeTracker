@@ -1,10 +1,19 @@
 //! Manual-task management (Feature 5 Phase 2). HR or project manager; every
 //! action is audited.
 //!
-//!   POST   /admin/users/:id/tasks   assign a task  { title, description, weight, due_date }
+//!   POST   /admin/users/:id/tasks   assign a task  { title, description, weight, due_date, pr_links }
 //!   GET    /admin/users/:id/tasks   list an employee's tasks
-//!   PATCH  /admin/tasks/:id          update title / description / weight / due_date / status
+//!   PATCH  /admin/tasks/:id          update title / description / weight / due_date / status / pr_links
 //!   DELETE /admin/tasks/:id          delete a task
+//!
+//! Self-serve (the employee's own AddTask board):
+//!   GET    /me/tasks                 own tasks
+//!   POST   /me/tasks                 add a task to yourself  { title, ..., pr_links }
+//!   PATCH  /me/tasks/:id             edit your own task (full on self-created; status+pr on assigned)
+//!   DELETE /me/tasks/:id             remove a self-created task
+//!
+//! `pr_links` are full GitHub PR URLs (multi-value) the HRMS performance engine reviews to score
+//! the person; the engine reads them per team via GET /admin/teams/:id/tasks?has_pr=1.
 //!
 //! Scope (CLAUDE.md Rule 11): HR may assign to anyone; a project manager only to
 //! employees they manage (enforced via `authorize_view`). These tasks are
@@ -42,6 +51,30 @@ fn validate_weight(weight: i32) -> Result<(), AppError> {
     }
 }
 
+/// PR links are full GitHub PR URLs (the URL carries the repo, so nothing needs a naming
+/// convention). Trim, drop blanks, and require each to look like an http(s) URL so the engine
+/// never receives junk. Caps the count so one task can't carry an unbounded list.
+fn clean_pr_links(links: &[String]) -> Result<Vec<String>, AppError> {
+    let mut out = Vec::new();
+    for raw in links {
+        let s = raw.trim();
+        if s.is_empty() {
+            continue;
+        }
+        if !(s.starts_with("https://") || s.starts_with("http://")) {
+            return Err(AppError::BadRequest(format!(
+                "pr_links must be full URLs (got {s:?})"
+            )));
+        }
+        out.push(s.to_string());
+    }
+    if out.len() > 50 {
+        return Err(AppError::BadRequest("too many pr_links (max 50)".into()));
+    }
+    out.dedup();
+    Ok(out)
+}
+
 /// `GET /me/tasks` — the authenticated employee's own manual tasks. Each task is
 /// flagged `self_created` (created by the employee vs assigned by HR/PM) so the
 /// desktop only offers Delete on the employee's own.
@@ -71,6 +104,9 @@ struct CreateTask {
     /// Optional expected due date ("YYYY-MM-DD"); `None` = open-ended.
     #[serde(default)]
     due_date: Option<NaiveDate>,
+    /// Full GitHub PR URLs linked to the task (multi-value). Optional.
+    #[serde(default)]
+    pr_links: Vec<String>,
 }
 
 async fn create_task(
@@ -87,6 +123,7 @@ async fn create_task(
         return Err(AppError::BadRequest("title is required".into()));
     }
     validate_weight(body.weight)?;
+    let pr_links = clean_pr_links(&body.pr_links)?;
     // Assignee must exist (gives a clean 404 instead of an FK error).
     if users::find_by_id(&state.db, target).await?.is_none() {
         return Err(AppError::NotFound);
@@ -99,6 +136,7 @@ async fn create_task(
         body.description.trim(),
         body.weight,
         body.due_date,
+        &pr_links,
     )
     .await?;
     audit::log(
@@ -135,6 +173,9 @@ struct UpdateTask {
     weight: Option<i32>,
     #[serde(default)]
     due_date: Option<NaiveDate>,
+    /// Replace the PR link set (send the full list). Omit to leave it unchanged.
+    #[serde(default)]
+    pr_links: Option<Vec<String>>,
 }
 
 async fn update_task(
@@ -164,8 +205,13 @@ async fn update_task(
         return Err(AppError::BadRequest("title cannot be empty".into()));
     }
     let description = body.description.as_deref().map(str::trim);
+    let pr_links = body.pr_links.as_deref().map(clean_pr_links).transpose()?;
 
-    if title.is_some() || description.is_some() || body.weight.is_some() || body.due_date.is_some()
+    if title.is_some()
+        || description.is_some()
+        || body.weight.is_some()
+        || body.due_date.is_some()
+        || pr_links.is_some()
     {
         manual_tasks::update(
             &state.db,
@@ -174,6 +220,7 @@ async fn update_task(
             description,
             body.weight,
             body.due_date,
+            pr_links.as_deref(),
         )
         .await?;
     }
@@ -218,6 +265,7 @@ async fn create_my_task(
         return Err(AppError::BadRequest("title is required".into()));
     }
     validate_weight(body.weight)?;
+    let pr_links = clean_pr_links(&body.pr_links)?;
     let task = manual_tasks::create(
         &state.db,
         user.id,
@@ -226,6 +274,7 @@ async fn create_my_task(
         body.description.trim(),
         body.weight,
         body.due_date,
+        &pr_links,
     )
     .await?;
     audit::log(
@@ -240,18 +289,33 @@ async fn create_my_task(
 }
 
 #[derive(Deserialize)]
-struct MyTaskStatus {
-    status: String,
+struct MyTaskUpdate {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    weight: Option<i32>,
+    #[serde(default)]
+    due_date: Option<NaiveDate>,
+    /// Replace the PR link set (send the full list). Omit to leave unchanged.
+    #[serde(default)]
+    pr_links: Option<Vec<String>>,
 }
 
-/// `PATCH /me/tasks/:id` — the employee marks one of their own tasks done/open.
-/// Status only (title/weight/due stay with whoever assigned it); scoped to the
-/// caller's own tasks.
-async fn set_my_task_status(
+/// `PATCH /me/tasks/:id` — the employee edits one of their OWN tasks.
+///
+/// Asymmetric on purpose: on a task they CREATED, they may edit everything (title, description,
+/// weight, due date, PR links, status) — that is their AddTask board. On a task HR/PM ASSIGNED
+/// them, the assigner's title/weight/due stand; the employee may still set `status` and attach
+/// `pr_links` (report the PRs that delivered the work, mark it done) but not rewrite the rest.
+async fn update_my_task(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
-    Json(body): Json<MyTaskStatus>,
+    Json(body): Json<MyTaskUpdate>,
 ) -> Result<Json<Value>, AppError> {
     let task = manual_tasks::get(&state.db, id)
         .await?
@@ -259,13 +323,45 @@ async fn set_my_task_status(
     if task.user_id != user.id {
         return Err(AppError::Forbidden);
     }
-    if !manual_tasks::is_valid_status(&body.status) {
-        return Err(AppError::BadRequest(
-            "status must be 'open' or 'done'".into(),
-        ));
+    let self_created = task.created_by == Some(user.id);
+
+    if let Some(s) = body.status.as_deref() {
+        if !manual_tasks::is_valid_status(s) {
+            return Err(AppError::BadRequest(
+                "status must be 'open' or 'done'".into(),
+            ));
+        }
     }
-    manual_tasks::set_status(&state.db, id, &body.status).await?;
-    audit::log(&state.db, user.id, "task.status.self", "manual_task", Some(id)).await;
+    if let Some(w) = body.weight {
+        validate_weight(w)?;
+    }
+    let title = body.title.as_deref().map(str::trim);
+    if matches!(title, Some("")) {
+        return Err(AppError::BadRequest("title cannot be empty".into()));
+    }
+    let description = body.description.as_deref().map(str::trim);
+    let pr_links = body.pr_links.as_deref().map(clean_pr_links).transpose()?;
+
+    // Assigned task: the protected fields belong to the assigner. Refuse rather than silently drop.
+    let touches_protected =
+        title.is_some() || description.is_some() || body.weight.is_some() || body.due_date.is_some();
+    if !self_created && touches_protected {
+        return Err(AppError::Forbidden);
+    }
+
+    // Only apply the protected fields on a self-created task; status + pr_links apply either way.
+    let (t, d, w, dd) = if self_created {
+        (title, description, body.weight, body.due_date)
+    } else {
+        (None, None, None, None)
+    };
+    if t.is_some() || d.is_some() || w.is_some() || dd.is_some() || pr_links.is_some() {
+        manual_tasks::update(&state.db, id, t, d, w, dd, pr_links.as_deref()).await?;
+    }
+    if let Some(s) = body.status.as_deref() {
+        manual_tasks::set_status(&state.db, id, s).await?;
+    }
+    audit::log(&state.db, user.id, "task.update.self", "manual_task", Some(id)).await;
     let updated = manual_tasks::get(&state.db, id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -296,7 +392,7 @@ pub fn router() -> Router<AppState> {
         .route("/me/tasks", get(my_tasks).post(create_my_task))
         .route(
             "/me/tasks/:id",
-            axum::routing::patch(set_my_task_status).delete(delete_my_task),
+            axum::routing::patch(update_my_task).delete(delete_my_task),
         )
         .route("/admin/users/:id/tasks", get(list_tasks).post(create_task))
         .route(

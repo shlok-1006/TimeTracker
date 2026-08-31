@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT mt.id, mt.user_id, u.email AS user_email, mt.title, mt.weight,\n                  mt.due_date, mt.status, mt.pr_links, mt.updated_at\n           FROM manual_tasks mt\n           JOIN users u       ON u.id = mt.user_id\n           JOIN user_teams ut ON ut.user_id = mt.user_id AND ut.team_id = $1\n           WHERE u.deactivated_at IS NULL\n             AND (NOT $2 OR cardinality(mt.pr_links) > 0)\n           ORDER BY mt.updated_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "user_email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "weight",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "due_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 6,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "pr_links",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "da9c5da685954ef998779866e2317a1a0833532d30125e2dcf618c8d61c70fcc"
+}

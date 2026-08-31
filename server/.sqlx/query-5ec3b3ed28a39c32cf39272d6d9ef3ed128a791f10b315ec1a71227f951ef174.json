@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, user_id, created_by, title, description, status, weight, due_date, created_at, updated_at\n           FROM manual_tasks WHERE id = $1",
+  "query": "INSERT INTO manual_tasks (user_id, created_by, title, description, weight, due_date, pr_links)\n           VALUES ($1, $2, $3, $4, $5, $6, $7)\n           RETURNING id, user_id, created_by, title, description, status, weight, due_date, pr_links, created_at, updated_at",
   "describe": {
     "columns": [
       {
@@ -45,18 +45,29 @@
       },
       {
         "ordinal": 8,
+        "name": "pr_links",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 9,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4",
+        "Date",
+        "TextArray"
       ]
     },
     "nullable": [
@@ -69,8 +80,9 @@
       false,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "63ea8d984ca50d04924109d48df3b2ac298e0e87ae71debc09d4438fad071f4f"
+  "hash": "5ec3b3ed28a39c32cf39272d6d9ef3ed128a791f10b315ec1a71227f951ef174"
 }

@@ -68,13 +68,15 @@ pub async fn me_tasks() -> Result<Value, String> {
 }
 
 /// `POST /me/tasks` — assign a task to yourself (self-service). Weight and
-/// due date are optional; the server defaults an unset weight to 5.
+/// due date are optional; the server defaults an unset weight to 5. `pr_links`
+/// are full GitHub PR URLs the HRMS performance engine reviews to score the work.
 #[tauri::command]
 pub async fn create_my_task(
     title: String,
     description: Option<String>,
     weight: Option<i64>,
     due_date: Option<String>,
+    pr_links: Option<Vec<String>>,
 ) -> Result<Value, String> {
     let mut body = serde_json::json!({ "title": title });
     if let Some(d) = description {
@@ -86,6 +88,9 @@ pub async fn create_my_task(
     if let Some(dd) = due_date {
         body["due_date"] = serde_json::json!(dd);
     }
+    if let Some(prs) = pr_links {
+        body["pr_links"] = serde_json::json!(prs);
+    }
     http::post_json("/me/tasks", body).await
 }
 
@@ -93,6 +98,29 @@ pub async fn create_my_task(
 #[tauri::command]
 pub async fn set_my_task_status(id: String, status: String) -> Result<Value, String> {
     http::patch_json(&format!("/me/tasks/{id}"), serde_json::json!({ "status": status })).await
+}
+
+/// `PATCH /me/tasks/:id` — edit one of your own tasks: weight, due date and/or the
+/// PR links. Only the fields supplied are sent (the server leaves the rest alone).
+/// `pr_links` REPLACES the set — send the full list.
+#[tauri::command]
+pub async fn update_my_task(
+    id: String,
+    weight: Option<i64>,
+    due_date: Option<String>,
+    pr_links: Option<Vec<String>>,
+) -> Result<Value, String> {
+    let mut body = serde_json::json!({});
+    if let Some(w) = weight {
+        body["weight"] = serde_json::json!(w);
+    }
+    if let Some(dd) = due_date {
+        body["due_date"] = serde_json::json!(dd);
+    }
+    if let Some(prs) = pr_links {
+        body["pr_links"] = serde_json::json!(prs);
+    }
+    http::patch_json(&format!("/me/tasks/{id}"), body).await
 }
 
 /// `DELETE /me/tasks/:id` — remove one of your own self-created tasks.

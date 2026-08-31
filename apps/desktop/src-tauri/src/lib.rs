@@ -214,6 +214,7 @@ pub fn run() {
             client::me_tasks,
             client::create_my_task,
             client::set_my_task_status,
+            client::update_my_task,
             client::delete_my_task,
             client::me_attendance,
             client::me_leave_types,

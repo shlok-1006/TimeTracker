@@ -372,6 +372,36 @@ pub async fn set_employment_facts(
     Ok(())
 }
 
+/// Like [`set_employment_facts`] but COALESCE — only fields actually supplied overwrite; a `None`
+/// leaves the stored value alone. The create/upsert endpoint uses this so a re-send that omits a
+/// field (or keys by email with no employee_code) never blanks what is already there.
+pub async fn merge_employment_facts(
+    pool: &PgPool,
+    user_id: Uuid,
+    employee_code: Option<&str>,
+    department: Option<&str>,
+    designation: Option<&str>,
+    joined_on: Option<NaiveDate>,
+) -> Result<(), AppError> {
+    sqlx::query!(
+        "UPDATE users SET
+             employee_code = COALESCE($2, employee_code),
+             department    = COALESCE($3, department),
+             designation   = COALESCE($4, designation),
+             joined_on     = COALESCE($5, joined_on),
+             updated_at    = now()
+         WHERE id = $1",
+        user_id,
+        employee_code,
+        department,
+        designation,
+        joined_on
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Create or replace the personal-details row.
 pub async fn upsert_profile(
     pool: &PgPool,

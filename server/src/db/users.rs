@@ -183,6 +183,38 @@ pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, A
     }
 }
 
+/// Resolve the directory-upsert key to an existing user, if any. Matches on `employee_code`
+/// (the HRMS Razorpay ID) first, then work email — the same precedence the create endpoint keys
+/// on. Unlike [`find_by_email`], this INCLUDES deactivated rows on purpose: `employee_code` is
+/// globally unique, so a re-hire carrying a former employee's id must resolve to that row (to
+/// reactivate it) rather than miss and collide on insert. Returns `(id, is_deactivated)`.
+pub async fn find_for_directory_upsert(
+    pool: &PgPool,
+    employee_code: Option<&str>,
+    email: &str,
+) -> Result<Option<(Uuid, bool)>, AppError> {
+    if let Some(code) = employee_code.map(str::trim).filter(|c| !c.is_empty()) {
+        if let Some(r) = sqlx::query!(
+            r#"SELECT id, (deactivated_at IS NOT NULL) AS "deactivated!"
+               FROM users WHERE employee_code = $1"#,
+            code
+        )
+        .fetch_optional(pool)
+        .await?
+        {
+            return Ok(Some((r.id, r.deactivated)));
+        }
+    }
+    let row = sqlx::query!(
+        r#"SELECT id, (deactivated_at IS NOT NULL) AS "deactivated!"
+           FROM users WHERE email = $1"#,
+        email.trim()
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| (r.id, r.deactivated)))
+}
+
 /// Look up a user by id. Returns `None` if no such user exists.
 pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<User>, AppError> {
     let row = sqlx::query!(

@@ -24,10 +24,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use std::str::FromStr;
+
+use crate::auth;
 use crate::db::employee_directory::CelebrationSource;
-use crate::db::{audit, employee_directory as repo};
+use crate::db::{audit, employee_directory as repo, users};
+use crate::employment_type::EmploymentType;
 use crate::error::AppError;
 use crate::middleware::{AuthUser, RequireHr, RequireStaff};
+use crate::role::UserRole;
 use crate::routes::admin::{authorize_view, team_scope};
 use crate::state::AppState;
 
@@ -232,6 +237,195 @@ async fn update_profile(
     Ok(Json(json!({ "profile": bundle })))
 }
 
+/// The onboarding "create employee" payload. Identity is required; everything else mirrors the
+/// `PUT` shape so the HRMS can send the whole onboarding form in one call. Sealed bank details are
+/// accepted here too (routed to the audited tier-3 path), but are optional.
+#[derive(Deserialize)]
+struct CreateEmployee {
+    // ── Identity (required) ──
+    name: String,
+    email: String,
+    /// The HRMS Razorpay ID — the upsert key. Stored as `employee_code` (globally unique).
+    #[serde(default)]
+    employee_code: Option<String>,
+    // ── Account (optional) ──
+    /// Defaults to "employee". Only an admin may create an admin.
+    #[serde(default)]
+    role: Option<String>,
+    /// Defaults to "employee" (vs contractor / intern).
+    #[serde(default)]
+    employment_type: Option<String>,
+    /// If omitted on a NEW hire, a temp password is generated and emailed; returned once here too.
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    manager_id: Option<Uuid>,
+    // ── Employment facts (COALESCE — only what's sent overwrites) ──
+    #[serde(default)]
+    department: Option<String>,
+    #[serde(default)]
+    designation: Option<String>,
+    #[serde(default)]
+    joined_on: Option<NaiveDate>,
+    // ── Tier-2 + lists (same as PUT; each replaces the stored value when present) ──
+    #[serde(default)]
+    profile: Option<repo::EmployeeProfile>,
+    #[serde(default)]
+    education: Option<Vec<repo::Education>>,
+    #[serde(default)]
+    prev_employment: Option<Vec<repo::PrevEmployment>>,
+    // ── Sealed tier (optional; audited, never echoed in the roster) ──
+    #[serde(default)]
+    bank: Option<repo::BankDetails>,
+}
+
+/// `POST /admin/directory` — create a new employee, or upsert if one already matches. HR/admin.
+///
+/// This is the onboarding hand-off: a brand-new hire lands in the directory and immediately flows
+/// into attendance, leave, live status and (if code-tracked) performance like everyone else.
+///
+/// Keying (idempotent): resolves an existing person by `employee_code` (Razorpay ID) first, then
+/// work email. A match UPDATES that row (and reactivates it if the person had left — a re-hire);
+/// no match CREATES the account, provisions sign-in (welcome email + temp password) and applies
+/// the profile. Re-sending is therefore safe — it never duplicates.
+async fn create_employee(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Json(body): Json<CreateEmployee>,
+) -> Result<Json<Value>, AppError> {
+    if body.name.trim().is_empty() {
+        return Err(AppError::BadRequest("name is required".into()));
+    }
+    if !body.email.contains('@') {
+        return Err(AppError::BadRequest("a valid work email is required".into()));
+    }
+    let role = match body.role.as_deref() {
+        None | Some("") => UserRole::Employee,
+        Some(r) => UserRole::from_str(r).map_err(|_| {
+            AppError::BadRequest("role must be employee, project_manager, hr or admin".into())
+        })?,
+    };
+    // Only an admin may mint another admin (same rule as POST /admin/users).
+    if role == UserRole::Admin && hr.role != UserRole::Admin {
+        return Err(AppError::Forbidden);
+    }
+    let employment_type = match body.employment_type.as_deref() {
+        None | Some("") => EmploymentType::Employee,
+        Some(e) => EmploymentType::from_str(e).map_err(|_| {
+            AppError::BadRequest("employment type must be employee, contractor or intern".into())
+        })?,
+    };
+
+    let existing =
+        users::find_for_directory_upsert(&state.db, body.employee_code.as_deref(), &body.email)
+            .await?;
+
+    let (user_id, created, reactivated, temp_password) = match existing {
+        Some((id, was_deactivated)) => {
+            // Existing person: never silently rewrite their name/email/role/password — only the
+            // employment facts + profile below. A re-hire (they had left) is brought back.
+            let re = if was_deactivated {
+                users::reactivate(&state.db, id).await?
+            } else {
+                false
+            };
+            (id, false, re, None)
+        }
+        None => {
+            let (password, generated) = match body.password {
+                Some(ref p) if p.len() >= 8 => (p.clone(), false),
+                Some(_) => {
+                    return Err(AppError::BadRequest(
+                        "password must be at least 8 characters".into(),
+                    ))
+                }
+                None => (auth::generate_temp_password(), true),
+            };
+            let hash = auth::hash_password(&password).map_err(AppError::Internal)?;
+            let user = users::create(
+                &state.db,
+                body.name.trim(),
+                body.email.trim(),
+                &hash,
+                role,
+                body.manager_id,
+            )
+            .await?;
+            if employment_type != EmploymentType::Employee {
+                users::set_employment_type(&state.db, user.id, employment_type).await?;
+            }
+            // Best-effort welcome email (credentials + desktop download) — a mail failure must
+            // never block onboarding, so it is only logged (identical to POST /admin/users).
+            let download_url = std::env::var("DESKTOP_DOWNLOAD_URL").unwrap_or_else(|_| {
+                "https://github.com/shlok-1006/TimeTracker/releases/latest".to_string()
+            });
+            let setup_guide_url = std::env::var("SETUP_GUIDE_URL").ok().filter(|s| !s.is_empty());
+            let server_url = std::env::var("DESKTOP_SERVER_URL").unwrap_or_default();
+            if let Err(e) = crate::email_service::send_welcome(crate::email_service::WelcomeEmail {
+                email: &user.email,
+                name: &user.name,
+                temp_password: &password,
+                download_url: &download_url,
+                setup_guide_url: setup_guide_url.as_deref(),
+                server_url: &server_url,
+            })
+            .await
+            {
+                tracing::warn!(email = %user.email, "welcome email failed: {e}");
+            }
+            (user.id, true, false, generated.then_some(password))
+        }
+    };
+
+    // Apply employment facts + the profile bundle (create and update alike). COALESCE on the facts
+    // so an omitted field never blanks an existing value.
+    repo::merge_employment_facts(
+        &state.db,
+        user_id,
+        body.employee_code.as_deref(),
+        body.department.as_deref(),
+        body.designation.as_deref(),
+        body.joined_on,
+    )
+    .await?;
+    if let Some(p) = &body.profile {
+        repo::upsert_profile(&state.db, user_id, p).await?;
+    }
+    if let Some(rows) = &body.education {
+        repo::replace_education(&state.db, user_id, rows).await?;
+    }
+    if let Some(rows) = &body.prev_employment {
+        repo::replace_prev_employment(&state.db, user_id, rows).await?;
+    }
+    if let Some(b) = &body.bank {
+        repo::upsert_bank(&state.db, user_id, b).await?;
+        audit::log(&state.db, hr.id, "employee_bank.update", "user", Some(user_id)).await;
+    }
+
+    audit::log(
+        &state.db,
+        hr.id,
+        if created {
+            "employee.create"
+        } else {
+            "employee.upsert"
+        },
+        "user",
+        Some(user_id),
+    )
+    .await;
+
+    let bundle = repo::get_bundle(&state.db, user_id).await?;
+    Ok(Json(json!({
+        "user_id": user_id,
+        "created": created,
+        "reactivated": reactivated,
+        // Present only when the server generated a password for a NEW hire — show it once.
+        "temp_password": temp_password,
+        "profile": bundle,
+    })))
+}
+
 /// `POST /admin/directory/:id/verify` — HR confirms the form's answers are
 /// checked. Audited: "who said this data is true" is exactly the kind of claim
 /// that needs a name against it.
@@ -380,7 +574,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me/directory/profile", get(my_profile))
         .route("/me/celebrations", get(my_celebrations))
-        .route("/admin/directory", get(directory))
+        .route("/admin/directory", get(directory).post(create_employee))
         // Static segment registered before `/:id` so "celebrations" is never parsed as a UUID.
         .route("/admin/directory/celebrations", get(celebrations))
         .route(

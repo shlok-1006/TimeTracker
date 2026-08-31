@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET\n             employee_code = COALESCE($2, employee_code),\n             department    = COALESCE($3, department),\n             designation   = COALESCE($4, designation),\n             joined_on     = COALESCE($5, joined_on),\n             updated_at    = now()\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Date"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9d4ab1a98072eb11f9b638de044122e71ed5f4320120fd8610031d794a4966eb"
+}

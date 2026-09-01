@@ -262,6 +262,7 @@ mod tests {
             status: status.into(),
             weight: 5,
             due_date: None,
+            pr_links: vec![],
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

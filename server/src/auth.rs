@@ -261,14 +261,21 @@ pub async fn change_password(
 }
 
 /// How recently a rotated token may be re-presented before we treat it as a
-/// stolen-token signal. Within this window a re-presented (just-rotated) token
-/// is assumed benign — either a concurrent-refresh race, or (the common one) a
-/// client that never received its rotated successor because the response was
-/// dropped (e.g. a server restart mid-refresh). Instead of forcing a re-login we
-/// RECOVER it by minting a fresh pair (see `refresh`). Kept modest so genuine
-/// theft is still caught quickly. Widened from 30s → 120s so a client's next
-/// retry (heartbeat/sync/session poll cadence) reliably lands inside the window.
-const REFRESH_REUSE_GRACE_SECONDS: i64 = 120;
+/// stolen-token signal. Within this window a re-presented (just-rotated) token is
+/// assumed benign — a concurrent-refresh race, or (the common one) a client that
+/// never received its rotated successor because the response was dropped (a
+/// Wi-Fi/VPN blip, or a server restart mid-refresh). Instead of forcing a
+/// re-login we RECOVER it by minting a fresh pair (see `refresh`).
+///
+/// Sized to survive a real network gap, not just the poll cadence. After a lost
+/// refresh response the client can only re-present the old token once the network
+/// is back — on a flaky VPN that can be several minutes later. At 120s that retry
+/// landed OUTSIDE the window, so the server treated it as theft and revoked EVERY
+/// session: employees got logged out mid-work. 30 minutes covers typical VPN
+/// blips / brief outages while still catching a genuinely stolen token — refresh
+/// tokens live in the OS keychain, so theft requires local machine compromise (a
+/// low risk here), and any reuse after the window still revokes all sessions.
+const REFRESH_REUSE_GRACE_SECONDS: i64 = 1800; // 30 minutes
 
 /// Decide whether replaying a non-consumable refresh token is a genuine
 /// stolen-token signal (→ revoke every session) or a benign event to ignore.

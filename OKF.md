@@ -135,7 +135,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 |---|---|---|---|---|
 | AUTH-01 | **Access-token lifetime.** Default 1 h (hard cap 1 h). Longer = the desktop refreshes less often = fewer "session expired" prompts. | **3600 s** (cap 3600 s) | `env` `JWT_ACCESS_TTL_SECONDS` | `server/src/config.rs:79` |
 | AUTH-02 | **Refresh-token lifetime.** Sliding window, rotated on every use — a user who opens the app within this window never re-logs-in. | **90d** (7776000 s) | `env` `JWT_REFRESH_TTL_SECONDS` | `server/src/config.rs:96` |
-| AUTH-03 | **Refresh reuse grace.** A re-presented just-rotated token is recovered within this window; a genuine reuse outside it revokes all of that user's sessions. | **120 s** | `code` | `server/src/auth.rs:271` |
+| AUTH-03 | **Refresh reuse grace.** A re-presented just-rotated token is recovered within this window (covers a lost-response retry after a network/VPN blip); a genuine reuse outside it revokes all of that user's sessions. | **1800 s (30 min)** | `code` | `server/src/auth.rs:271` |
 | AUTH-04 | **Password minimum length.** New password must also differ from the current one. No character-class rule. | **8** chars | `code` | `server/src/auth.rs:89` |
 | AUTH-05 | **Password hashing.** | Argon2id, random salt, PHC-encoded | `code` | `server/src/auth.rs:45` |
 | AUTH-06 | **Auto-generated temp password length** (new-employee credentials). | **20** chars (CSPRNG) | `code` | `server/src/auth.rs:33` |

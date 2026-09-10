@@ -37,7 +37,9 @@ export const useSession = create<SessionState>()((set) => ({
   markExpired: async () => {
     try {
       const invoke = await invoker();
-      await invoke("logout");
+      // Session died server-side (token expired/revoked), not a deliberate
+      // sign-out — keep the saved credentials so login pre-fills for one click.
+      await invoke("logout", { forget: false });
     } catch {
       /* ignore */
     }
@@ -46,7 +48,8 @@ export const useSession = create<SessionState>()((set) => ({
   clear: async () => {
     try {
       const invoke = await invoker();
-      await invoke("logout");
+      // Deliberate "Sign out" — forget the remembered credentials too.
+      await invoke("logout", { forget: true });
     } catch {
       /* ignore */
     }

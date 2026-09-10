@@ -186,6 +186,7 @@ pub fn run() {
             auth::change_password,
             auth::restore_session,
             auth::session_alive,
+            auth::saved_credentials,
             auth::logout,
             timer::start_tracking,
             timer::stop_tracking,

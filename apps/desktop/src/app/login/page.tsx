@@ -24,6 +24,30 @@ export default function LoginPage() {
     if (hydrated && session) router.replace("/dashboard");
   }, [hydrated, session, router]);
 
+  // Pre-fill the last-used credentials (kept in the OS keychain) so that once the
+  // long-lived refresh token finally expires, re-signing in is a single click.
+  // Only fills empty fields, so it never fights the user mid-typing.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const invoke = await invoker();
+        const creds = await invoke<{ email: string; password: string } | null>(
+          "saved_credentials",
+        );
+        if (active && creds) {
+          setEmail((e) => e || creds.email);
+          setPassword((p) => p || creds.password);
+        }
+      } catch {
+        /* not in Tauri / nothing saved — leave the form empty */
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   function toggleChanging() {
     setChanging((c) => !c);
     setError(null);

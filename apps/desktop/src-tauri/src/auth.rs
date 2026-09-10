@@ -23,6 +23,12 @@ const ACCOUNT_REFRESH: &str = "refresh_token";
 /// Cached user profile (id/name/email/role) so a session can be restored on
 /// launch even when the server is momentarily unreachable (offline / VPN not up).
 const ACCOUNT_PROFILE: &str = "profile";
+/// Last-used credentials (email + password), kept ONLY in the OS keychain
+/// (Rule 6 — never plaintext on disk) so the login screen can pre-fill them.
+/// This makes re-signing in a single click once the long-lived (90-day) refresh
+/// token finally expires or is revoked. Cleared on a deliberate "Sign out", but
+/// kept when a session merely expires so the user isn't asked to retype anything.
+const ACCOUNT_CREDENTIALS: &str = "credentials";
 
 /// Default API base URL, resolved at compile time. **Release** builds (the
 /// installers employees run) point at the hosted backend so a fresh install
@@ -93,6 +99,24 @@ fn stored_profile() -> Option<EmployeeSession> {
     serde_json::from_str(&read(ACCOUNT_PROFILE)?).ok()
 }
 
+/// Remember the last-used credentials so the login form can pre-fill them.
+/// Best-effort; stored in the OS keychain, never a plaintext file (Rule 6).
+fn store_credentials(email: &str, password: &str) {
+    if let Ok(json) = serde_json::to_string(&SavedCredentials {
+        email: email.to_string(),
+        password: password.to_string(),
+    }) {
+        let _ = write(ACCOUNT_CREDENTIALS, &json);
+    }
+}
+
+/// The remembered credentials for pre-filling the login form, if any. Returns
+/// `None` on a fresh install or after a deliberate sign-out.
+#[tauri::command]
+pub fn saved_credentials() -> Option<SavedCredentials> {
+    serde_json::from_str(&read(ACCOUNT_CREDENTIALS)?).ok()
+}
+
 // ---- Wire types ----
 
 #[derive(Serialize)]
@@ -144,6 +168,13 @@ pub struct EmployeeSession {
     pub role: String,
 }
 
+/// Credentials remembered for one-click re-login (kept in the OS keychain only).
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SavedCredentials {
+    pub email: String,
+    pub password: String,
+}
+
 /// Log in (any role — HR and project managers can track their time too);
 /// stores both tokens on success.
 #[tauri::command]
@@ -178,6 +209,8 @@ pub async fn login(email: String, password: String) -> Result<EmployeeSession, S
         role: body.user.role,
     };
     store_profile(&session);
+    // Remember for one-click re-login after the refresh token eventually dies.
+    store_credentials(&session.email, &password);
     Ok(session)
 }
 
@@ -229,6 +262,8 @@ pub async fn change_password(
         role: body.user.role,
     };
     store_profile(&session);
+    // The password just changed — remember the new one for one-click re-login.
+    store_credentials(&session.email, &new_password);
     Ok(session)
 }
 
@@ -348,9 +383,17 @@ pub async fn session_alive() -> Result<bool, String> {
     }
 }
 
-/// Log out: revoke the refresh token server-side (best effort) and clear the keychain.
+/// Log out: revoke the refresh token server-side (best effort) and clear the
+/// session from the keychain.
+///
+/// `forget` controls the remembered credentials:
+///   * `false` — the session merely expired/was revoked. Keep the saved
+///     credentials so the login screen pre-fills them and re-signing in is one
+///     click (this is the "stay effortlessly logged in" path).
+///   * `true`  — a deliberate "Sign out". Forget the credentials too, so the
+///     next person sees an empty form.
 #[tauri::command]
-pub async fn logout() -> Result<(), String> {
+pub async fn logout(forget: bool) -> Result<(), String> {
     if let Some(refresh) = stored_refresh() {
         let _ = reqwest::Client::new()
             .post(format!("{}/auth/logout", api_base()))
@@ -363,5 +406,8 @@ pub async fn logout() -> Result<(), String> {
     delete(ACCOUNT_ACCESS);
     delete(ACCOUNT_REFRESH);
     delete(ACCOUNT_PROFILE);
+    if forget {
+        delete(ACCOUNT_CREDENTIALS);
+    }
     Ok(())
 }

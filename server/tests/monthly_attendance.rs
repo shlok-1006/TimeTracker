@@ -106,7 +106,11 @@ async fn monthly_counts_come_from_the_rollup() {
     assert_eq!(me.partial, 1, "one partial day");
     assert_eq!(me.absent, 1, "one absent day");
     assert_eq!(me.leave, 1, "one leave day");
-    assert_eq!(me.worked_seconds, (8 + 7 + 3) * 3600, "summed worked seconds");
+    assert_eq!(
+        me.worked_seconds,
+        (8 + 7 + 3) * 3600,
+        "summed worked seconds"
+    );
 
     cleanup(&pool, uid).await;
 }
@@ -132,12 +136,14 @@ async fn leaves_remaining_falls_when_a_leave_is_approved() {
         Some(id) => (id, false),
         None => {
             let id = Uuid::new_v4();
-            sqlx::query("INSERT INTO leave_types (id, name, paid, default_days) VALUES ($1,$2,TRUE,12)")
-                .bind(id)
-                .bind(format!("Test Paid {id}"))
-                .execute(&pool)
-                .await
-                .expect("seed leave type");
+            sqlx::query(
+                "INSERT INTO leave_types (id, name, paid, default_days) VALUES ($1,$2,TRUE,12)",
+            )
+            .bind(id)
+            .bind(format!("Test Paid {id}"))
+            .execute(&pool)
+            .await
+            .expect("seed leave type");
             (id, true)
         }
     };
@@ -147,7 +153,10 @@ async fn leaves_remaining_falls_when_a_leave_is_approved() {
         .expect("balances")
         .get(&uid)
         .expect("new employee has a paid allotment");
-    assert!(before > 0.0, "a fresh employee should have paid leave to spend");
+    assert!(
+        before > 0.0,
+        "a fresh employee should have paid leave to spend"
+    );
 
     // Approve two days of that paid type in the year.
     sqlx::query(
@@ -204,7 +213,9 @@ fn app() -> axum::Router {
 async fn status(who: Option<(Uuid, UserRole)>) -> StatusCode {
     let mut b = Request::builder().uri("/admin/attendance/monthly?month=2020-03");
     if let Some((id, role)) = who {
-        let token = JwtKeys::new(SECRET, 900).issue(id, role, None, None).unwrap();
+        let token = JwtKeys::new(SECRET, 900)
+            .issue(id, role, None, None)
+            .unwrap();
         b = b.header("Authorization", format!("Bearer {token}"));
     }
     app()

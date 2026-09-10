@@ -130,7 +130,9 @@ async fn team_tasks(
     authorize_team(&state, &user, id).await?;
     let only_with_pr = matches!(q.has_pr.as_deref(), Some("1") | Some("true"));
     let tasks = manual_tasks::list_for_team(&state.db, id, only_with_pr).await?;
-    Ok(Json(json!({ "team_id": id, "has_pr": only_with_pr, "tasks": tasks })))
+    Ok(Json(
+        json!({ "team_id": id, "has_pr": only_with_pr, "tasks": tasks }),
+    ))
 }
 
 /// `GET /admin/teams/:id/pms` — who runs this team.

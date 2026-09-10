@@ -92,7 +92,10 @@ async fn creates_then_upserts_on_the_same_razorpay_id() {
     let (s1, v1) = post(payload.clone(), Some(UserRole::Hr)).await;
     assert_eq!(s1, StatusCode::OK, "create failed: {v1}");
     assert_eq!(v1["created"], json!(true));
-    let user_id = v1["user_id"].as_str().expect("user_id returned").to_string();
+    let user_id = v1["user_id"]
+        .as_str()
+        .expect("user_id returned")
+        .to_string();
     assert!(
         v1["temp_password"].as_str().is_some(),
         "a generated password is returned once for a new hire"
@@ -107,27 +110,33 @@ async fn creates_then_upserts_on_the_same_razorpay_id() {
             .await
             .unwrap();
     assert_eq!(got_code.as_deref(), Some(code.as_str()));
-    let has_profile: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM employee_profiles WHERE user_id = $1)",
-    )
-    .bind(uid)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let has_profile: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM employee_profiles WHERE user_id = $1)")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(has_profile, "the profile row was written");
 
     // 2) Re-send the same person (double-click / re-sync) — upsert, not a duplicate.
     let (s2, v2) = post(payload.clone(), Some(UserRole::Hr)).await;
     assert_eq!(s2, StatusCode::OK);
     assert_eq!(v2["created"], json!(false), "second send must UPSERT");
-    assert_eq!(v2["user_id"].as_str(), Some(user_id.as_str()), "same user id");
+    assert_eq!(
+        v2["user_id"].as_str(),
+        Some(user_id.as_str()),
+        "same user id"
+    );
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE employee_code = $1")
         .bind(&code)
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(count, 1, "exactly one row for the Razorpay id — never duplicated");
+    assert_eq!(
+        count, 1,
+        "exactly one row for the Razorpay id — never duplicated"
+    );
 
     // cleanup
     sqlx::query("DELETE FROM users WHERE id = $1")

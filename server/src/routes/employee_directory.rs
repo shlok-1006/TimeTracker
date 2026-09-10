@@ -297,7 +297,9 @@ async fn create_employee(
         return Err(AppError::BadRequest("name is required".into()));
     }
     if !body.email.contains('@') {
-        return Err(AppError::BadRequest("a valid work email is required".into()));
+        return Err(AppError::BadRequest(
+            "a valid work email is required".into(),
+        ));
     }
     let role = match body.role.as_deref() {
         None | Some("") => UserRole::Employee,
@@ -359,7 +361,9 @@ async fn create_employee(
             let download_url = std::env::var("DESKTOP_DOWNLOAD_URL").unwrap_or_else(|_| {
                 "https://github.com/shlok-1006/TimeTracker/releases/latest".to_string()
             });
-            let setup_guide_url = std::env::var("SETUP_GUIDE_URL").ok().filter(|s| !s.is_empty());
+            let setup_guide_url = std::env::var("SETUP_GUIDE_URL")
+                .ok()
+                .filter(|s| !s.is_empty());
             let server_url = std::env::var("DESKTOP_SERVER_URL").unwrap_or_default();
             if let Err(e) = crate::email_service::send_welcome(crate::email_service::WelcomeEmail {
                 email: &user.email,
@@ -399,7 +403,14 @@ async fn create_employee(
     }
     if let Some(b) = &body.bank {
         repo::upsert_bank(&state.db, user_id, b).await?;
-        audit::log(&state.db, hr.id, "employee_bank.update", "user", Some(user_id)).await;
+        audit::log(
+            &state.db,
+            hr.id,
+            "employee_bank.update",
+            "user",
+            Some(user_id),
+        )
+        .await;
     }
 
     audit::log(
@@ -510,7 +521,10 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].kind, "birthday");
         assert_eq!(got[0].date, "2026-07-28", "recurs on this year's month-day");
-        assert!(got[0].years.is_none(), "a birthday must not leak the birth year");
+        assert!(
+            got[0].years.is_none(),
+            "a birthday must not leak the birth year"
+        );
     }
 
     #[test]
@@ -536,15 +550,18 @@ mod tests {
     fn dates_outside_the_window_are_excluded_and_today_is_included() {
         let today = ymd(2026, 7, 25);
         let people = [
-            src("EdgeIn", Some(ymd(1990, 8, 1)), None),  // +7 days, inside
+            src("EdgeIn", Some(ymd(1990, 8, 1)), None), // +7 days, inside
             src("EdgeOut", Some(ymd(1990, 8, 2)), None), // +8 days, outside a 7-day window
-            src("Today", Some(ymd(1990, 7, 25)), None),  // day 0, inside
+            src("Today", Some(ymd(1990, 7, 25)), None), // day 0, inside
         ];
         let got = upcoming_celebrations(&people, today, 7);
         let names: Vec<&str> = got.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"EdgeIn"));
         assert!(names.contains(&"Today"));
-        assert!(!names.contains(&"EdgeOut"), "the 8th day is past a 7-day reminder");
+        assert!(
+            !names.contains(&"EdgeOut"),
+            "the 8th day is past a 7-day reminder"
+        );
     }
 
     #[test]
@@ -554,7 +571,10 @@ mod tests {
         let people = [src("NewYear", Some(ymd(1988, 1, 2)), Some(ymd(2020, 1, 2)))];
         let got = upcoming_celebrations(&people, today, 7);
         assert_eq!(got.len(), 2, "both a birthday and an anniversary on 2 Jan");
-        assert!(got.iter().all(|c| c.date == "2027-01-02"), "dated in the next year");
+        assert!(
+            got.iter().all(|c| c.date == "2027-01-02"),
+            "dated in the next year"
+        );
     }
 
     #[test]

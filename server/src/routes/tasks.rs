@@ -343,8 +343,10 @@ async fn update_my_task(
     let pr_links = body.pr_links.as_deref().map(clean_pr_links).transpose()?;
 
     // Assigned task: the protected fields belong to the assigner. Refuse rather than silently drop.
-    let touches_protected =
-        title.is_some() || description.is_some() || body.weight.is_some() || body.due_date.is_some();
+    let touches_protected = title.is_some()
+        || description.is_some()
+        || body.weight.is_some()
+        || body.due_date.is_some();
     if !self_created && touches_protected {
         return Err(AppError::Forbidden);
     }
@@ -361,7 +363,14 @@ async fn update_my_task(
     if let Some(s) = body.status.as_deref() {
         manual_tasks::set_status(&state.db, id, s).await?;
     }
-    audit::log(&state.db, user.id, "task.update.self", "manual_task", Some(id)).await;
+    audit::log(
+        &state.db,
+        user.id,
+        "task.update.self",
+        "manual_task",
+        Some(id),
+    )
+    .await;
     let updated = manual_tasks::get(&state.db, id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -383,7 +392,14 @@ async fn delete_my_task(
         return Err(AppError::Forbidden);
     }
     manual_tasks::delete(&state.db, id).await?;
-    audit::log(&state.db, user.id, "task.delete.self", "manual_task", Some(id)).await;
+    audit::log(
+        &state.db,
+        user.id,
+        "task.delete.self",
+        "manual_task",
+        Some(id),
+    )
+    .await;
     Ok(Json(json!({ "deleted": true })))
 }
 

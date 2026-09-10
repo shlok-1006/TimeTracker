@@ -48,11 +48,12 @@ async fn seed_user(pool: &sqlx::PgPool, role: &str) -> Uuid {
 }
 
 async fn paid_type(pool: &sqlx::PgPool) -> (Uuid, bool) {
-    if let Some(id) =
-        sqlx::query_scalar::<_, Uuid>("SELECT id FROM leave_types WHERE paid = TRUE ORDER BY name LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .expect("query types")
+    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM leave_types WHERE paid = TRUE ORDER BY name LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .expect("query types")
     {
         return (id, false);
     }
@@ -111,23 +112,75 @@ async fn range_returns_overlapping_approved_and_pending_scoped_to_the_team() {
     let (from, to) = (ymd(2026, 8, 1), ymd(2026, 8, 31));
     // on_team: inside (approved), straddling the start edge (pending), rejected (excluded),
     // entirely before the window (excluded).
-    seed_leave(&pool, on_team, lt, ymd(2026, 8, 4), ymd(2026, 8, 6), "approved").await;
-    seed_leave(&pool, on_team, lt, ymd(2026, 7, 30), ymd(2026, 8, 2), "pending").await;
-    seed_leave(&pool, on_team, lt, ymd(2026, 8, 10), ymd(2026, 8, 12), "rejected").await;
-    seed_leave(&pool, on_team, lt, ymd(2026, 7, 1), ymd(2026, 7, 5), "approved").await;
+    seed_leave(
+        &pool,
+        on_team,
+        lt,
+        ymd(2026, 8, 4),
+        ymd(2026, 8, 6),
+        "approved",
+    )
+    .await;
+    seed_leave(
+        &pool,
+        on_team,
+        lt,
+        ymd(2026, 7, 30),
+        ymd(2026, 8, 2),
+        "pending",
+    )
+    .await;
+    seed_leave(
+        &pool,
+        on_team,
+        lt,
+        ymd(2026, 8, 10),
+        ymd(2026, 8, 12),
+        "rejected",
+    )
+    .await;
+    seed_leave(
+        &pool,
+        on_team,
+        lt,
+        ymd(2026, 7, 1),
+        ymd(2026, 7, 5),
+        "approved",
+    )
+    .await;
     // off_team: an approved leave in-window — visible to HR, not to this PM.
-    seed_leave(&pool, off_team, lt, ymd(2026, 8, 20), ymd(2026, 8, 22), "approved").await;
+    seed_leave(
+        &pool,
+        off_team,
+        lt,
+        ymd(2026, 8, 20),
+        ymd(2026, 8, 22),
+        "approved",
+    )
+    .await;
 
     // PM scope: only their team member's overlapping approved + pending.
-    let pm_rows = leave::list_in_range(&pool, from, to, Some(pm)).await.unwrap();
+    let pm_rows = leave::list_in_range(&pool, from, to, Some(pm))
+        .await
+        .unwrap();
     let mine: Vec<_> = pm_rows.iter().filter(|r| r.user_id == on_team).collect();
-    assert_eq!(mine.len(), 2, "approved + pending that overlap, nothing else");
-    assert!(mine.iter().any(|r| r.status == "approved" && r.start_date == ymd(2026, 8, 4)));
+    assert_eq!(
+        mine.len(),
+        2,
+        "approved + pending that overlap, nothing else"
+    );
+    assert!(mine
+        .iter()
+        .any(|r| r.status == "approved" && r.start_date == ymd(2026, 8, 4)));
     assert!(
-        mine.iter().any(|r| r.status == "pending" && r.start_date == ymd(2026, 7, 30)),
+        mine.iter()
+            .any(|r| r.status == "pending" && r.start_date == ymd(2026, 7, 30)),
         "a leave straddling the start edge must still be returned in full"
     );
-    assert!(!mine.iter().any(|r| r.status == "rejected"), "rejected is not on leave");
+    assert!(
+        !mine.iter().any(|r| r.status == "rejected"),
+        "rejected is not on leave"
+    );
     assert!(
         !mine.iter().any(|r| r.start_date == ymd(2026, 7, 1)),
         "a leave entirely before the window must be excluded"
@@ -140,7 +193,9 @@ async fn range_returns_overlapping_approved_and_pending_scoped_to_the_team() {
     // HR scope (None): sees the off-team leave too.
     let hr_rows = leave::list_in_range(&pool, from, to, None).await.unwrap();
     assert!(
-        hr_rows.iter().any(|r| r.user_id == off_team && r.start_date == ymd(2026, 8, 20)),
+        hr_rows
+            .iter()
+            .any(|r| r.user_id == off_team && r.start_date == ymd(2026, 8, 20)),
         "HR sees everyone"
     );
 
@@ -190,10 +245,16 @@ async fn status(who: Option<(Uuid, UserRole)>) -> StatusCode {
     let path = "/admin/leave/calendar?from=2026-08-01&to=2026-08-31";
     let mut b = Request::builder().uri(path);
     if let Some((id, role)) = who {
-        let token = JwtKeys::new(SECRET, 900).issue(id, role, None, None).unwrap();
+        let token = JwtKeys::new(SECRET, 900)
+            .issue(id, role, None, None)
+            .unwrap();
         b = b.header("Authorization", format!("Bearer {token}"));
     }
-    app().oneshot(b.body(Body::empty()).unwrap()).await.unwrap().status()
+    app()
+        .oneshot(b.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status()
 }
 
 #[tokio::test]

@@ -420,7 +420,9 @@ mod tests {
         let csv = to_csv(&rows);
         let lines: Vec<&str> = csv.lines().collect();
 
-        assert!(lines[0].starts_with("Name,Email,Present,Partial,Absent,Leave,Holiday,Weekend,Worked Hours,Leaves Remaining"));
+        assert!(lines[0].starts_with(
+            "Name,Email,Present,Partial,Absent,Leave,Holiday,Weekend,Worked Hours,Leaves Remaining"
+        ));
         // Worked seconds render as hours; the comma in "Bob, Jr." forces quoting.
         assert_eq!(lines[1], "Alice,a@x.io,18,1,2,3,0,8,8.0,12.0");
         assert_eq!(lines[2], "\"Bob, Jr.\",b@x.io,20,1,2,3,0,8,9.5,1.5");

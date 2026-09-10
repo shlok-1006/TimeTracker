@@ -37,7 +37,9 @@ fn app() -> axum::Router {
 async fn status(path: &str, who: Option<(Uuid, UserRole)>) -> StatusCode {
     let mut b = Request::builder().uri(path);
     if let Some((id, role)) = who {
-        let token = JwtKeys::new(SECRET, 900).issue(id, role, None, None).unwrap();
+        let token = JwtKeys::new(SECRET, 900)
+            .issue(id, role, None, None)
+            .unwrap();
         b = b.header("Authorization", format!("Bearer {token}"));
     }
     app()
@@ -66,7 +68,11 @@ async fn an_employee_may_read_self_celebrations() {
     )
     .await;
     assert_ne!(s, StatusCode::UNAUTHORIZED, "an employee session must pass");
-    assert_ne!(s, StatusCode::FORBIDDEN, "self celebrations are not staff-gated");
+    assert_ne!(
+        s,
+        StatusCode::FORBIDDEN,
+        "self celebrations are not staff-gated"
+    );
 }
 
 #[tokio::test]

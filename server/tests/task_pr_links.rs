@@ -94,7 +94,9 @@ async fn pr_links_round_trip_and_team_read_filters_to_pr_bearing() {
     .expect("create outsider");
 
     // has_pr = true → only the PR-bearing task of the team member, with their email.
-    let engine = manual_tasks::list_for_team(&pool, team, true).await.unwrap();
+    let engine = manual_tasks::list_for_team(&pool, team, true)
+        .await
+        .unwrap();
     assert_eq!(engine.len(), 1, "only the PR-bearing team task");
     let row = &engine[0];
     assert_eq!(row.task_id, with_pr.id);
@@ -104,7 +106,9 @@ async fn pr_links_round_trip_and_team_read_filters_to_pr_bearing() {
     assert_eq!(row.weight, 7);
 
     // has_pr = false → both of the member's tasks, still never the outsider's.
-    let all = manual_tasks::list_for_team(&pool, team, false).await.unwrap();
+    let all = manual_tasks::list_for_team(&pool, team, false)
+        .await
+        .unwrap();
     assert_eq!(all.len(), 2, "both team tasks");
     assert!(all.iter().all(|t| t.user_id == member));
 
@@ -152,10 +156,16 @@ async fn status(who: Option<(Uuid, UserRole)>) -> StatusCode {
     let path = format!("/admin/teams/{team}/tasks?has_pr=1");
     let mut b = Request::builder().uri(path);
     if let Some((id, role)) = who {
-        let token = JwtKeys::new(SECRET, 900).issue(id, role, None, None).unwrap();
+        let token = JwtKeys::new(SECRET, 900)
+            .issue(id, role, None, None)
+            .unwrap();
         b = b.header("Authorization", format!("Bearer {token}"));
     }
-    app().oneshot(b.body(Body::empty()).unwrap()).await.unwrap().status()
+    app()
+        .oneshot(b.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status()
 }
 
 #[tokio::test]

@@ -11,6 +11,16 @@ export function fmtHms(total: number) {
   return `${h}h ${m}m ${s}s`;
 }
 
+/** Format seconds as "Hh Mm" (minutes are base-60, rounded, never 60). Use for
+ *  daily totals where seconds are noise and a decimal-hours value (e.g. 8.73)
+ *  would be misread as "8 hours 73 minutes". */
+export function fmtHm(total: number) {
+  const totalMin = Math.round(total / 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${h}h ${m}m`;
+}
+
 export const STATUS_LABEL: Record<string, { label: string; dot: string }> = {
   working: { label: "Working", dot: "bg-green-500" },
   idle: { label: "Idle", dot: "bg-amber-500" },

@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { invoker, fmtHms, STATUS_LABEL } from "@/lib/tauri";
+import { invoker, fmtHms, fmtHm, STATUS_LABEL } from "@/lib/tauri";
 
 type HoursSummary = {
   today_seconds: number;
@@ -99,6 +99,9 @@ export function Dashboard({ userId }: { userId: string }) {
     timeline.data?.map((d) => ({
       day: d.date.slice(5),
       hours: +(d.worked_seconds / 3600).toFixed(2),
+      // Keep exact seconds so the tooltip can show real hours + minutes (base 60)
+      // instead of the decimal-hours bar value (e.g. 8h 44m, not "8.73").
+      seconds: d.worked_seconds,
     })) ?? [];
 
   return (
@@ -173,7 +176,12 @@ export function Dashboard({ userId }: { userId: string }) {
               <BarChart data={barData}>
                 <XAxis dataKey="day" fontSize={12} />
                 <YAxis fontSize={12} />
-                <Tooltip />
+                <Tooltip
+                  formatter={(_v, _n, item) => [
+                    fmtHm((item?.payload?.seconds as number) ?? 0),
+                    "Worked",
+                  ]}
+                />
                 <Bar dataKey="hours" fill="#9333ea" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>

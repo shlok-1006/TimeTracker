@@ -280,6 +280,41 @@ pub struct WelcomeEmail<'a> {
     pub setup_guide_url: Option<&'a str>,
     /// The server URL the employee enters in the desktop app (may be empty).
     pub server_url: &'a str,
+    /// The HRMS web portal link (leave, attendance, profile). Empty = omit.
+    pub hrms_url: &'a str,
+}
+
+/// Links used in the welcome email, resolved from env with production defaults so
+/// both onboarding paths (POST /admin/users and POST /admin/directory) stay in
+/// sync. Override any of them in the server `.env`.
+pub struct WelcomeLinks {
+    pub download_url: String,
+    pub setup_guide_url: Option<String>,
+    pub server_url: String,
+    pub hrms_url: String,
+}
+
+/// Resolve the welcome-email links from env. Defaults point at the PUBLIC
+/// downloads repo (employees can't reach the private source repo) and the hosted
+/// HRMS portal.
+pub fn welcome_links_from_env() -> WelcomeLinks {
+    fn env_or(key: &str, default: &str) -> String {
+        std::env::var(key)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| default.to_string())
+    }
+    WelcomeLinks {
+        download_url: env_or(
+            "DESKTOP_DOWNLOAD_URL",
+            "https://github.com/shlok-1006/TimeTracker-Download/releases/latest",
+        ),
+        setup_guide_url: std::env::var("SETUP_GUIDE_URL")
+            .ok()
+            .filter(|s| !s.trim().is_empty()),
+        server_url: std::env::var("DESKTOP_SERVER_URL").unwrap_or_default(),
+        hrms_url: env_or("HRMS_URL", "https://hrms.rapidinnovation.dev"),
+    }
 }
 
 /// Email a newly created user their sign-in credentials, the desktop download
@@ -318,6 +353,14 @@ pub async fn send_welcome(e: WelcomeEmail<'_>) -> anyhow::Result<()> {
         "3. Sign in with the email and password above, then change your password.\n\
          4. Click Start to begin tracking your work time.\n\n",
     );
+
+    if !e.hrms_url.is_empty() {
+        body.push_str(&format!(
+            "Your HR portal — leave requests, attendance, your profile, and company \
+             policies — is here:\n\u{20}\u{20}{hrms}\n\n",
+            hrms = e.hrms_url
+        ));
+    }
 
     body.push_str("The full installation guide is attached to this email as a PDF.\n\n");
 

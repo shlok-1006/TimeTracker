@@ -356,22 +356,18 @@ async fn create_employee(
             if employment_type != EmploymentType::Employee {
                 users::set_employment_type(&state.db, user.id, employment_type).await?;
             }
-            // Best-effort welcome email (credentials + desktop download) — a mail failure must
-            // never block onboarding, so it is only logged (identical to POST /admin/users).
-            let download_url = std::env::var("DESKTOP_DOWNLOAD_URL").unwrap_or_else(|_| {
-                "https://github.com/shlok-1006/TimeTracker/releases/latest".to_string()
-            });
-            let setup_guide_url = std::env::var("SETUP_GUIDE_URL")
-                .ok()
-                .filter(|s| !s.is_empty());
-            let server_url = std::env::var("DESKTOP_SERVER_URL").unwrap_or_default();
+            // Best-effort welcome email (credentials + desktop download + HR portal) — a mail
+            // failure must never block onboarding, so it is only logged (identical to POST
+            // /admin/users). Links are resolved from env with production defaults.
+            let links = crate::email_service::welcome_links_from_env();
             if let Err(e) = crate::email_service::send_welcome(crate::email_service::WelcomeEmail {
                 email: &user.email,
                 name: &user.name,
                 temp_password: &password,
-                download_url: &download_url,
-                setup_guide_url: setup_guide_url.as_deref(),
-                server_url: &server_url,
+                download_url: &links.download_url,
+                setup_guide_url: links.setup_guide_url.as_deref(),
+                server_url: &links.server_url,
+                hrms_url: &links.hrms_url,
             })
             .await
             {

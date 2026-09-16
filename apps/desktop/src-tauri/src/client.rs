@@ -97,7 +97,11 @@ pub async fn create_my_task(
 /// `PATCH /me/tasks/:id` — mark one of your own tasks done or open again.
 #[tauri::command]
 pub async fn set_my_task_status(id: String, status: String) -> Result<Value, String> {
-    http::patch_json(&format!("/me/tasks/{id}"), serde_json::json!({ "status": status })).await
+    http::patch_json(
+        &format!("/me/tasks/{id}"),
+        serde_json::json!({ "status": status }),
+    )
+    .await
 }
 
 /// `PATCH /me/tasks/:id` — edit one of your own tasks: weight, due date and/or the

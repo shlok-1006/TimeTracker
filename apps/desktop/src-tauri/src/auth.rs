@@ -327,7 +327,11 @@ pub async fn restore_session() -> Result<Option<EmployeeSession>, String> {
                 email: String::new(),
                 role: "employee".to_string(),
             });
-            if let Some(id) = v.get("id").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
+            if let Some(id) = v
+                .get("id")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 session.id = id.to_string();
             }
             if let Some(role) = v.get("role").and_then(|x| x.as_str()) {

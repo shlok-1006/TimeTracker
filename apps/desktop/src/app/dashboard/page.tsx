@@ -15,6 +15,7 @@ import { MyTasks } from "@/components/my-tasks";
 import { Tickets } from "@/components/tickets";
 import { RecordingIndicator } from "@/components/recording-indicator";
 import { UpdateBanner } from "@/components/update-banner";
+import { YesterdayScoreDialog } from "@/components/yesterday-score";
 
 type View = "dashboard" | "myday" | "work" | "leave" | "attendance";
 
@@ -54,6 +55,7 @@ export default function DashboardPage() {
     <div className="flex h-screen">
       <UpdateBanner />
       <RecordingIndicator />
+      <YesterdayScoreDialog />
 
       <aside className="flex h-screen w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
         <div className="border-b border-slate-200 px-5 py-5 dark:border-slate-800">

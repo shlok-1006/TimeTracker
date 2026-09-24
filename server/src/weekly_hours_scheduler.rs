@@ -1,18 +1,21 @@
 //! Weekly hours-compliance job. Every Monday at `RUN_HOUR_UTC` it evaluates the
-//! week that just ended (previous Mon–Sun) for every employee and warns HR +
-//! the employee's project manager about anyone who fell short of
-//! `working_days × 8h`.
+//! week that just ended (previous Mon–Sun) for every employee and PERSISTS the
+//! result (working_days × 8h vs. worked). It no longer emails anyone — HR/PM
+//! review the shortfalls in the Weekly Report and send the reminder on demand.
 //!
 //! Runs after the nightly attendance rollup (03:00 UTC) so the whole week is
-//! finalized. Idempotent: results upsert and each shortfall warns at most once.
+//! finalized, and BEFORE the 10:30 IST (05:00 UTC) Weekly Report pop-up so the
+//! data is ready when HR/PM open it. Idempotent: results upsert.
 
 use chrono::{Datelike, Duration, NaiveTime, TimeZone, Utc};
 
 use crate::state::AppState;
 use crate::weekly_hours_service;
 
-/// Hour of day (UTC) on Monday to run the weekly check (after the 03:00 rollup).
-const RUN_HOUR_UTC: u32 = 6;
+/// Hour of day (UTC) on Monday to run the weekly check — after the 03:00 rollup
+/// and before the 10:30 IST (05:00 UTC) Weekly Report pop-up, so the report rows
+/// exist when HR/PM open it. 04:00 UTC = 09:30 IST.
+const RUN_HOUR_UTC: u32 = 4;
 
 pub async fn run(state: AppState) {
     loop {
@@ -66,7 +69,7 @@ mod tests {
 
     #[test]
     fn schedules_within_a_week_and_at_the_run_hour() {
-        // Wednesday 2026-07-01 12:00 UTC → next run is Monday 2026-07-06 06:00.
+        // Wednesday 2026-07-01 12:00 UTC → next run is Monday 2026-07-06 04:00.
         let now = Utc.with_ymd_and_hms(2026, 7, 1, 12, 0, 0).unwrap();
         let wait = duration_until_next_run(now);
         let fire = now + Duration::from_std(wait).unwrap();
@@ -77,8 +80,8 @@ mod tests {
 
     #[test]
     fn monday_before_run_hour_fires_today() {
-        // Monday 2026-07-06 05:00 UTC → fires the same day at 06:00.
-        let now = Utc.with_ymd_and_hms(2026, 7, 6, 5, 0, 0).unwrap();
+        // Monday 2026-07-06 02:00 UTC → fires the same day at 04:00.
+        let now = Utc.with_ymd_and_hms(2026, 7, 6, 2, 0, 0).unwrap();
         let fire = now + Duration::from_std(duration_until_next_run(now)).unwrap();
         assert_eq!(fire.date_naive(), now.date_naive());
         assert_eq!(fire.hour(), RUN_HOUR_UTC);
@@ -86,7 +89,7 @@ mod tests {
 
     #[test]
     fn monday_after_run_hour_waits_a_week() {
-        // Monday 2026-07-06 07:00 UTC → next fire is Monday 2026-07-13 06:00.
+        // Monday 2026-07-06 07:00 UTC → next fire is Monday 2026-07-13 04:00.
         let now = Utc.with_ymd_and_hms(2026, 7, 6, 7, 0, 0).unwrap();
         let fire = now + Duration::from_std(duration_until_next_run(now)).unwrap();
         assert_eq!(fire.weekday(), chrono::Weekday::Mon);

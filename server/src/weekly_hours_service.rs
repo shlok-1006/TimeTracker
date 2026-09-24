@@ -13,9 +13,7 @@
 use chrono::{Datelike, Duration, NaiveDate};
 
 use crate::db::{users, weekly_hours};
-use crate::email_service;
 use crate::error::AppError;
-use crate::role::UserRole;
 use crate::state::AppState;
 
 /// Hours an employee is expected to work per working day.
@@ -97,26 +95,18 @@ pub async fn run_for_week(
         }
     }
 
-    // HR recipients are the same for everyone — fetch once.
-    let hr_contacts = users::contacts_with_role(pool, UserRole::Hr).await?;
-
+    // Compute + persist each employee's result. This job NO LONGER emails anyone:
+    // shortfalls are surfaced to HR/PMs in the Weekly Report (the Monday pop-up +
+    // the Time & Attendance tab), and the first-person shortfall email is sent on
+    // demand when HR/PM clicks "Send Email" (POST /admin/weekly-hours/notify — see
+    // db::weekly_hours::{list_shortfalls, find_shortfall} and routes::weekly_hours).
     let weeks = weekly_hours::week_activity(pool, week_start, week_end).await?;
     let mut summary = RunSummary::default();
-
-    // Compute + persist each employee's result, collecting the non-compliant
-    // ones (not already warned this week) for a single consolidated mail.
-    struct Pending {
-        row_id: uuid::Uuid,
-        row: email_service::HoursDigestRow,
-        managers: Vec<(uuid::Uuid, String, String)>,
-    }
-    let mut pending: Vec<Pending> = Vec::new();
 
     for ew in weeks {
         summary.evaluated += 1;
         let h = evaluate(ew.working_days, ew.worked_seconds);
-
-        let upserted = weekly_hours::upsert(
+        weekly_hours::upsert(
             pool,
             ew.user_id,
             week_start,
@@ -128,91 +118,10 @@ pub async fn run_for_week(
             h.compliant,
         )
         .await?;
-
-        if h.compliant {
-            continue;
-        }
-        summary.shortfalls += 1;
-
-        // Only warn once per employee per week.
-        if upserted.notified_at.is_some() {
-            continue;
-        }
-
-        let managers = users::managers_of(pool, ew.user_id).await?;
-        pending.push(Pending {
-            row_id: upserted.id,
-            row: email_service::HoursDigestRow {
-                name: ew.name,
-                email: ew.email,
-                working_days: h.working_days,
-                required_seconds: h.required_seconds,
-                worked_seconds: h.worked_seconds,
-                shortfall_seconds: h.shortfall_seconds,
-            },
-            managers,
-        });
-    }
-
-    if pending.is_empty() {
-        return Ok(summary);
-    }
-
-    // Rows delivered in at least one mail → mark notified so we don't resend.
-    let mut notified: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
-
-    // 1) A SINGLE company-wide mail to all HR listing every employee below hours.
-    let hr_emails: Vec<String> = hr_contacts.iter().map(|(_, email)| email.clone()).collect();
-    if hr_emails.is_empty() {
-        tracing::warn!("weekly hours: shortfalls found but no HR recipients configured");
-    } else {
-        let rows: Vec<email_service::HoursDigestRow> =
-            pending.iter().map(|p| p.row.clone()).collect();
-        match email_service::send_hours_shortfall_digest(&hr_emails, week_start, week_end, &rows)
-            .await
-        {
-            Ok(()) => {
-                for p in &pending {
-                    notified.insert(p.row_id);
-                }
-            }
-            Err(e) => tracing::warn!("weekly hours HR digest email failed: {e}"),
+        if !h.compliant {
+            summary.shortfalls += 1;
         }
     }
-
-    // 2) One team mail per project manager — scoped to their own reports.
-    let mut by_pm: std::collections::BTreeMap<String, Vec<usize>> =
-        std::collections::BTreeMap::new();
-    for (i, p) in pending.iter().enumerate() {
-        for (_id, _name, email) in &p.managers {
-            by_pm.entry(email.clone()).or_default().push(i);
-        }
-    }
-    for (pm_email, idxs) in &by_pm {
-        let rows: Vec<email_service::HoursDigestRow> =
-            idxs.iter().map(|&i| pending[i].row.clone()).collect();
-        match email_service::send_hours_shortfall_digest(
-            std::slice::from_ref(pm_email),
-            week_start,
-            week_end,
-            &rows,
-        )
-        .await
-        {
-            Ok(()) => {
-                for &i in idxs {
-                    notified.insert(pending[i].row_id);
-                }
-            }
-            Err(e) => tracing::warn!(pm = %pm_email, "weekly hours PM digest email failed: {e}"),
-        }
-    }
-
-    // 3) Mark everyone who made it into a delivered mail.
-    for id in &notified {
-        weekly_hours::mark_notified(pool, *id).await?;
-    }
-    summary.warned = notified.len();
 
     Ok(summary)
 }

@@ -8,10 +8,123 @@
 //! holiday work still counts toward meeting the target).
 
 use chrono::{DateTime, NaiveDate, Utc};
+use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
+
+/// One non-compliant employee for a completed week — the row HR/PM sees in the
+/// Weekly Report and can email from. `notified_at` is set once the shortfall
+/// email has been sent (so the UI can show "Sent" and avoid re-sending).
+#[derive(Debug, Clone, Serialize)]
+pub struct ShortfallRow {
+    #[serde(skip_serializing)]
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub week_start: NaiveDate,
+    pub week_end: NaiveDate,
+    pub working_days: i64,
+    pub required_seconds: i64,
+    pub worked_seconds: i64,
+    pub shortfall_seconds: i64,
+    pub notified_at: Option<DateTime<Utc>>,
+}
+
+/// The non-compliant employees for `week_start`, newest-shortfall first. Scope
+/// mirrors the leave/attendance endpoints: `manager_id = None` for HR (everyone),
+/// `Some(pm)` restricts to that PM's team (via `user_managers`). Deactivated
+/// users are excluded — HR shouldn't chase people who have left.
+pub async fn list_shortfalls(
+    pool: &PgPool,
+    week_start: NaiveDate,
+    manager_id: Option<Uuid>,
+) -> Result<Vec<ShortfallRow>, AppError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT wh.id, wh.user_id, u.name AS "name!", u.email AS "email!",
+               wh.week_start, wh.week_end, wh.working_days,
+               wh.required_seconds, wh.worked_seconds, wh.shortfall_seconds, wh.notified_at
+        FROM weekly_hours_reports wh
+        JOIN users u ON u.id = wh.user_id
+        WHERE wh.week_start = $1
+          AND wh.compliant = FALSE
+          AND u.deactivated_at IS NULL
+          AND ($2::uuid IS NULL
+               OR EXISTS (SELECT 1 FROM user_managers um
+                          WHERE um.user_id = u.id AND um.manager_id = $2))
+        ORDER BY wh.shortfall_seconds DESC, u.name
+        "#,
+        week_start,
+        manager_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| ShortfallRow {
+            id: r.id,
+            user_id: r.user_id,
+            name: r.name,
+            email: r.email,
+            week_start: r.week_start,
+            week_end: r.week_end,
+            working_days: r.working_days as i64,
+            required_seconds: r.required_seconds,
+            worked_seconds: r.worked_seconds,
+            shortfall_seconds: r.shortfall_seconds,
+            notified_at: r.notified_at,
+        })
+        .collect())
+}
+
+/// One non-compliant report for (user, week), scoped like [`list_shortfalls`] —
+/// so a PM can only fetch (and therefore email) their own team. `None` when the
+/// row doesn't exist, is compliant, or is out of the caller's scope.
+pub async fn find_shortfall(
+    pool: &PgPool,
+    user_id: Uuid,
+    week_start: NaiveDate,
+    manager_id: Option<Uuid>,
+) -> Result<Option<ShortfallRow>, AppError> {
+    let row = sqlx::query!(
+        r#"
+        SELECT wh.id, wh.user_id, u.name AS "name!", u.email AS "email!",
+               wh.week_start, wh.week_end, wh.working_days,
+               wh.required_seconds, wh.worked_seconds, wh.shortfall_seconds, wh.notified_at
+        FROM weekly_hours_reports wh
+        JOIN users u ON u.id = wh.user_id
+        WHERE wh.user_id = $1
+          AND wh.week_start = $2
+          AND wh.compliant = FALSE
+          AND ($3::uuid IS NULL
+               OR EXISTS (SELECT 1 FROM user_managers um
+                          WHERE um.user_id = u.id AND um.manager_id = $3))
+        "#,
+        user_id,
+        week_start,
+        manager_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| ShortfallRow {
+        id: r.id,
+        user_id: r.user_id,
+        name: r.name,
+        email: r.email,
+        week_start: r.week_start,
+        week_end: r.week_end,
+        working_days: r.working_days as i64,
+        required_seconds: r.required_seconds,
+        worked_seconds: r.worked_seconds,
+        shortfall_seconds: r.shortfall_seconds,
+        notified_at: r.notified_at,
+    }))
+}
 
 /// One employee's aggregated activity for a week window.
 #[derive(Debug, Clone)]

@@ -26,6 +26,7 @@ pub mod teams;
 pub mod ticket_requests;
 pub mod time_grants;
 pub mod uploads;
+pub mod weekly_hours;
 
 use axum::http::{header, HeaderValue, Method};
 use axum::{routing::get, Json, Router};
@@ -129,6 +130,7 @@ pub fn build(state: AppState) -> Router {
         .merge(okf::router())
         .merge(directory::router())
         .merge(employee_directory::router())
+        .merge(weekly_hours::router())
         .merge(admin::router())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

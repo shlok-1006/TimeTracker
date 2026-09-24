@@ -229,6 +229,93 @@ pub async fn send_hours_shortfall_digest(
     send_html(recipients, &subject, &html, &plain).await
 }
 
+/// Warn ONE employee that they fell short of their expected weekly hours — a first-person nudge
+/// sent to the employee themselves. Sent ON DEMAND when HR/PM clicks "Send Email" in the Weekly
+/// Report (POST /admin/weekly-hours/notify); the weekly batch no longer emails automatically.
+/// No-op with no email address. Idempotency is the caller's job (the weekly row's `notified_at`).
+#[allow(clippy::too_many_arguments)]
+pub async fn send_hours_shortfall_self(
+    employee_email: &str,
+    employee_name: &str,
+    week_start: chrono::NaiveDate,
+    week_end: chrono::NaiveDate,
+    working_days: i64,
+    required_seconds: i64,
+    worked_seconds: i64,
+    shortfall_seconds: i64,
+) -> anyhow::Result<()> {
+    use crate::validate::sanitize_line;
+    if employee_email.trim().is_empty() {
+        return Ok(());
+    }
+    let name = sanitize_line(employee_name, 200);
+    let first = name.split_whitespace().next().unwrap_or("there").to_string();
+    let pct = if required_seconds > 0 {
+        (worked_seconds * 100 / required_seconds).clamp(0, 100)
+    } else {
+        0
+    };
+    let subject = format!(
+        "[TimeTracker] You're {} short of your weekly hours ({} to {})",
+        fmt_hm(shortfall_seconds),
+        week_start,
+        week_end
+    );
+    let plain = format!(
+        "Hi {first},\n\nHeads up: for the week of {ws} to {we} you logged {worked} of an expected \
+         {req} ({days} working day(s) x 8h, minus holidays and approved leave) — short by {sf}.\n\n\
+         If that looks off, check the desktop tracker synced for the whole week. Otherwise you can \
+         make up the time, or — if you were on approved leave that isn't reflected here — let HR \
+         know so your week is adjusted.\n\n(TimeTracker)\n",
+        first = html_escape(&first),
+        ws = week_start,
+        we = week_end,
+        worked = fmt_hm(worked_seconds),
+        req = fmt_hm(required_seconds),
+        days = working_days,
+        sf = fmt_hm(shortfall_seconds),
+    );
+    let (pct_bg, pct_fg) = if pct < 50 {
+        ("#FDE7F1", "#C0266E")
+    } else if pct < 80 {
+        ("#FEF4E4", "#B67A02")
+    } else {
+        ("#E6F8F1", "#0C9A6E")
+    };
+    let html = format!(
+        "<div style=\"font-family:Arial,Helvetica,sans-serif;background:#F4F4F8;padding:24px;\">\
+          <div style=\"max-width:520px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;border:1px solid #EBEBF1;\">\
+            <div style=\"background:linear-gradient(135deg,#6E31DB,#8A47F5);padding:20px 24px;\">\
+              <div style=\"color:#fff;font-size:18px;font-weight:800;\">Your weekly hours</div>\
+              <div style=\"color:#E9DEFB;font-size:13px;margin-top:2px;\">{ws} to {we}</div>\
+            </div>\
+            <div style=\"padding:20px 24px;\">\
+              <p style=\"margin:0 0 14px;color:#191532;font-size:14px;line-height:1.5;\">Hi {first}, you came up <b>{sf}</b> short of your expected hours this week.</p>\
+              <table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\" style=\"border-collapse:separate;border-spacing:8px 0;\">\
+                <tr>\
+                  <td style=\"background:#FAFAFD;border:1px solid #EBEBF1;border-radius:10px;padding:12px;text-align:center;\"><div style=\"color:#8B8DA0;font-size:11px;\">Expected</div><div style=\"color:#191532;font-size:18px;font-weight:800;\">{req}</div></td>\
+                  <td style=\"background:#FAFAFD;border:1px solid #EBEBF1;border-radius:10px;padding:12px;text-align:center;\"><div style=\"color:#8B8DA0;font-size:11px;\">Worked</div><div style=\"color:#191532;font-size:18px;font-weight:800;\">{worked}</div></td>\
+                  <td style=\"background:{pct_bg};border-radius:10px;padding:12px;text-align:center;\"><div style=\"color:{pct_fg};font-size:11px;\">Of expected</div><div style=\"color:{pct_fg};font-size:18px;font-weight:800;\">{pct}%</div></td>\
+                </tr>\
+              </table>\
+              <p style=\"margin:16px 0 0;color:#54566A;font-size:12.5px;line-height:1.5;\">Expected is <b>8h &times; {days} working day(s)</b> (Mon&ndash;Fri, minus holidays and approved leave). If the tracker didn't sync all week the number can read low &mdash; otherwise, make up the time or tell HR if approved leave is missing.</p>\
+            </div>\
+            <div style=\"padding:12px 24px;background:#FAFAFD;border-top:1px solid #F1F1F6;color:#B9BAC7;font-size:11px;\">TimeTracker &middot; automated weekly check</div>\
+          </div>\
+        </div>",
+        ws = week_start, we = week_end, first = html_escape(&first), sf = fmt_hm(shortfall_seconds),
+        req = fmt_hm(required_seconds), worked = fmt_hm(worked_seconds), pct = pct,
+        pct_bg = pct_bg, pct_fg = pct_fg, days = working_days,
+    );
+    send_html(
+        std::slice::from_ref(&employee_email.trim().to_string()),
+        &subject,
+        &html,
+        &plain,
+    )
+    .await
+}
+
 /// Details for a low daily-score alert to HR.
 pub struct LowScoreEmail<'a> {
     pub recipients: &'a [String],

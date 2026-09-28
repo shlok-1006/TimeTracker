@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT wh.id, wh.user_id, u.name AS \"name!\", u.email AS \"email!\",\n               wh.week_start, wh.week_end, wh.working_days,\n               wh.required_seconds, wh.worked_seconds, wh.shortfall_seconds, wh.notified_at\n        FROM weekly_hours_reports wh\n        JOIN users u ON u.id = wh.user_id\n        WHERE wh.week_start = $1\n          AND wh.compliant = FALSE\n          AND u.deactivated_at IS NULL\n          AND ($2::uuid IS NULL\n               OR EXISTS (SELECT 1 FROM user_managers um\n                          WHERE um.user_id = u.id AND um.manager_id = $2))\n        ORDER BY wh.shortfall_seconds DESC, u.name\n        ",
+  "query": "\n        SELECT wh.id, wh.user_id, u.name AS \"name!\", u.email AS \"email!\",\n               wh.week_start, wh.week_end, wh.working_days,\n               wh.required_seconds, wh.worked_seconds, wh.shortfall_seconds,\n               wh.employee_notified_at AS notified_at\n        FROM weekly_hours_reports wh\n        JOIN users u ON u.id = wh.user_id\n        WHERE wh.user_id = $1\n          AND wh.week_start = $2\n          AND wh.compliant = FALSE\n          AND u.deactivated_at IS NULL\n          AND ($3::uuid IS NULL\n               OR EXISTS (SELECT 1 FROM user_managers um\n                          WHERE um.user_id = u.id AND um.manager_id = $3)\n               OR EXISTS (SELECT 1 FROM user_teams ut\n                            JOIN team_pms tp ON tp.team_id = ut.team_id\n                          WHERE ut.user_id = u.id AND tp.pm_user_id = $3))\n        ",
   "describe": {
     "columns": [
       {
@@ -61,6 +61,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Date",
         "Uuid"
       ]
@@ -79,5 +80,5 @@
       true
     ]
   },
-  "hash": "168324cd218d0fced35733b66074ceeb9f1884c4ff57ff98db5f43d4d289b40e"
+  "hash": "5884eacc3003ecfced97708190c1638c543d092ee5633a95d101f62441fd919a"
 }

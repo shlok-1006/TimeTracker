@@ -249,7 +249,11 @@ pub async fn send_hours_shortfall_self(
         return Ok(());
     }
     let name = sanitize_line(employee_name, 200);
-    let first = name.split_whitespace().next().unwrap_or("there").to_string();
+    let first = name
+        .split_whitespace()
+        .next()
+        .unwrap_or("there")
+        .to_string();
     let pct = if required_seconds > 0 {
         (worked_seconds * 100 / required_seconds).clamp(0, 100)
     } else {
@@ -290,7 +294,7 @@ pub async fn send_hours_shortfall_self(
               <div style=\"color:#E9DEFB;font-size:13px;margin-top:2px;\">{ws} to {we}</div>\
             </div>\
             <div style=\"padding:20px 24px;\">\
-              <p style=\"margin:0 0 14px;color:#191532;font-size:14px;line-height:1.5;\">Hi {first}, you came up <b>{sf}</b> short of your expected hours this week.</p>\
+              <p style=\"margin:0 0 14px;color:#191532;font-size:14px;line-height:1.5;\">Hi {first}, you came up <b>{sf}</b> short of your expected hours for the week of {ws} to {we}.</p>\
               <table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\" style=\"border-collapse:separate;border-spacing:8px 0;\">\
                 <tr>\
                   <td style=\"background:#FAFAFD;border:1px solid #EBEBF1;border-radius:10px;padding:12px;text-align:center;\"><div style=\"color:#8B8DA0;font-size:11px;\">Expected</div><div style=\"color:#191532;font-size:18px;font-weight:800;\">{req}</div></td>\
@@ -300,7 +304,7 @@ pub async fn send_hours_shortfall_self(
               </table>\
               <p style=\"margin:16px 0 0;color:#54566A;font-size:12.5px;line-height:1.5;\">Expected is <b>8h &times; {days} working day(s)</b> (Mon&ndash;Fri, minus holidays and approved leave). If the tracker didn't sync all week the number can read low &mdash; otherwise, make up the time or tell HR if approved leave is missing.</p>\
             </div>\
-            <div style=\"padding:12px 24px;background:#FAFAFD;border-top:1px solid #F1F1F6;color:#B9BAC7;font-size:11px;\">TimeTracker &middot; automated weekly check</div>\
+            <div style=\"padding:12px 24px;background:#FAFAFD;border-top:1px solid #F1F1F6;color:#B9BAC7;font-size:11px;\">TimeTracker &middot; sent by your HR team</div>\
           </div>\
         </div>",
         ws = week_start, we = week_end, first = html_escape(&first), sf = fmt_hm(shortfall_seconds),

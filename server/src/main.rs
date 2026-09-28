@@ -63,7 +63,8 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(server::analysis_scheduler::run(state.clone()));
     // Nightly attendance: rolls up the previous day's attendance for every employee.
     tokio::spawn(server::attendance_scheduler::run(state.clone()));
-    // Weekly hours compliance: every Monday morning, warn HR + PM about anyone
+    // Weekly hours compliance: every Monday morning, compute last week's hours for the Weekly Report (no auto
+    // email — HR/PM email employees on demand). Previously: warn HR + PM about anyone
     // who worked fewer than working_days × 8h in the week that just ended.
     tokio::spawn(server::weekly_hours_scheduler::run(state.clone()));
     // Month-end summaries: once the IST month closes, build every employee's

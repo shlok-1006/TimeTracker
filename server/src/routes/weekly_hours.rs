@@ -6,10 +6,11 @@
 //!        a PM sees only their own team (same scope as the pending-leave queue).
 //!
 //!   POST /admin/weekly-hours/notify   { user_id, week_start }
-//!        Send the first-person shortfall email to that employee and stamp the
-//!        row `notified_at` (so the UI can show "Sent"). Scoped like the list —
-//!        a PM can only email their own team. The weekly batch itself no longer
-//!        emails anyone; this is the on-demand "Send Email" action.
+//!        Send the first-person shortfall email to that employee, at most ONCE per
+//!        week: the row's `employee_notified_at` is claimed atomically before the
+//!        send (and released if the send fails), so two HR users, the pop-up plus
+//!        the tab, or a retry can't double-send. Scoped like the list. The weekly
+//!        batch itself no longer emails anyone; this is the "Send Email" action.
 
 use axum::{
     extract::{Query, State},
@@ -22,8 +23,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::db::{audit, weekly_hours};
-use crate::error::AppError;
 use crate::email_service;
+use crate::error::AppError;
 use crate::middleware::RequireStaff;
 use crate::role::UserRole;
 use crate::state::AppState;
@@ -52,9 +53,13 @@ async fn shortfalls(
         Some(user.id)
     };
     let rows = weekly_hours::list_shortfalls(&state.db, week_start, scope).await?;
+    // `computed` separates "nobody fell short" from "the batch hasn't run for this week yet" (both have
+    // zero rows) — the UI must not show a green "everyone completed" for a week that was never computed.
+    let computed = weekly_hours::week_has_rows(&state.db, week_start).await?;
     Ok(Json(json!({
         "week_start": week_start,
         "week_end": week_end,
+        "computed": computed,
         "rows": rows,
     })))
 }
@@ -82,7 +87,23 @@ async fn notify(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    email_service::send_hours_shortfall_self(
+    // Already emailed (by anyone) → idempotent success, no second email.
+    if let Some(at) = row.notified_at {
+        return Ok(Json(
+            json!({ "ok": true, "already_sent": true, "user_id": row.user_id, "notified_at": at }),
+        ));
+    }
+    // Claim the slot atomically; losing the race means another request is sending / has sent it.
+    let Some(claimed_at) = weekly_hours::claim_employee_notify(&state.db, row.id).await? else {
+        let now =
+            weekly_hours::find_shortfall(&state.db, row.user_id, row.week_start, None).await?;
+        return Ok(Json(json!({
+            "ok": true, "already_sent": true, "user_id": row.user_id,
+            "notified_at": now.and_then(|r| r.notified_at),
+        })));
+    };
+
+    if let Err(e) = email_service::send_hours_shortfall_self(
         &row.email,
         &row.name,
         row.week_start,
@@ -93,22 +114,29 @@ async fn notify(
         row.shortfall_seconds,
     )
     .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("shortfall email failed: {e}")))?;
+    {
+        // Give the slot back so HR can retry, and say it was the MAIL that failed.
+        weekly_hours::release_employee_notify(&state.db, row.id).await?;
+        tracing::warn!(user_id = %row.user_id, week = %row.week_start, "shortfall email failed: {e}");
+        return Err(AppError::BadRequest(format!(
+            "the email could not be sent: {e}"
+        )));
+    }
 
-    weekly_hours::mark_notified(&state.db, row.id).await?;
+    // Audit the REPORT row (it identifies both the employee and the week).
     audit::log(
         &state.db,
         user.id,
         "weekly_hours.notify",
-        "user",
-        Some(row.user_id),
+        "weekly_hours_report",
+        Some(row.id),
     )
     .await;
 
     Ok(Json(json!({
         "ok": true,
         "user_id": row.user_id,
-        "notified_at": Utc::now(),
+        "notified_at": claimed_at,
     })))
 }
 

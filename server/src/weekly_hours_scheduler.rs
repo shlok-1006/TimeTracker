@@ -18,6 +18,17 @@ use crate::weekly_hours_service;
 const RUN_HOUR_UTC: u32 = 4;
 
 pub async fn run(state: AppState) {
+    // Catch-up: if the last completed week was never computed (the process was down at the Monday run,
+    // or that run failed), compute it now instead of leaving the Weekly Report empty until next week.
+    let (week_start, _) = weekly_hours_service::previous_week(Utc::now().date_naive());
+    match crate::db::weekly_hours::week_has_rows(&state.db, week_start).await {
+        Ok(false) => {
+            tracing::info!(%week_start, "weekly hours: last week not computed yet — catching up");
+            run_once(&state).await;
+        }
+        Ok(true) => {}
+        Err(e) => tracing::warn!("weekly hours: catch-up check failed: {e}"),
+    }
     loop {
         let wait = duration_until_next_run(Utc::now());
         tracing::info!(
@@ -55,7 +66,6 @@ async fn run_once(state: &AppState) {
             %week_end,
             evaluated = s.evaluated,
             shortfalls = s.shortfalls,
-            warned = s.warned,
             "weekly hours check complete"
         ),
         Err(e) => tracing::warn!(%week_start, %week_end, "weekly hours check failed: {e}"),

@@ -6,13 +6,14 @@
 //! holidays lower the requirement (2 leave days ⇒ 24h expected).
 //!
 //! This module holds the pure calculation (`required_seconds` / `evaluate`) and
-//! the weekly batch (`run_for_week`) that persists results and warns HR + the
-//! employee's project manager about any shortfall. The Monday-morning scheduler
-//! drives it for the week that just ended.
+//! the weekly batch (`run_for_week`) that recomputes the week's attendance and
+//! persists each employee's result. It sends NO email: HR/PM review shortfalls in
+//! the Weekly Report and email employees on demand (routes::weekly_hours). The
+//! Monday-morning scheduler drives it for the week that just ended.
 
 use chrono::{Datelike, Duration, NaiveDate};
 
-use crate::db::{users, weekly_hours};
+use crate::db::weekly_hours;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -69,13 +70,11 @@ pub fn previous_week(today: NaiveDate) -> (NaiveDate, NaiveDate) {
 pub struct RunSummary {
     pub evaluated: usize,
     pub shortfalls: usize,
-    pub warned: usize,
 }
 
 /// Run the weekly compliance check for `[week_start, week_end]` across every
-/// employee: ensure the attendance rollup covers the week, compute each
-/// employee's hours, persist the result, and warn HR + the employee's PM about
-/// any shortfall (at most once per week). Returns per-run tallies.
+/// employee: recompute the week's attendance rollup, compute each employee's
+/// hours and persist the result (idempotent upsert). Returns per-run tallies.
 pub async fn run_for_week(
     state: &AppState,
     week_start: NaiveDate,
@@ -83,16 +82,16 @@ pub async fn run_for_week(
 ) -> Result<RunSummary, AppError> {
     let pool = &state.db;
 
-    // Make sure every employee has a rolled-up row for each day of the week, so
-    // a no-show (no intervals at all) still produces 'absent' days and counts
-    // toward the requirement rather than silently dropping out. Idempotent.
-    let employee_ids = users::employee_ids(pool).await?;
-    for id in &employee_ids {
-        if let Err(e) =
-            crate::attendance_service::ensure_range(pool, *id, week_start, week_end).await
-        {
-            tracing::warn!(user_id = %id, "weekly hours: attendance ensure failed: {e}");
+    // RECOMPUTE every day of the week for everyone (the same call the nightly job
+    // makes), not just fill missing days: a day first rolled up while it was still
+    // "today" (e.g. Sunday afternoon) would otherwise be kept partial. No-shows still
+    // get 'absent' days, and HR overrides are preserved by rollup_day. Idempotent.
+    let mut day = week_start;
+    while day <= week_end {
+        if let Err(e) = crate::attendance_service::rollup_all_for_day(pool, day).await {
+            tracing::warn!(%day, "weekly hours: attendance rollup failed: {e}");
         }
+        day = day.succ_opt().unwrap_or(week_end + Duration::days(1));
     }
 
     // Compute + persist each employee's result. This job NO LONGER emails anyone:

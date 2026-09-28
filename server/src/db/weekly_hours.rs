@@ -33,10 +33,11 @@ pub struct ShortfallRow {
     pub notified_at: Option<DateTime<Utc>>,
 }
 
-/// The non-compliant employees for `week_start`, newest-shortfall first. Scope
-/// mirrors the leave/attendance endpoints: `manager_id = None` for HR (everyone),
-/// `Some(pm)` restricts to that PM's team (via `user_managers`). Deactivated
-/// users are excluded — HR shouldn't chase people who have left.
+/// The non-compliant employees for `week_start`, biggest shortfall first. `manager_id = None` for HR
+/// (everyone); `Some(pm)` restricts to the people that PM is responsible for — their direct reports
+/// (`user_managers`) OR members of a team they're assigned to (`team_pms` + `user_teams`), so a PM set up
+/// only through team assignment doesn't see an empty report. Deactivated users are excluded.
+/// `notified_at` in the result is the EMPLOYEE-email stamp (`employee_notified_at`, migration 0049).
 pub async fn list_shortfalls(
     pool: &PgPool,
     week_start: NaiveDate,
@@ -46,7 +47,8 @@ pub async fn list_shortfalls(
         r#"
         SELECT wh.id, wh.user_id, u.name AS "name!", u.email AS "email!",
                wh.week_start, wh.week_end, wh.working_days,
-               wh.required_seconds, wh.worked_seconds, wh.shortfall_seconds, wh.notified_at
+               wh.required_seconds, wh.worked_seconds, wh.shortfall_seconds,
+               wh.employee_notified_at AS notified_at
         FROM weekly_hours_reports wh
         JOIN users u ON u.id = wh.user_id
         WHERE wh.week_start = $1
@@ -54,7 +56,10 @@ pub async fn list_shortfalls(
           AND u.deactivated_at IS NULL
           AND ($2::uuid IS NULL
                OR EXISTS (SELECT 1 FROM user_managers um
-                          WHERE um.user_id = u.id AND um.manager_id = $2))
+                          WHERE um.user_id = u.id AND um.manager_id = $2)
+               OR EXISTS (SELECT 1 FROM user_teams ut
+                            JOIN team_pms tp ON tp.team_id = ut.team_id
+                          WHERE ut.user_id = u.id AND tp.pm_user_id = $2))
         ORDER BY wh.shortfall_seconds DESC, u.name
         "#,
         week_start,
@@ -81,9 +86,9 @@ pub async fn list_shortfalls(
         .collect())
 }
 
-/// One non-compliant report for (user, week), scoped like [`list_shortfalls`] —
-/// so a PM can only fetch (and therefore email) their own team. `None` when the
-/// row doesn't exist, is compliant, or is out of the caller's scope.
+/// One non-compliant report for (user, week), scoped like [`list_shortfalls`] — so a PM can only fetch
+/// (and therefore email) their own people. `None` when the row doesn't exist, is compliant, the user is
+/// deactivated, or it's out of the caller's scope.
 pub async fn find_shortfall(
     pool: &PgPool,
     user_id: Uuid,
@@ -94,15 +99,20 @@ pub async fn find_shortfall(
         r#"
         SELECT wh.id, wh.user_id, u.name AS "name!", u.email AS "email!",
                wh.week_start, wh.week_end, wh.working_days,
-               wh.required_seconds, wh.worked_seconds, wh.shortfall_seconds, wh.notified_at
+               wh.required_seconds, wh.worked_seconds, wh.shortfall_seconds,
+               wh.employee_notified_at AS notified_at
         FROM weekly_hours_reports wh
         JOIN users u ON u.id = wh.user_id
         WHERE wh.user_id = $1
           AND wh.week_start = $2
           AND wh.compliant = FALSE
+          AND u.deactivated_at IS NULL
           AND ($3::uuid IS NULL
                OR EXISTS (SELECT 1 FROM user_managers um
-                          WHERE um.user_id = u.id AND um.manager_id = $3))
+                          WHERE um.user_id = u.id AND um.manager_id = $3)
+               OR EXISTS (SELECT 1 FROM user_teams ut
+                            JOIN team_pms tp ON tp.team_id = ut.team_id
+                          WHERE ut.user_id = u.id AND tp.pm_user_id = $3))
         "#,
         user_id,
         week_start,
@@ -233,13 +243,44 @@ pub async fn upsert(
     })
 }
 
-/// Stamp `notified_at = now()` once the shortfall warning has been sent.
-pub async fn mark_notified(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
+/// Atomically CLAIM the employee-email slot for a report: stamps `employee_notified_at` only if it was
+/// still NULL, and returns the stamp. `None` means someone else already sent it (a second HR user, the
+/// pop-up and the tab open at once, a retry) — the caller must not send a second email.
+pub async fn claim_employee_notify(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<DateTime<Utc>>, AppError> {
+    let row = sqlx::query!(
+        r#"UPDATE weekly_hours_reports
+              SET employee_notified_at = now(), updated_at = now()
+            WHERE id = $1 AND employee_notified_at IS NULL
+        RETURNING employee_notified_at AS "at!""#,
+        id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.at))
+}
+
+/// Undo a claim when the email then failed to send, so HR can retry.
+pub async fn release_employee_notify(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
     sqlx::query!(
-        "UPDATE weekly_hours_reports SET notified_at = now(), updated_at = now() WHERE id = $1",
+        "UPDATE weekly_hours_reports SET employee_notified_at = NULL, updated_at = now() WHERE id = $1",
         id
     )
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Whether the weekly batch has computed `week_start` at all (any row, compliant or not). Lets the UI tell
+/// "nobody fell short" apart from "not computed yet", and lets the scheduler catch up a missed Monday.
+pub async fn week_has_rows(pool: &PgPool, week_start: NaiveDate) -> Result<bool, AppError> {
+    let row = sqlx::query!(
+        r#"SELECT EXISTS (SELECT 1 FROM weekly_hours_reports WHERE week_start = $1) AS "exists!""#,
+        week_start
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.exists)
 }

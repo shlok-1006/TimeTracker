@@ -68,10 +68,7 @@ pub fn set_break(app: AppHandle, state: State<'_, DesktopState>, on: bool) -> Re
 /// Silence break reminders for the CURRENT break (the "Don't remind me" action).
 /// The next break re-enables them.
 #[tauri::command]
-pub fn mute_break_reminders(
-    app: AppHandle,
-    state: State<'_, DesktopState>,
-) -> Result<(), String> {
+pub fn mute_break_reminders(app: AppHandle, state: State<'_, DesktopState>) -> Result<(), String> {
     state.break_reminders_muted.store(true, Ordering::Relaxed);
     // Muting from inside the reminder window should also take it off screen.
     reminder::close(&app, "break reminders muted");

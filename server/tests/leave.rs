@@ -143,9 +143,17 @@ async fn category_defaults_and_manual_overrides() {
     let year = 2020;
 
     // A leave type with distinct per-category defaults.
-    let lt = leave::create_type(&pool, &format!("cat-{tag}"), true, 20.0, 10.0, 5.0)
-        .await
-        .unwrap();
+    let lt = leave::create_type(
+        &pool,
+        &format!("cat-{tag}"),
+        true,
+        20.0,
+        10.0,
+        5.0,
+        &leave::TypeRules::default(),
+    )
+    .await
+    .unwrap();
 
     let emp = users::create(
         &pool,

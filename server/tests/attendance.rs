@@ -93,9 +93,17 @@ async fn attendance_rollup_derives_all_statuses() {
     assert!(present.first_in_utc.is_some() && present.last_out_utc.is_some());
 
     // LEAVE: an approved leave request covering Tuesday.
-    let lt = leave::create_type(&pool, &format!("Annual-{tag}"), true, 20.0, 0.0, 0.0)
-        .await
-        .unwrap();
+    let lt = leave::create_type(
+        &pool,
+        &format!("Annual-{tag}"),
+        true,
+        20.0,
+        0.0,
+        0.0,
+        &leave::TypeRules::default(),
+    )
+    .await
+    .unwrap();
     let req = leave::create_request(&pool, emp.id, lt.id, tuesday, tuesday, 1.0, "vacation")
         .await
         .unwrap();

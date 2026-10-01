@@ -160,23 +160,26 @@ pub async fn me_leave_requests() -> Result<Value, String> {
 }
 
 /// `POST /me/leave/requests` — apply for leave. Dates are `YYYY-MM-DD`.
+/// `days` is optional: supply it for a partial/half-day leave (0.5, 1.5, …);
+/// omit it to let the server count whole business days in the range.
 #[tauri::command]
 pub async fn request_leave(
     leave_type_id: String,
     start_date: String,
     end_date: String,
     reason: String,
+    days: Option<f64>,
 ) -> Result<Value, String> {
-    http::post_json(
-        "/me/leave/requests",
-        serde_json::json!({
-            "leave_type_id": leave_type_id,
-            "start_date": start_date,
-            "end_date": end_date,
-            "reason": reason,
-        }),
-    )
-    .await
+    let mut body = serde_json::json!({
+        "leave_type_id": leave_type_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "reason": reason,
+    });
+    if let Some(d) = days {
+        body["days"] = serde_json::json!(d);
+    }
+    http::post_json("/me/leave/requests", body).await
 }
 
 /// `POST /me/leave/requests/:id/cancel` — cancel a still-pending request.

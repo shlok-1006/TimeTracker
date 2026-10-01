@@ -56,6 +56,7 @@ async fn manual_task_crud_roundtrip() {
         "Cover all endpoints",
         7,
         Some(due),
+        &[],
     )
     .await
     .unwrap();
@@ -79,6 +80,7 @@ async fn manual_task_crud_roundtrip() {
         Some("Write & publish API docs"),
         None,
         Some(9),
+        None,
         None,
     )
     .await

@@ -61,6 +61,10 @@ struct NewLeave {
     end_date: NaiveDate,
     #[serde(default)]
     reason: String,
+    /// Optional explicit duration for a partial (half-day) leave, e.g. 0.5, 1.5.
+    /// When omitted, the server counts whole business days in the range.
+    #[serde(default)]
+    days: Option<f64>,
 }
 
 async fn request_leave(
@@ -75,6 +79,7 @@ async fn request_leave(
         body.start_date,
         body.end_date,
         &body.reason,
+        body.days,
     )
     .await?;
     audit::log(
@@ -173,7 +178,26 @@ async fn decide_request(
             "request is already {current}"
         )));
     }
-    if !leave::decide(&state.db, id, status, approver.id).await? {
+    let decided = if status == "approved" {
+        match leave_service::approve(&state.db, id, approver.id).await {
+            Ok(d) => d,
+            Err(e) => {
+                // A refused approval is a decision too: keep it on the audit trail.
+                audit::log(
+                    &state.db,
+                    approver.id,
+                    "leave.approve_refused",
+                    "leave_request",
+                    Some(id),
+                )
+                .await;
+                return Err(e);
+            }
+        }
+    } else {
+        leave::decide(&state.db, id, status, approver.id).await?
+    };
+    if !decided {
         return Err(AppError::BadRequest("request is no longer pending".into()));
     }
     audit::log(
@@ -217,9 +241,61 @@ struct NewType {
     default_days_contractor: f64,
     #[serde(default)]
     default_days_intern: f64,
+    /// Eligibility (migration 0050). Omitted = no rule (everyone, from day one, working days).
+    #[serde(default)]
+    eligible_gender: Option<String>,
+    #[serde(default)]
+    min_tenure_months: Option<i32>,
+    #[serde(default)]
+    day_basis: Option<String>,
 }
 fn default_true() -> bool {
     true
+}
+
+/// Deserialize a field so that an explicit JSON `null` is `Some(None)` and an omitted field (via
+/// `#[serde(default)]`) is `None` — "set to everyone" vs "leave unchanged".
+fn explicit_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(de)?))
+}
+
+/// Validate the eligibility fields of a create/update body into [`leave::TypeRules`].
+/// `eligible_gender`: "male" | "female" | "" / "any" (= everyone).
+fn parse_rules(
+    gender: Option<&str>,
+    tenure: Option<i32>,
+    basis: Option<&str>,
+) -> Result<leave::TypeRules, AppError> {
+    let eligible_gender = match gender.map(|g| g.trim().to_ascii_lowercase()) {
+        None => None,
+        Some(g) if g.is_empty() || g == "any" => None,
+        Some(g) if g == "male" || g == "female" => Some(g),
+        Some(_) => {
+            return Err(AppError::BadRequest(
+                "eligible_gender must be male, female or any".into(),
+            ))
+        }
+    };
+    let min_tenure_months = tenure.unwrap_or(0);
+    if !(0..=600).contains(&min_tenure_months) {
+        return Err(AppError::BadRequest(
+            "min_tenure_months must be between 0 and 600".into(),
+        ));
+    }
+    let day_basis = basis.unwrap_or("working").trim().to_ascii_lowercase();
+    if day_basis != "working" && day_basis != "calendar" {
+        return Err(AppError::BadRequest(
+            "day_basis must be working or calendar".into(),
+        ));
+    }
+    Ok(leave::TypeRules {
+        eligible_gender,
+        min_tenure_months,
+        day_basis,
+    })
 }
 
 async fn create_type(
@@ -230,6 +306,11 @@ async fn create_type(
     if body.name.trim().is_empty() {
         return Err(AppError::BadRequest("name is required".into()));
     }
+    let rules = parse_rules(
+        body.eligible_gender.as_deref(),
+        body.min_tenure_months,
+        body.day_basis.as_deref(),
+    )?;
     let t = leave::create_type(
         &state.db,
         body.name.trim(),
@@ -237,6 +318,7 @@ async fn create_type(
         body.default_days,
         body.default_days_contractor,
         body.default_days_intern,
+        &rules,
     )
     .await?;
     audit::log(
@@ -260,16 +342,52 @@ struct UpdateType {
     default_days_contractor: f64,
     #[serde(default)]
     default_days_intern: f64,
+    /// Eligibility (migration 0050). Send ALL THREE to change the rule; omit all three to keep it — an
+    /// older client that only edits days must not wipe a paternity/maternity rule. `eligible_gender` may be
+    /// `null`, `""` or `"any"` for everyone (an explicit null counts as "sent", unlike an omitted field).
+    #[serde(default, deserialize_with = "explicit_option")]
+    eligible_gender: Option<Option<String>>,
+    #[serde(default)]
+    min_tenure_months: Option<i32>,
+    #[serde(default)]
+    day_basis: Option<String>,
 }
 
 /// `PATCH /admin/leave/types/:id` (HR) — update a type's paid flag and its
-/// per-category default allotments.
+/// per-category default allotments (and, optionally, its eligibility rule).
 async fn update_type(
     State(state): State<AppState>,
     RequireHr(hr): RequireHr,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateType>,
 ) -> Result<Json<Value>, AppError> {
+    let given = [
+        body.eligible_gender.is_some(), // Some(None) = explicit null
+        body.min_tenure_months.is_some(),
+        body.day_basis.is_some(),
+    ];
+    let any_rule = given.iter().any(|g| *g);
+    if any_rule && !given.iter().all(|g| *g) {
+        // A partial rule would silently reset the missing fields to "everyone / day one / working".
+        return Err(AppError::BadRequest(
+            "send eligible_gender, min_tenure_months and day_basis together (or none of them)"
+                .into(),
+        ));
+    }
+    let rules = if any_rule {
+        Some(parse_rules(
+            Some(
+                body.eligible_gender
+                    .as_ref()
+                    .and_then(|g| g.as_deref())
+                    .unwrap_or(""),
+            ),
+            body.min_tenure_months,
+            body.day_basis.as_deref(),
+        )?)
+    } else {
+        None
+    };
     let t = leave::update_type(
         &state.db,
         id,
@@ -277,6 +395,7 @@ async fn update_type(
         body.default_days,
         body.default_days_contractor,
         body.default_days_intern,
+        rules.as_ref(),
     )
     .await?
     .ok_or(AppError::NotFound)?;

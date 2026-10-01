@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM leave_requests\n              WHERE user_id = $1 AND status IN ('pending', 'approved')\n                AND start_date <= $3 AND end_date >= $2\n           ) AS \"overlap!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "overlap!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "291be4b4bb0cbcaaf66c1e45b5a00bf254e0c4a398d641ad08e4175d08dff7d6"
+}

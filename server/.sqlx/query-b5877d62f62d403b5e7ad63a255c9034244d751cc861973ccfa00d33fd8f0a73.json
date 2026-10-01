@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, name, paid, default_days, default_days_contractor, default_days_intern\n         FROM leave_types ORDER BY name",
+  "query": "SELECT id, name, paid, default_days, default_days_contractor, default_days_intern,\n                eligible_gender, min_tenure_months, day_basis\n         FROM leave_types ORDER BY name",
   "describe": {
     "columns": [
       {
@@ -32,6 +32,21 @@
         "ordinal": 5,
         "name": "default_days_intern",
         "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "eligible_gender",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "min_tenure_months",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "day_basis",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -43,8 +58,11 @@
       false,
       false,
       false,
+      false,
+      true,
+      false,
       false
     ]
   },
-  "hash": "c3c9e0f12195c9febc8df3eb491775e0afdb2397b580977d0ba84eaadb6f294b"
+  "hash": "b5877d62f62d403b5e7ad63a255c9034244d751cc861973ccfa00d33fd8f0a73"
 }

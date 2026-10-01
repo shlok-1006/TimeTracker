@@ -50,7 +50,7 @@ async fn open_manual_tasks_appear_in_context() {
     .await
     .unwrap();
 
-    let open = manual_tasks::create(&pool, emp.id, pm.id, "Open task", "do this", 5, None)
+    let open = manual_tasks::create(&pool, emp.id, pm.id, "Open task", "do this", 5, None, &[])
         .await
         .unwrap();
     let done = manual_tasks::create(
@@ -61,6 +61,7 @@ async fn open_manual_tasks_appear_in_context() {
         "already finished",
         5,
         None,
+        &[],
     )
     .await
     .unwrap();

@@ -1,0 +1,96 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            lt.id                                   AS leave_type_id,\n            lt.name                                 AS leave_type_name,\n            lt.paid                                 AS paid,\n            lt.day_basis                            AS day_basis,\n            lt.eligible_gender                      AS eligible_gender,\n            lt.min_tenure_months                    AS min_tenure_months,\n            CASE\n                WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)\n                    THEN lt.default_days\n                WHEN u.employment_type = 'contractor'::employment_type\n                    THEN lt.default_days_contractor\n                WHEN u.employment_type = 'intern'::employment_type\n                    THEN lt.default_days_intern\n                ELSE lt.default_days\n            END                                     AS \"default_allotted!\",\n            la.allotted_days                        AS \"override_days?\",\n            (\n                lt.eligible_gender IS NULL\n                OR (lt.eligible_gender = 'male'\n                    AND lower(btrim(COALESCE(ep.gender, ''), E' \\t\\r\\n' || chr(160))) IN ('male', 'm', 'man'))\n                OR (lt.eligible_gender = 'female'\n                    AND lower(btrim(COALESCE(ep.gender, ''), E' \\t\\r\\n' || chr(160))) IN ('female', 'f', 'woman'))\n            )                                       AS \"gender_ok!\",\n            (\n                lt.min_tenure_months = 0\n                OR (u.joined_on IS NOT NULL\n                    AND (u.joined_on + make_interval(months => lt.min_tenure_months))::date <= $3)\n            )                                       AS \"tenure_ok!\",\n            (u.joined_on + make_interval(months => lt.min_tenure_months))::date AS \"eligible_from?\",\n            (u.joined_on IS NOT NULL)               AS \"has_joined_on!\",\n            COALESCE((\n                SELECT SUM(lr.days) FROM leave_requests lr\n                WHERE lr.user_id = $1 AND lr.leave_type_id = lt.id\n                  AND lr.status = 'approved'\n                  AND EXTRACT(YEAR FROM lr.start_date)::int = $2\n            ), 0)                                   AS \"used!\"\n        FROM leave_types lt\n        JOIN users u ON u.id = $1\n        LEFT JOIN employee_profiles ep ON ep.user_id = u.id\n        LEFT JOIN leave_allocations la\n               ON la.leave_type_id = lt.id AND la.user_id = $1 AND la.year = $2\n        ORDER BY lt.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "leave_type_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "leave_type_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "paid",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "day_basis",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "eligible_gender",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "min_tenure_months",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "default_allotted!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "override_days?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 8,
+        "name": "gender_ok!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "tenure_ok!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "eligible_from?",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 11,
+        "name": "has_joined_on!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "used!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "53c716ce0cce4602630a9ccfdae7f45129f1e726dcc08397043d93e1472c6d29"
+}

@@ -74,6 +74,10 @@ fn refusal(bal: &leave::Balance, days: f64) -> Option<String> {
 /// Eligibility (gender / tenure, migration 0050) is judged on the leave's START date, so someone who reaches
 /// one year of service next month can already apply for leave that starts after that date. Then we check
 /// the remaining balance and persist.
+///
+/// `half_period` (migration 0051) records WHICH half a half-day covers. It stays optional: the desktop app
+/// and employee-web book half days without it, and those must keep working unchanged.
+#[allow(clippy::too_many_arguments)]
 pub async fn submit_request(
     pool: &PgPool,
     user_id: Uuid,
@@ -82,7 +86,9 @@ pub async fn submit_request(
     end: NaiveDate,
     reason: &str,
     requested_days: Option<f64>,
+    half_period: Option<&str>,
 ) -> Result<(Uuid, f64), AppError> {
+    let half_period = normalize_half_period(half_period)?;
     if end < start {
         return Err(AppError::BadRequest("end_date is before start_date".into()));
     }
@@ -146,8 +152,50 @@ pub async fn submit_request(
         return Err(AppError::BadRequest(why));
     }
 
-    let id = leave::create_request(pool, user_id, leave_type_id, start, end, days, reason).await?;
+    // A half period only describes a single half-day. Checked here as well as by the DB constraint
+    // (migration 0051) so the caller gets a sentence explaining the refusal rather than a 500 from a
+    // constraint violation. `days` is already rounded to an exact 0.5 multiple above.
+    if half_period.is_some() {
+        if days != 0.5 {
+            return Err(AppError::BadRequest(format!(
+                "first/second half applies to a half-day leave — this request is {days} day(s)"
+            )));
+        }
+        if start != end {
+            return Err(AppError::BadRequest(
+                "first/second half applies to a single day — pick the same start and end date"
+                    .into(),
+            ));
+        }
+    }
+
+    let id = leave::create_request(
+        pool,
+        user_id,
+        leave_type_id,
+        start,
+        end,
+        days,
+        reason,
+        half_period,
+    )
+    .await?;
     Ok((id, days))
+}
+
+/// Accept only the two values the column allows, case-insensitively, treating blank as absent.
+/// Returns the canonical lowercase form to store.
+fn normalize_half_period(raw: Option<&str>) -> Result<Option<&'static str>, AppError> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) => match s.to_ascii_lowercase().as_str() {
+            "first" => Ok(Some("first")),
+            "second" => Ok(Some("second")),
+            other => Err(AppError::BadRequest(format!(
+                "half_period must be \"first\" or \"second\", got {other:?}"
+            ))),
+        },
+    }
 }
 
 /// Approve a pending request, re-checking it under a per-person lock: the balance may have changed since it

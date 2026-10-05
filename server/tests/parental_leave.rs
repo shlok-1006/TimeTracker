@@ -206,6 +206,7 @@ async fn parental_eligibility_day_basis_and_approval() {
         d(2031, 8, 26),
         "",
         None,
+        None,
     )
     .await;
     assert!(
@@ -220,6 +221,7 @@ async fn parental_eligibility_day_basis_and_approval() {
         d(2031, 9, 2),
         "",
         None,
+        None,
     )
     .await
     .expect("starts on the 1-year mark");
@@ -227,7 +229,7 @@ async fn parental_eligibility_day_basis_and_approval() {
 
     // ── calendar basis: a Mon..Sun week is 7 days of maternity; 180 fits, 181 doesn't; no fractions ──
     let (_, wk) =
-        leave_service::submit_request(&pool, veteran_f, mat.id, mon, d(2031, 3, 9), "", None)
+        leave_service::submit_request(&pool, veteran_f, mat.id, mon, d(2031, 3, 9), "", None, None)
             .await
             .unwrap();
     assert_eq!(wk, 7.0, "weekends inside maternity count");
@@ -240,6 +242,7 @@ async fn parental_eligibility_day_basis_and_approval() {
         start,
         start + chrono::Duration::days(179),
         "",
+        None,
         None,
     )
     .await
@@ -255,7 +258,8 @@ async fn parental_eligibility_day_basis_and_approval() {
                 start,
                 start + chrono::Duration::days(180),
                 "",
-                None
+                None,
+                None,
             )
             .await
         )
@@ -271,7 +275,8 @@ async fn parental_eligibility_day_basis_and_approval() {
                 d(2031, 6, 2),
                 d(2031, 6, 8),
                 "",
-                Some(6.5)
+                Some(6.5),
+                None,
             )
             .await
         )
@@ -281,7 +286,7 @@ async fn parental_eligibility_day_basis_and_approval() {
 
     // ── half-days: 0.5 ok, 0.25 refused, more than the span refused, and AT MOST half a day shaved ──
     let (_, half) =
-        leave_service::submit_request(&pool, veteran_m, pat.id, mon, mon, "", Some(0.5))
+        leave_service::submit_request(&pool, veteran_m, pat.id, mon, mon, "", Some(0.5), None)
             .await
             .unwrap();
     assert_eq!(half, 0.5);
@@ -293,7 +298,8 @@ async fn parental_eligibility_day_basis_and_approval() {
             d(2031, 3, 4),
             d(2031, 3, 4),
             "",
-            Some(0.25)
+            Some(0.25),
+            None,
         )
         .await
     )
@@ -306,7 +312,8 @@ async fn parental_eligibility_day_basis_and_approval() {
             d(2031, 3, 4),
             d(2031, 3, 4),
             "",
-            Some(1.5)
+            Some(1.5),
+            None,
         )
         .await
     )
@@ -314,14 +321,23 @@ async fn parental_eligibility_day_basis_and_approval() {
     let wk2 = (d(2031, 3, 10), d(2031, 3, 14)); // Mon..Fri = 5 working days
     assert!(
         err_text(
-            leave_service::submit_request(&pool, veteran_m, pat.id, wk2.0, wk2.1, "", Some(0.5))
-                .await
+            leave_service::submit_request(
+                &pool,
+                veteran_m,
+                pat.id,
+                wk2.0,
+                wk2.1,
+                "",
+                Some(0.5),
+                None
+            )
+            .await
         )
         .contains("can be booked as"),
         "a week off can't be charged as half a day"
     );
     let (_, four_half) =
-        leave_service::submit_request(&pool, veteran_m, pat.id, wk2.0, wk2.1, "", Some(4.5))
+        leave_service::submit_request(&pool, veteran_m, pat.id, wk2.0, wk2.1, "", Some(4.5), None)
             .await
             .expect("5-day range booked as 4.5");
     assert_eq!(four_half, 4.5);
@@ -336,7 +352,8 @@ async fn parental_eligibility_day_basis_and_approval() {
                 d(2031, 3, 12),
                 d(2031, 3, 12),
                 "",
-                None
+                None,
+                None,
             )
             .await
         )
@@ -350,7 +367,7 @@ async fn parental_eligibility_day_basis_and_approval() {
         .unwrap();
     let b = bal(&pool, newbie_m, mat.id, mon).await;
     assert!(b.is_override && b.allotted_days == 3.0);
-    leave_service::submit_request(&pool, newbie_m, mat.id, mon, mon, "", None)
+    leave_service::submit_request(&pool, newbie_m, mat.id, mon, mon, "", None, None)
         .await
         .expect("granted by HR despite the rule");
     let adjusted = leave::adjust_allocation(&pool, veteran_m, mat.id, 2031, 1.0)
@@ -373,6 +390,7 @@ async fn parental_eligibility_day_basis_and_approval() {
         d(2031, 4, 14),
         "",
         Some(6.0),
+        None,
     )
     .await
     .unwrap();
@@ -384,6 +402,7 @@ async fn parental_eligibility_day_basis_and_approval() {
         d(2031, 5, 12),
         "",
         Some(6.0),
+        None,
     )
     .await
     .unwrap();

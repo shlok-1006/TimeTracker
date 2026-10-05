@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO leave_requests (user_id, leave_type_id, start_date, end_date, days, reason)\n         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+  "query": "INSERT INTO leave_requests (user_id, leave_type_id, start_date, end_date, days, reason, half_period)\n         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,7 @@
         "Date",
         "Date",
         "Float8",
+        "Text",
         "Text"
       ]
     },
@@ -23,5 +24,5 @@
       false
     ]
   },
-  "hash": "ae0dedd6bac151f75a20f4df1fe818792b14d7b907a9b62f01c3398797c66b1a"
+  "hash": "a507398764c17eed3b4e67a33c4855d3f508b8433c86f4aaad198cc7a9ffb079"
 }

@@ -65,6 +65,10 @@ struct NewLeave {
     /// When omitted, the server counts whole business days in the range.
     #[serde(default)]
     days: Option<f64>,
+    /// Which half a half-day covers: `"first"` | `"second"` (migration 0051). Only valid on a
+    /// single-day request of exactly 0.5 days. Omitted by clients that predate the field.
+    #[serde(default)]
+    half_period: Option<String>,
 }
 
 async fn request_leave(
@@ -80,6 +84,7 @@ async fn request_leave(
         body.end_date,
         &body.reason,
         body.days,
+        body.half_period.as_deref(),
     )
     .await?;
     audit::log(

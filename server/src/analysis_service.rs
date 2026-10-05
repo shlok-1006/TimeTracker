@@ -27,11 +27,15 @@ use crate::vision_analyzer::{self, AnalysisOutcome};
 /// Cap on a manual task's description in the analyzer context.
 const EXCERPT_CHARS: usize = 200;
 
-/// Vision calls in flight at once. The RUH bridge caps at 3 concurrent calls
-/// (FOR_SHLOK_VISION_BRIDGE.md); one shot per call keeps one-image→one-verdict,
-/// so a 20-shot run finishes ~3× sooner than the old serial loop. DB writes
-/// stay on the orchestrating task — only fetch+analyze fan out.
-const ANALYZE_CONCURRENCY: usize = 3;
+/// Vision calls in flight at once. The RUH bridge runs 3 calls at once for the
+/// WHOLE VM — shared with the HR bot, recruitment and Knowledge — and its owner's
+/// deploy guide (5 Oct 2026) asks each system for at most 2. At 3 we filled the
+/// bridge during every analysis run, so anything else got 429 "bridge busy";
+/// 2 leaves a slot free. One shot per call keeps one-image→one-verdict, and a
+/// 20-shot run is still ~2× faster than the old serial loop. A 429 is retried
+/// with backoff in claude_provider. DB writes stay on the orchestrating task —
+/// only fetch+analyze fan out.
+const ANALYZE_CONCURRENCY: usize = 2;
 
 fn excerpt(s: &str) -> String {
     if s.chars().count() <= EXCERPT_CHARS {

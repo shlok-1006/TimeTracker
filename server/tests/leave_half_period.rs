@@ -183,6 +183,34 @@ async fn half_period_is_scoped_to_a_single_half_day() {
     assert_eq!(got(first_id), Some("first".to_string()));
     assert_eq!(got(legacy_id), None, "a legacy half day reads back as None");
 
+    // ---- and to what approvers see: the pending list and the leave register ----
+    let pending = leave::list_pending(&pool, None).await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .find(|r| r.id == first_id)
+            .expect("first-half request pending")
+            .half_period
+            .as_deref(),
+        Some("first"),
+        "the approver's pending list must say which half"
+    );
+    let register = leave::list_in_range(&pool, mon, fri, None).await.unwrap();
+    let in_register = |id: Uuid| {
+        register
+            .iter()
+            .find(|r| r.id == id)
+            .unwrap_or_else(|| panic!("request {id} missing from the register"))
+            .half_period
+            .clone()
+    };
+    assert_eq!(
+        in_register(first_id),
+        Some("first".to_string()),
+        "the leave register must say which half"
+    );
+    assert_eq!(in_register(legacy_id), None);
+
     // A blank string is treated as absent, not stored as a value.
     let blank_day = d(2032, 3, 22);
     let (blank_id, _) = leave_service::submit_request(

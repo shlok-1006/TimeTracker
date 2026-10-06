@@ -715,6 +715,9 @@ pub struct CalendarLeave {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
     pub days: f64,
+    /// Which half a half-day covers (see [`LeaveRequest::half_period`]), so the register can show
+    /// a morning absence apart from an afternoon one.
+    pub half_period: Option<String>,
     pub status: String,
     pub reason: String,
 }
@@ -735,7 +738,7 @@ pub async fn list_in_range(
     let rows = sqlx::query!(
         r#"SELECT lr.id, lr.user_id, u.name AS employee_name,
                   lt.name AS leave_type_name, lr.start_date, lr.end_date, lr.days,
-                  lr.status, lr.reason
+                  lr.half_period, lr.status, lr.reason
            FROM leave_requests lr
            JOIN users u        ON u.id = lr.user_id
            JOIN leave_types lt ON lt.id = lr.leave_type_id
@@ -761,6 +764,7 @@ pub async fn list_in_range(
             start_date: r.start_date,
             end_date: r.end_date,
             days: r.days,
+            half_period: r.half_period,
             status: r.status,
             reason: r.reason,
         })

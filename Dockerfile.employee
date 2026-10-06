@@ -40,13 +40,23 @@ RUN pnpm --filter employee-web build
 ############################
 FROM node:20-bookworm-slim AS runner
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+# `next start` re-reads next.config.mjs, so basePath must be set at RUNTIME too,
+# not only for the build — without it the app serves at / and /employee/* 404s.
+ARG NEXT_BASE_PATH=/employee
+ENV NEXT_BASE_PATH=$NEXT_BASE_PATH
 
-# Bring the built app + its pnpm node_modules symlink farm across intact.
+# Bring the built app + its pnpm node_modules symlink farm across intact. It stays
+# owned by root and read-only to the app; only Next's runtime cache is writable.
 COPY --from=builder /app /app
+RUN mkdir -p /app/apps/employee-web/.next/cache && chown -R node:node /app/apps/employee-web/.next/cache
 
+# Never run as root: a Next.js RCE once ran a cryptominer as root in this
+# container (found Oct 2026). `node` is the base image's unprivileged user.
+USER node
+WORKDIR /app/apps/employee-web
 EXPOSE 3002
-# `next start` serves the production build on :3002 (see employee-web package.json).
-CMD ["pnpm", "--filter", "employee-web", "start"]
+# `next start` on :3002 (as in employee-web package.json), run directly — no pnpm or
+# corepack download at runtime, and signals reach Node.
+CMD ["node", "node_modules/next/dist/bin/next", "start", "-p", "3002"]

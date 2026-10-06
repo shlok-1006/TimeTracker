@@ -42,6 +42,10 @@ FROM node:20-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+# `next start` re-reads next.config.mjs, so basePath must be set at RUNTIME too,
+# not only for the build — without it the app serves at / and /employee/* 404s.
+ARG NEXT_BASE_PATH=/employee
+ENV NEXT_BASE_PATH=$NEXT_BASE_PATH
 
 # Bring the built app + its pnpm node_modules symlink farm across intact. It stays
 # owned by root and read-only to the app; only Next's runtime cache is writable.

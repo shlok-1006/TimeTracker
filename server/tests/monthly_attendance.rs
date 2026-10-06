@@ -124,14 +124,20 @@ async fn leaves_remaining_falls_when_a_leave_is_approved() {
     let uid = seed_user(&pool).await;
     let year = 2020;
 
-    // A paid leave type must exist for the balance to be non-trivial. Reuse any
-    // paid type already in the DB; if there is none, this DB can't express the
-    // feature and the delta below would be zero — seed one for the test.
-    let paid_type: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM leave_types WHERE paid = TRUE ORDER BY name LIMIT 1")
-            .fetch_optional(&pool)
-            .await
-            .expect("query leave types");
+    // A REGULAR paid leave type must exist for the balance to be non-trivial. Reuse
+    // one already in the DB; if there is none, seed one for the test. "Regular" =
+    // the same filter `remaining_paid_by_user` applies: paternity/maternity (a gender
+    // or tenure rule, migration 0050) are paid but are not "leaves left", so picking
+    // one of those — the ONLY paid types on a freshly migrated CI database — left the
+    // user out of the balances entirely.
+    let paid_type: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM leave_types
+         WHERE paid = TRUE AND eligible_gender IS NULL AND min_tenure_months = 0
+         ORDER BY name LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("query leave types");
     let (leave_type_id, made_type) = match paid_type {
         Some(id) => (id, false),
         None => {

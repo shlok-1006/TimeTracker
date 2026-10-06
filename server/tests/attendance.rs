@@ -104,9 +104,11 @@ async fn attendance_rollup_derives_all_statuses() {
     )
     .await
     .unwrap();
-    let req = leave::create_request(&pool, emp.id, lt.id, tuesday, tuesday, 1.0, "vacation")
-        .await
-        .unwrap();
+    let req = leave::create_request(
+        &pool, emp.id, lt.id, tuesday, tuesday, 1.0, "vacation", None,
+    )
+    .await
+    .unwrap();
     assert!(leave::decide(&pool, req, "approved", emp.id).await.unwrap());
     let on_leave = attendance_service::rollup_day(&pool, emp.id, tuesday)
         .await

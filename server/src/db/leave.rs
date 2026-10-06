@@ -40,6 +40,9 @@ pub struct LeaveRequest {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
     pub days: f64,
+    /// Which half a half-day covers: `first` | `second`. `None` for a full day, and for half days
+    /// booked before migration 0051 or by a client that doesn't send it.
+    pub half_period: Option<String>,
     pub reason: String,
     pub status: String,
     pub approver_id: Option<Uuid>,
@@ -58,6 +61,9 @@ pub struct PendingRequest {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
     pub days: f64,
+    /// Which half a half-day covers (see [`LeaveRequest::half_period`]). Carried here so an approver
+    /// can tell a morning absence from an afternoon one.
+    pub half_period: Option<String>,
     pub reason: String,
     pub created_at: DateTime<Utc>,
 }
@@ -603,16 +609,18 @@ pub async fn create_request(
     end_date: NaiveDate,
     days: f64,
     reason: &str,
+    half_period: Option<&str>,
 ) -> Result<Uuid, AppError> {
     let r = sqlx::query!(
-        "INSERT INTO leave_requests (user_id, leave_type_id, start_date, end_date, days, reason)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+        "INSERT INTO leave_requests (user_id, leave_type_id, start_date, end_date, days, reason, half_period)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
         user_id,
         leave_type_id,
         start_date,
         end_date,
         days,
-        reason
+        reason,
+        half_period
     )
     .fetch_one(pool)
     .await?;
@@ -625,7 +633,7 @@ pub async fn list_requests_for_user(
 ) -> Result<Vec<LeaveRequest>, AppError> {
     let rows = sqlx::query!(
         r#"SELECT lr.id, lr.user_id, lr.leave_type_id, lt.name AS "leave_type_name!",
-                  lr.start_date, lr.end_date, lr.days, lr.reason, lr.status,
+                  lr.start_date, lr.end_date, lr.days, lr.half_period, lr.reason, lr.status,
                   lr.approver_id, lr.decided_at, lr.created_at
            FROM leave_requests lr
            JOIN leave_types lt ON lt.id = lr.leave_type_id
@@ -645,6 +653,7 @@ pub async fn list_requests_for_user(
             start_date: r.start_date,
             end_date: r.end_date,
             days: r.days,
+            half_period: r.half_period,
             reason: r.reason,
             status: r.status,
             approver_id: r.approver_id,
@@ -663,7 +672,7 @@ pub async fn list_pending(
     let rows = sqlx::query!(
         r#"SELECT lr.id, lr.user_id, u.name AS employee_name, u.email AS employee_email,
                   lt.name AS leave_type_name, lr.start_date, lr.end_date, lr.days,
-                  lr.reason, lr.created_at
+                  lr.half_period, lr.reason, lr.created_at
            FROM leave_requests lr
            JOIN users u       ON u.id = lr.user_id
            JOIN leave_types lt ON lt.id = lr.leave_type_id
@@ -687,6 +696,7 @@ pub async fn list_pending(
             start_date: r.start_date,
             end_date: r.end_date,
             days: r.days,
+            half_period: r.half_period,
             reason: r.reason,
             created_at: r.created_at,
         })
@@ -705,6 +715,9 @@ pub struct CalendarLeave {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
     pub days: f64,
+    /// Which half a half-day covers (see [`LeaveRequest::half_period`]), so the register can show
+    /// a morning absence apart from an afternoon one.
+    pub half_period: Option<String>,
     pub status: String,
     pub reason: String,
 }
@@ -725,7 +738,7 @@ pub async fn list_in_range(
     let rows = sqlx::query!(
         r#"SELECT lr.id, lr.user_id, u.name AS employee_name,
                   lt.name AS leave_type_name, lr.start_date, lr.end_date, lr.days,
-                  lr.status, lr.reason
+                  lr.half_period, lr.status, lr.reason
            FROM leave_requests lr
            JOIN users u        ON u.id = lr.user_id
            JOIN leave_types lt ON lt.id = lr.leave_type_id
@@ -751,6 +764,7 @@ pub async fn list_in_range(
             start_date: r.start_date,
             end_date: r.end_date,
             days: r.days,
+            half_period: r.half_period,
             status: r.status,
             reason: r.reason,
         })

@@ -143,11 +143,20 @@ async fn leave_and_weekend_on_a_holiday() {
     )
     .await
     .unwrap();
+    // Approved leave inserted directly (as monthly_attendance.rs does): this test is about how
+    // attendance READS a leave day, not about booking one — and it keeps the test independent of
+    // `create_request`'s signature, which the half-day-leave PR extends.
     for u in [worked, rested] {
-        let r = leave::create_request(&pool, u, lt.id, friday, friday, 1.0, "x")
-            .await
-            .unwrap();
-        leave::decide(&pool, r, "approved", u).await.unwrap();
+        sqlx::query(
+            "INSERT INTO leave_requests (user_id, leave_type_id, start_date, end_date, days, status)
+             VALUES ($1, $2, $3, $3, 1, 'approved')",
+        )
+        .bind(u)
+        .bind(lt.id)
+        .bind(friday)
+        .execute(&pool)
+        .await
+        .unwrap();
     }
     // Leave + holiday + worked anyway → a holiday (the work happened; it's still not a work day).
     track(&pool, worked, friday, 3).await;

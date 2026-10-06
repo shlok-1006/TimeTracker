@@ -1,9 +1,11 @@
 //! Attendance business logic (Feature 6C): derive a day's attendance status
 //! from the interval log, integrating approved leave and company holidays.
 //!
-//! Precedence: approved leave and holidays explain the day first; **weekends are
-//! never a work day** — a Sat/Sun stays `weekend` even if the employee tracked
-//! time, so it never counts as present or partial. Otherwise tracked time wins:
+//! Precedence: approved leave explains an untracked day first. **Holidays and
+//! weekends are never a work day** — a company holiday stays `holiday` and a
+//! Sat/Sun stays `weekend` even if the employee tracked time, so neither ever
+//! counts as present or partial (the hours still count; the day is just never a
+//! required working day). Otherwise tracked time wins:
 //! a day **in progress** (today) with any tracked time is `present` (starting the
 //! tracker is enough — they may still reach a full day); once **complete**, under
 //! the full-day threshold (default 4h) it is `partial` (a half day), at/above it
@@ -54,10 +56,11 @@ fn derive_status(
     holiday_name: Option<&str>,
     day: NaiveDate,
 ) -> (&'static str, String) {
-    // Approved leave and holidays explain the day first (only ever supplied when
-    // there was no tracked time). Weekends are never a work day: a Sat/Sun stays
-    // `weekend` even when the employee tracked time — it must not count as present
-    // or partial.
+    // Approved leave explains the day first (only ever supplied when there was no
+    // tracked time). Holidays and weekends are never a work day: a holiday stays
+    // `holiday` and a Sat/Sun stays `weekend` even when the employee tracked time —
+    // neither may count as present or partial. (`holiday_name` is supplied whether or
+    // not anything was tracked; see rollup_day.)
     if let Some(lt) = leave_type {
         ("leave", lt.to_string())
     } else if let Some(h) = holiday_name {
@@ -87,16 +90,16 @@ pub async fn rollup_day(
     let activity = attendance::day_activity(pool, user_id, start, end).await?;
 
     // Any tracked time — active or idle — means the user started their day, so
-    // it counts as present. Only look up leave/holiday when there was none.
+    // it counts as present: only an untracked day looks up leave. A holiday is
+    // looked up ALWAYS, because like a weekend it is never a work day — working on
+    // it must not turn it into `present` and add 8h to that week's requirement.
     let tracked_seconds = activity.worked_seconds + activity.idle_seconds;
-    let (leave_type, holiday_name) = if tracked_seconds > 0 {
-        (None, None)
+    let leave_type = if tracked_seconds > 0 {
+        None
     } else {
-        (
-            leave::approved_leave_type_on_day(pool, user_id, day).await?,
-            leave::holiday_name_on_day(pool, day).await?,
-        )
+        leave::approved_leave_type_on_day(pool, user_id, day).await?
     };
+    let holiday_name = leave::holiday_name_on_day(pool, day).await?;
 
     // The current day is still in progress; only a completed day can be partial.
     let day_complete = day < Utc::now().date_naive();
@@ -230,9 +233,9 @@ pub async fn clear_override(
 /// the attendance model).
 pub async fn mark_present_today(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
     let today = Utc::now().date_naive();
-    // Weekends never count as a work day — don't auto-mark present on Sat/Sun.
-    // (The rollup will derive `weekend`; see derive_status.)
-    if is_weekend(today) {
+    // Weekends and holidays never count as a work day — don't auto-mark present
+    // on them. (The rollup derives `weekend` / `holiday`; see derive_status.)
+    if is_weekend(today) || leave::holiday_name_on_day(pool, today).await?.is_some() {
         return Ok(());
     }
     if let Some(row) = attendance::get(pool, user_id, today).await? {
@@ -363,6 +366,26 @@ mod tests {
         assert_eq!(
             derive_status(8 * 3600, FULL, false, None, None, weekend()).0,
             "weekend"
+        );
+    }
+
+    #[test]
+    fn holiday_work_is_never_present_or_partial() {
+        // Like a weekend: tracking on a company holiday (here a Friday) must not make
+        // it a work day — it stays `holiday` (named), in progress or complete, full or
+        // partial, so it never adds 8h to that week's requirement.
+        let friday = d(2026, 6, 12);
+        for (tracked, complete) in [(1, false), (3600, true), (FULL, true), (9 * 3600, false)] {
+            assert_eq!(
+                derive_status(tracked, FULL, complete, None, Some("Founders' Day"), friday),
+                ("holiday", "Founders' Day".to_string()),
+                "tracked={tracked} complete={complete}"
+            );
+        }
+        // A holiday that falls on a weekend reads as the holiday.
+        assert_eq!(
+            derive_status(3600, FULL, true, None, Some("Diwali"), weekend()).0,
+            "holiday"
         );
     }
 

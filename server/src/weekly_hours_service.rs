@@ -125,6 +125,38 @@ pub async fn run_for_week(
     Ok(summary)
 }
 
+/// A holiday was just entered for `day` — usually late, after the day (and often its week) was already
+/// computed. Holidays are never a work day, so re-derive what the holiday changes:
+///
+///   * a past or current day: re-roll that day's attendance for everyone (a worked day becomes `holiday`);
+///   * if its Mon–Sun week has ended AND the weekly batch already computed it, recompute the whole week
+///     (`run_for_week` re-rolls every day and upserts, keeping each row's "employee emailed" stamp).
+///
+/// A future day needs nothing: the nightly rollup and the Monday batch will see the holiday in time.
+/// Best-effort — failures are logged, never surfaced to the HR request that triggered it.
+pub async fn refresh_for_new_holiday(state: &AppState, day: NaiveDate) {
+    let today = chrono::Utc::now().date_naive();
+    if day > today {
+        return;
+    }
+    let week_start = day - Duration::days(day.weekday().num_days_from_monday() as i64);
+    let week_end = week_start + Duration::days(6);
+    let week_computed = week_end < today
+        && weekly_hours::week_has_rows(&state.db, week_start)
+            .await
+            .unwrap_or(false);
+    let result = if week_computed {
+        run_for_week(state, week_start, week_end).await.map(|_| ())
+    } else {
+        crate::attendance_service::rollup_all_for_day(&state.db, day)
+            .await
+            .map(|_| ())
+    };
+    if let Err(e) = result {
+        tracing::warn!(%day, "holiday refresh failed: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

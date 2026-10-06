@@ -570,6 +570,13 @@ async fn create_holiday(
 ) -> Result<Json<Value>, AppError> {
     let h = leave::create_holiday(&state.db, body.day, body.name.trim()).await?;
     audit::log(&state.db, hr.id, "holiday.create", "holiday", Some(h.id)).await;
+    // Holidays are never a work day: re-derive a day (and an already-computed week) that was rolled up
+    // before HR entered it. In the background, so the HR request isn't held up by a week's recompute.
+    let refresh = state.clone();
+    let day = body.day;
+    tokio::spawn(async move {
+        crate::weekly_hours_service::refresh_for_new_holiday(&refresh, day).await;
+    });
     Ok(Json(json!(h)))
 }
 

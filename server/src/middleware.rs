@@ -185,14 +185,22 @@ impl FromRequestParts<AppState> for RequireTeamViewer {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let user = AuthUser::from_request_parts(parts, state).await?;
-        if user.role.is_dashboard()
-            || (user.role == UserRole::Employee
-                && crate::db::users::manages_any(&state.db, user.id).await?)
-        {
-            Ok(Self(user))
-        } else {
-            Err(AppError::Forbidden)
+        if user.role.is_dashboard() {
+            return Ok(Self(user));
         }
+        if user.role == UserRole::Employee {
+            // Fail CLOSED: an employee gets in only on a confirmed assignment. If the check itself
+            // can't run (database unreachable), they're refused like any employee — a 403, not a 5xx —
+            // exactly as RequireStaff refused them before managers-by-assignment existed.
+            match crate::db::users::manages_any(&state.db, user.id).await {
+                Ok(true) => return Ok(Self(user)),
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(user_id = %user.id, "team-viewer check failed, refusing: {e}")
+                }
+            }
+        }
+        Err(AppError::Forbidden)
     }
 }
 

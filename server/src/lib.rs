@@ -15,6 +15,7 @@ pub mod email_service;
 pub mod employment_type;
 pub mod error;
 pub mod jwt;
+pub mod leave_notify;
 pub mod leave_service;
 pub mod linear_service;
 pub mod middleware;

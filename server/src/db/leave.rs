@@ -851,3 +851,39 @@ pub async fn cancel(pool: &PgPool, id: Uuid, user_id: Uuid) -> Result<bool, AppE
     .await?;
     Ok(res.rows_affected() > 0)
 }
+
+/// What an FYI notification says about one request: whose, which type, when, how long, status.
+#[derive(Debug, Clone)]
+pub struct RequestSummary {
+    pub user_id: Uuid,
+    pub employee_name: String,
+    pub leave_type_name: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub days: f64,
+    pub status: String,
+}
+
+/// One request with the names a human-readable notice needs.
+pub async fn request_summary(pool: &PgPool, id: Uuid) -> Result<Option<RequestSummary>, AppError> {
+    let row = sqlx::query!(
+        r#"SELECT lr.user_id, u.name AS employee_name, lt.name AS leave_type_name,
+                  lr.start_date, lr.end_date, lr.days, lr.status
+             FROM leave_requests lr
+             JOIN users u        ON u.id = lr.user_id
+             JOIN leave_types lt ON lt.id = lr.leave_type_id
+            WHERE lr.id = $1"#,
+        id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| RequestSummary {
+        user_id: r.user_id,
+        employee_name: r.employee_name,
+        leave_type_name: r.leave_type_name,
+        start_date: r.start_date,
+        end_date: r.end_date,
+        days: r.days,
+        status: r.status,
+    }))
+}

@@ -38,12 +38,20 @@ use crate::middleware::{auth_middleware, AuthUser, RequireEmployee, RequireHr, R
 use crate::state::AppState;
 
 /// Current authenticated principal (any role).
-async fn me(user: AuthUser) -> Json<Value> {
-    Json(json!({
+/// `GET /me` — who the caller is. `manages` is live from the database (not the token): true when
+/// an `employee` has people assigned to them, i.e. may use the "my people" reads.
+async fn me(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Value>, crate::error::AppError> {
+    let manages = user.role == crate::role::UserRole::Employee
+        && crate::db::users::manages_any(&state.db, user.id).await?;
+    Ok(Json(json!({
         "id": user.id,
         "role": user.role,
         "team": user.team,
-    }))
+        "manages": manages,
+    })))
 }
 
 /// Employee-only resource (desktop app). Wrong role => 403.

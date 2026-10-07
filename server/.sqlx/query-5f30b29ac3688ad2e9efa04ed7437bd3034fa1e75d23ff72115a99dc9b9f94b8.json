@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM user_managers um USING users u\n          WHERE um.manager_id = $1 AND u.id = um.user_id AND u.deactivated_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5f30b29ac3688ad2e9efa04ed7437bd3034fa1e75d23ff72115a99dc9b9f94b8"
+}

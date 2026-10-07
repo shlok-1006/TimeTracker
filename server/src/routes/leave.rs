@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::db::{audit, leave, users};
 use crate::error::AppError;
 use crate::leave_service;
-use crate::middleware::{AuthUser, RequireHr, RequireStaff};
+use crate::middleware::{AuthUser, RequireHr, RequireStaff, RequireTeamViewer};
 use crate::role::UserRole;
 use crate::state::AppState;
 
@@ -95,6 +95,13 @@ async fn request_leave(
         Some(id),
     )
     .await;
+    // FYI to any employee who manages this person (they see their people but don't approve).
+    crate::leave_notify::spawn_notify(
+        state.db.clone(),
+        id,
+        crate::leave_notify::LeaveEvent::Requested,
+        None,
+    );
     Ok(Json(json!({ "id": id, "days": days, "status": "pending" })))
 }
 
@@ -130,7 +137,7 @@ async fn authorize_approver(
 
 async fn pending_requests(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
 ) -> Result<Json<Value>, AppError> {
     // HR sees all; a project manager sees only their team's.
     let scope = if user.role.at_least(UserRole::Hr) {
@@ -152,7 +159,7 @@ struct CalendarQuery {
 /// (same scope as the pending queue).
 async fn leave_calendar(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Json<Value>, AppError> {
     if q.to < q.from {
@@ -213,12 +220,18 @@ async fn decide_request(
         Some(id),
     )
     .await;
+    let event = if status == "approved" {
+        crate::leave_notify::LeaveEvent::Approved
+    } else {
+        crate::leave_notify::LeaveEvent::Rejected
+    };
+    crate::leave_notify::spawn_notify(state.db.clone(), id, event, Some(approver.id));
     Ok(Json(json!({ "id": id, "status": status })))
 }
 
 async fn approve_request(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     decide_request(&state, &user, id, "approved").await
@@ -226,7 +239,7 @@ async fn approve_request(
 
 async fn reject_request(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     decide_request(&state, &user, id, "rejected").await

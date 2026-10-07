@@ -157,10 +157,7 @@ pub async fn login(state: &AppState, req: LoginRequest) -> Result<LoginResponse,
         return Err(AppError::Unauthorized);
     }
 
-    let access_token =
-        state
-            .jwt
-            .issue(user.id, user.role, user.team_id, Some(user.email.clone()))?;
+    let access_token = access_token_for(state, &user).await?;
     let refresh_token = issue_refresh_token(state, user.id).await?;
     audit::log(&state.db, user.id, "auth.login", "user", Some(user.id)).await;
 
@@ -239,10 +236,7 @@ pub async fn change_password(
     )
     .await;
 
-    let access_token =
-        state
-            .jwt
-            .issue(user.id, user.role, user.team_id, Some(user.email.clone()))?;
+    let access_token = access_token_for(state, &user).await?;
     let refresh_token = issue_refresh_token(state, user.id).await?;
 
     Ok(LoginResponse {
@@ -353,10 +347,7 @@ pub async fn refresh(state: &AppState, req: RefreshRequest) -> Result<TokenPair,
         .await?
         .ok_or(AppError::Unauthorized)?;
 
-    let access_token =
-        state
-            .jwt
-            .issue(user.id, user.role, user.team_id, Some(user.email.clone()))?;
+    let access_token = access_token_for(state, &user).await?;
     let refresh_token = issue_refresh_token(state, user.id).await?;
 
     Ok(TokenPair {
@@ -381,6 +372,19 @@ pub async fn logout(state: &AppState, req: RefreshRequest) -> Result<(), AppErro
         audit::log(&state.db, user_id, "auth.logout", "user", Some(user_id)).await;
     }
     Ok(())
+}
+
+/// Mint an access token for `user`, with the `mgr` hint set when an employee has people assigned to
+/// them. Only employees need it: HR / PM / admin already see their scope through their role.
+async fn access_token_for(state: &AppState, user: &users::User) -> Result<String, AppError> {
+    let manages = user.role == UserRole::Employee && users::manages_any(&state.db, user.id).await?;
+    state.jwt.issue_with_manages(
+        user.id,
+        user.role,
+        user.team_id,
+        Some(user.email.clone()),
+        manages,
+    )
 }
 
 #[cfg(test)]

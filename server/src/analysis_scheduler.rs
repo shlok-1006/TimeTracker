@@ -166,8 +166,9 @@ async fn maybe_alert_low_score(state: &AppState, report: &AnalysisReport) {
             return;
         }
     };
-    match users::managers_of(&state.db, report.user_id).await {
-        Ok(managers) => recipients.extend(managers.into_iter().map(|(_, _, email)| email)),
+    // Every active manager — project managers and employees who lead this person alike.
+    match users::managers_with_roles(&state.db, report.user_id).await {
+        Ok(managers) => recipients.extend(managers.into_iter().map(|(_, _, email, _)| email)),
         Err(e) => {
             tracing::warn!(user_id = %report.user_id, "low-score alert: PM lookup failed: {e}")
         }

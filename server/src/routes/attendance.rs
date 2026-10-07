@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::attendance_service;
 use crate::db::{attendance, audit, leave, users};
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireHr, RequireStaff};
+use crate::middleware::{AuthUser, RequireHr, RequireStaff, RequireTeamViewer};
 use crate::monthly_report_service::{month_end, month_key};
 use crate::role::UserRole;
 use crate::routes::admin::authorize_view;
@@ -72,10 +72,11 @@ async fn my_attendance(
     Ok(Json(json!({ "from": from, "to": to, "days": days })))
 }
 
-/// `GET /admin/users/:id/attendance` — drill-down for HR / the user's PM.
+/// `GET /admin/users/:id/attendance` — drill-down for HR, the user's PM, or an employee the user is
+/// assigned to (`RequireTeamViewer`; `authorize_view` keeps it to their own people).
 async fn user_attendance(
     State(state): State<AppState>,
-    RequireStaff(viewer): RequireStaff,
+    RequireTeamViewer(viewer): RequireTeamViewer,
     Path(target): Path<Uuid>,
     Query(q): Query<RangeQuery>,
 ) -> Result<Json<Value>, AppError> {

@@ -27,6 +27,10 @@ pub struct AuthUser {
     pub id: Uuid,
     pub role: UserRole,
     pub team: Option<Uuid>,
+    /// The token's `mgr` claim ("manages people") as of when it was issued. A HINT only — access is
+    /// always decided against the database (`RequireTeamViewer`); this is the fallback answer `/me`
+    /// gives when the database can't be asked.
+    pub manages_hint: bool,
 }
 
 impl AuthUser {
@@ -40,6 +44,7 @@ impl AuthUser {
             id,
             role: c.role,
             team,
+            manages_hint: c.mgr,
         })
     }
 }

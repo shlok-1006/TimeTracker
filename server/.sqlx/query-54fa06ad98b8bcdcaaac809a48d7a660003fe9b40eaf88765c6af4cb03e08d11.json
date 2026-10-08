@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lr.user_id, u.name AS employee_name, lt.name AS leave_type_name,\n                  lr.start_date, lr.end_date, lr.days, lr.status\n             FROM leave_requests lr\n             JOIN users u        ON u.id = lr.user_id\n             JOIN leave_types lt ON lt.id = lr.leave_type_id\n            WHERE lr.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "employee_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "leave_type_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "start_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 4,
+        "name": "end_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 5,
+        "name": "days",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "status",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "54fa06ad98b8bcdcaaac809a48d7a660003fe9b40eaf88765c6af4cb03e08d11"
+}

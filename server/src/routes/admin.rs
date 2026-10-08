@@ -4,6 +4,13 @@
 //! manage (the `user_managers` join table — an employee can have several
 //! managers, one, or none). Enforced on the team list (query filter) and on
 //! every drill-down (explicit `authorize_view`).
+//!
+//! Managers by assignment: anyone active can be assigned as someone's manager, not only a project
+//! manager. An `employee` with people assigned keeps their role (and their own tracking) and may use
+//! the reads guarded by `RequireTeamViewer` for those people only — the team list, hours, timeline,
+//! screenshots (with AI verdicts) and the day's AI analysis here; attendance, activity, the daily and
+//! monthly reports and leave approval in their own route files. Actions (running analysis, sampling,
+//! tasks, grace time) and everything HR-only stay `RequireStaff` / `RequireHr`.
 
 use axum::{
     extract::{Path, Query, State},
@@ -23,7 +30,7 @@ use crate::db::{
 };
 use crate::employment_type::EmploymentType;
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireHr, RequireStaff};
+use crate::middleware::{AuthUser, RequireHr, RequireStaff, RequireTeamViewer};
 use crate::role::UserRole;
 use crate::state::AppState;
 use crate::{analysis_service, sampler};
@@ -60,10 +67,11 @@ pub(crate) async fn authorize_view(
     }
 }
 
-/// `GET /admin/team` — live team statuses + today's hours.
+/// `GET /admin/team` — live team statuses + today's hours. HR: everyone; a PM or an employee who
+/// manages people: the people assigned to them (plus themselves).
 async fn team(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
 ) -> Result<Json<Value>, AppError> {
     let members = presence::team(&state.db, team_scope(&user)).await?;
     let body: Vec<Value> = members
@@ -83,7 +91,7 @@ async fn team(
 /// `GET /admin/users/:id/hours` — drill-down hours for one employee.
 async fn user_hours(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
     Path(target): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     authorize_view(&state, &user, target).await?;
@@ -105,12 +113,18 @@ async fn user_hours(
 /// `GET /admin/users/:id/screenshots?day=` — drill-down screenshots for a day,
 /// each with verdict, meeting flag, and a presigned view URL. `day` defaults to
 /// today (UTC). PM is team-scoped; HR sees anyone.
+///
+/// An employee who manages people sees the same screenshots (and verdicts) of the people assigned
+/// to them as a PM does, and each such view is audit-logged — it's a way for a non-staff account to
+/// see another person's screen.
 async fn user_screenshots(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    viewer: RequireTeamViewer,
     Path(target): Path<Uuid>,
     Query(q): Query<SampleQuery>,
 ) -> Result<Json<Value>, AppError> {
+    let staff = viewer.is_staff();
+    let user = viewer.0;
     authorize_view(&state, &user, target).await?;
     let day = q.day.unwrap_or_else(|| Utc::now().date_naive());
     let now = Utc::now();
@@ -119,6 +133,16 @@ async fn user_screenshots(
         .iter()
         .map(|r| crate::routes::uploads::day_item(&state.storage, r, now))
         .collect();
+    if !staff && user.id != target {
+        audit::log(
+            &state.db,
+            user.id,
+            "screenshot.view_day",
+            "user",
+            Some(target),
+        )
+        .await;
+    }
     Ok(Json(Value::Array(items)))
 }
 
@@ -132,7 +156,7 @@ struct TimelineQuery {
 /// window, for the colored timeline bar.
 async fn user_timeline(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
     Path(target): Path<Uuid>,
     Query(q): Query<TimelineQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -396,7 +420,7 @@ async fn analysis_run_status(
 /// `GET /admin/users/:id/analysis?day=YYYY-MM-DD` — stored analysis results.
 async fn analysis_for_day(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
     Path(target): Path<Uuid>,
     Query(q): Query<SampleQuery>,
 ) -> Result<Json<Value>, AppError> {
@@ -631,8 +655,10 @@ struct SetManagersBody {
     manager_ids: Vec<Uuid>,
 }
 
-/// `PUT /admin/users/:id/managers` (HR) — replace the user's manager set with
-/// any combination of project managers (empty list = no manager). Logged.
+/// `PUT /admin/users/:id/managers` (HR) — replace the user's manager set (empty list = no
+/// manager). A manager can be ANY active user — a project manager, or an employee who leads a few
+/// people (who then sees those people via `RequireTeamViewer`; their own role is unchanged).
+/// Logged.
 async fn set_managers(
     State(state): State<AppState>,
     RequireHr(hr): RequireHr,
@@ -646,20 +672,23 @@ async fn set_managers(
     let mut ids = body.manager_ids;
     ids.sort();
     ids.dedup();
+    if ids.contains(&target) {
+        return Err(AppError::BadRequest(
+            "a user cannot manage themselves".into(),
+        ));
+    }
+    if users::active_ids(&state.db, &ids).await?.len() != ids.len() {
+        return Err(AppError::BadRequest(
+            "unknown or deactivated manager id".into(),
+        ));
+    }
+    // No mutual management: if `target` already manages one of these people, they would each be the
+    // other's manager — and could approve each other's leave.
     for mid in &ids {
-        if *mid == target {
+        if users::is_manager_of(&state.db, target, *mid).await? {
             return Err(AppError::BadRequest(
-                "a user cannot manage themselves".into(),
+                "two people can't manage each other — remove the other assignment first".into(),
             ));
-        }
-        match users::find_by_id(&state.db, *mid).await? {
-            Some(m) if m.role == UserRole::ProjectManager => {}
-            Some(_) => {
-                return Err(AppError::BadRequest(
-                    "managers must have the project_manager role".into(),
-                ))
-            }
-            None => return Err(AppError::BadRequest("unknown manager id".into())),
         }
     }
 
@@ -668,6 +697,62 @@ async fn set_managers(
     Ok(Json(managers_json(
         users::managers_of(&state.db, target).await?,
     )))
+}
+
+/// `GET /admin/users/:id/reports` (HR) — the active people this user manages directly.
+async fn get_reports(
+    State(state): State<AppState>,
+    RequireHr(_hr): RequireHr,
+    Path(manager): Path<Uuid>,
+) -> Result<Json<Value>, AppError> {
+    if users::find_by_id(&state.db, manager).await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(json!(users::reports_of(&state.db, manager).await?)))
+}
+
+#[derive(Deserialize)]
+struct SetReportsBody {
+    user_ids: Vec<Uuid>,
+}
+
+/// `PUT /admin/users/:id/reports` (HR) — replace the set of people this user manages (empty list =
+/// manages nobody). The mirror of `PUT .../managers`, for assigning a lead's people in one place;
+/// other managers of those people are untouched. The manager and every person must be active.
+/// Logged.
+async fn set_reports(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Path(manager): Path<Uuid>,
+    Json(body): Json<SetReportsBody>,
+) -> Result<Json<Value>, AppError> {
+    if users::active_ids(&state.db, &[manager]).await?.is_empty() {
+        return Err(AppError::NotFound);
+    }
+    let mut ids = body.user_ids;
+    ids.sort();
+    ids.dedup();
+    if ids.contains(&manager) {
+        return Err(AppError::BadRequest(
+            "a user cannot manage themselves".into(),
+        ));
+    }
+    if users::active_ids(&state.db, &ids).await?.len() != ids.len() {
+        return Err(AppError::BadRequest(
+            "unknown or deactivated user id".into(),
+        ));
+    }
+    // No mutual management (see set_managers): none of these people may already manage `manager`.
+    for uid in &ids {
+        if users::is_manager_of(&state.db, *uid, manager).await? {
+            return Err(AppError::BadRequest(
+                "two people can't manage each other — remove the other assignment first".into(),
+            ));
+        }
+    }
+    users::set_reports(&state.db, manager, &ids).await?;
+    audit::log(&state.db, hr.id, "user.set_reports", "user", Some(manager)).await;
+    Ok(Json(json!(users::reports_of(&state.db, manager).await?)))
 }
 
 #[derive(Deserialize)]
@@ -734,6 +819,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/admin/users/:id/managers",
             get(get_managers).put(set_managers),
+        )
+        .route(
+            "/admin/users/:id/reports",
+            get(get_reports).put(set_reports),
         )
         .route(
             "/admin/users/:id/employment-type",

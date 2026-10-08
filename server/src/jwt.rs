@@ -49,6 +49,12 @@ pub struct Claims {
     /// unchanged token shape.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub email: Option<String>,
+    /// "Manages people": an `employee` who has people assigned to them in `user_managers` (a team
+    /// lead who isn't a project manager). A routing HINT for clients (the HRMS shows "My team");
+    /// the server re-checks the assignment on every request, so a stale claim grants nothing.
+    /// Omitted when false, so every other token keeps its exact shape.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub mgr: bool,
 }
 
 /// RS256 signing material, present only when an RSA key is configured.
@@ -150,6 +156,18 @@ impl JwtKeys {
         team: Option<Uuid>,
         email: Option<String>,
     ) -> Result<String, AppError> {
+        self.issue_with_manages(user_id, role, team, email, false)
+    }
+
+    /// [`issue`](Self::issue) plus the `mgr` ("manages people") hint — what login and refresh use.
+    pub fn issue_with_manages(
+        &self,
+        user_id: Uuid,
+        role: UserRole,
+        team: Option<Uuid>,
+        email: Option<String>,
+        manages: bool,
+    ) -> Result<String, AppError> {
         let exp = (Utc::now() + Duration::seconds(self.access_ttl_seconds)).timestamp();
         let claims = Claims {
             sub: user_id.to_string(),
@@ -159,6 +177,7 @@ impl JwtKeys {
             aud: JWT_AUDIENCE.to_string(),
             exp: exp as usize,
             email,
+            mgr: manages,
         };
         let result = match (&self.rsa, self.sign_rs256) {
             (Some(rsa), true) => {
@@ -196,6 +215,31 @@ impl JwtKeys {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The raw JSON payload of a token, to check its exact shape.
+    fn payload(token: &str) -> serde_json::Value {
+        let part = token.split('.').nth(1).expect("payload");
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(part).expect("b64")).expect("json")
+    }
+
+    #[test]
+    fn mgr_claim_only_appears_when_the_user_manages_people() {
+        let keys = JwtKeys::new("mgr-claim-test-secret-mgr-claim-test", 900);
+        let id = Uuid::new_v4();
+
+        let plain = keys.issue(id, UserRole::Employee, None, None).unwrap();
+        assert!(
+            payload(&plain).get("mgr").is_none(),
+            "unchanged token shape when false"
+        );
+        assert!(!keys.verify(&plain).unwrap().mgr);
+
+        let lead = keys
+            .issue_with_manages(id, UserRole::Employee, None, None, true)
+            .unwrap();
+        assert_eq!(payload(&lead)["mgr"], serde_json::json!(true));
+        assert!(keys.verify(&lead).unwrap().mgr);
+    }
 
     /// Throwaway 2048-bit key generated for these tests only — never used
     /// anywhere else. Real keys come from the environment (never committed).

@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::db::{audit, monthly_reports};
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireStaff};
+use crate::middleware::{AuthUser, RequireStaff, RequireTeamViewer};
 use crate::monthly_report_service as service;
 use crate::org_time;
 use crate::routes::admin::{authorize_view, team_scope};
@@ -55,7 +55,7 @@ async fn my_monthly(
 /// summary (HR anyone; PM only their own reports).
 async fn user_monthly(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
     Path(target): Path<Uuid>,
     Query(q): Query<MonthQuery>,
 ) -> Result<Json<Value>, AppError> {

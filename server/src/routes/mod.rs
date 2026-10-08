@@ -38,11 +38,29 @@ use crate::middleware::{auth_middleware, AuthUser, RequireEmployee, RequireHr, R
 use crate::state::AppState;
 
 /// Current authenticated principal (any role).
-async fn me(user: AuthUser) -> Json<Value> {
+/// `GET /me` — who the caller is. `manages` (an `employee` with people assigned to them) is read live
+/// from the database; if the database can't be asked, it falls back to the token's `mgr` claim rather
+/// than failing — `/me` must keep answering, and the flag is only a hint (access is checked per request).
+async fn me(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    user: AuthUser,
+) -> Json<Value> {
+    let manages = if user.role == crate::role::UserRole::Employee {
+        match crate::db::users::manages_any(&state.db, user.id).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(user_id = %user.id, "/me manages check failed, using token hint: {e}");
+                user.manages_hint
+            }
+        }
+    } else {
+        false
+    };
     Json(json!({
         "id": user.id,
         "role": user.role,
         "team": user.team,
+        "manages": manages,
     }))
 }
 

@@ -611,3 +611,116 @@ pub async fn managed_by(pool: &PgPool, manager_id: Uuid) -> Result<Vec<Uuid>, Ap
     .await?;
     Ok(rows.into_iter().map(|r| r.user_id).collect())
 }
+
+// ---- Managers by assignment (any active user may manage people; role is separate) ----
+
+/// True when `user` has at least one person assigned to them in `user_managers`.
+///
+/// This is what lets an `employee` (e.g. a team lead who isn't a project manager) see the people
+/// assigned to them, without changing their role — they stay tracked as an employee everywhere.
+pub async fn manages_any(pool: &PgPool, user: Uuid) -> Result<bool, AppError> {
+    let row = sqlx::query!(
+        r#"SELECT EXISTS (
+             SELECT 1 FROM user_managers um
+               JOIN users u ON u.id = um.user_id
+              WHERE um.manager_id = $1 AND u.deactivated_at IS NULL
+           ) AS "manages!""#,
+        user
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.manages)
+}
+
+/// One person a manager manages, for the HR editor and the manager's own roster.
+#[derive(Debug, Clone, Serialize)]
+pub struct Report {
+    pub id: Uuid,
+    pub name: String,
+    pub email: String,
+    pub role: UserRole,
+}
+
+/// The ACTIVE people directly assigned to `manager` (no chains: a manager of a manager sees only
+/// their own direct reports), by name.
+pub async fn reports_of(pool: &PgPool, manager: Uuid) -> Result<Vec<Report>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT u.id, u.name, u.email, u.role::text AS "role!"
+             FROM user_managers um
+             JOIN users u ON u.id = um.user_id
+            WHERE um.manager_id = $1 AND u.deactivated_at IS NULL
+            ORDER BY u.name"#,
+        manager
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(Report {
+                id: r.id,
+                name: r.name,
+                email: r.email,
+                role: parse_role(&r.role)?,
+            })
+        })
+        .collect()
+}
+
+/// Replace the set of ACTIVE people `manager` manages, atomically (empty = manages nobody active).
+/// The mirror of [`set_managers`], which replaces one person's managers. Other managers' links are
+/// untouched, and so are links to DEACTIVATED people — the editor never shows them, so saving it
+/// must not silently drop them (they come back if the person is reactivated).
+pub async fn set_reports(pool: &PgPool, manager: Uuid, user_ids: &[Uuid]) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query!(
+        "DELETE FROM user_managers um USING users u
+          WHERE um.manager_id = $1 AND u.id = um.user_id AND u.deactivated_at IS NULL",
+        manager
+    )
+    .execute(&mut *tx)
+    .await?;
+    for uid in user_ids {
+        sqlx::query!(
+            "INSERT INTO user_managers (user_id, manager_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+            uid,
+            manager
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Every ACTIVE manager of `user` with their role — so a notification can treat a project manager
+/// differently from an employee who manages people (they get different emails).
+pub async fn managers_with_roles(
+    pool: &PgPool,
+    user: Uuid,
+) -> Result<Vec<(Uuid, String, String, UserRole)>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT u.id, u.name, u.email, u.role::text AS "role!"
+             FROM user_managers um
+             JOIN users u ON u.id = um.manager_id
+            WHERE um.user_id = $1 AND u.deactivated_at IS NULL
+            ORDER BY u.name"#,
+        user
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| Ok((r.id, r.name, r.email, parse_role(&r.role)?)))
+        .collect()
+}
+
+/// Which of `ids` are existing, ACTIVE users. Used to validate manager assignments.
+pub async fn active_ids(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<Uuid>, AppError> {
+    let rows = sqlx::query!(
+        "SELECT id FROM users WHERE id = ANY($1) AND deactivated_at IS NULL",
+        ids
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.id).collect())
+}

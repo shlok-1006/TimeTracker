@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::db::analysis_reports;
 use crate::error::AppError;
-use crate::middleware::{AuthUser, RequireStaff};
+use crate::middleware::{AuthUser, RequireStaff, RequireTeamViewer};
 use crate::routes::admin::{authorize_view, team_scope};
 use crate::state::AppState;
 
@@ -50,7 +50,7 @@ async fn admin_reports(
 /// `GET /admin/users/:id/report?day=` — one employee's report (HR any; PM team).
 async fn user_report(
     State(state): State<AppState>,
-    RequireStaff(user): RequireStaff,
+    RequireTeamViewer(user): RequireTeamViewer,
     Path(target): Path<Uuid>,
     Query(q): Query<DayQuery>,
 ) -> Result<Json<Value>, AppError> {

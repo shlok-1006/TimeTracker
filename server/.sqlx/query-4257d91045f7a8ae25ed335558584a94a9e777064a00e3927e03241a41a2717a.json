@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM user_managers um\n               JOIN users u ON u.id = um.user_id\n              WHERE um.manager_id = $1 AND u.deactivated_at IS NULL\n           ) AS \"manages!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "manages!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4257d91045f7a8ae25ed335558584a94a9e777064a00e3927e03241a41a2717a"
+}

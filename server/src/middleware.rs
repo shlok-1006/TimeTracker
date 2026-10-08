@@ -27,6 +27,10 @@ pub struct AuthUser {
     pub id: Uuid,
     pub role: UserRole,
     pub team: Option<Uuid>,
+    /// The token's `mgr` claim ("manages people") as of when it was issued. A HINT only — access is
+    /// always decided against the database (`RequireTeamViewer`); this is the fallback answer `/me`
+    /// gives when the database can't be asked.
+    pub manages_hint: bool,
 }
 
 impl AuthUser {
@@ -40,6 +44,7 @@ impl AuthUser {
             id,
             role: c.role,
             team,
+            manages_hint: c.mgr,
         })
     }
 }
@@ -154,6 +159,55 @@ guard_extractor!(RequireEmployee, require_employee);
 guard_extractor!(RequireStaff, require_staff);
 guard_extractor!(RequireHr, require_hr);
 guard_extractor!(RequireAdmin, require_admin);
+
+/// Guard for the few "view my people" reads an employee who manages people may use: HR / project
+/// manager / admin as before, OR an `employee` with at least one active person assigned to them in
+/// `user_managers` (a team lead who isn't a project manager — their role, and so their own
+/// tracking, is unchanged).
+///
+/// Unlike the role guards this needs the database, so it's bound to `AppState`. It decides only
+/// WHO may call; WHICH person they may see is still each handler's `authorize_view` /
+/// `team_scope`, which already limit a non-HR caller to the people assigned to them directly.
+/// Apply it only to what these managers were given — reads of their people's work (hours, timeline,
+/// attendance, activity, screenshots, AI reports and analysis, monthly reports, the team list) and
+/// approving their leave. Actions such as running analysis, tasks and grace time keep `RequireStaff`.
+pub struct RequireTeamViewer(pub AuthUser);
+
+impl RequireTeamViewer {
+    /// True for the HR / PM / admin roles — the ones that see everything `RequireStaff` allows.
+    /// False for an employee let in only because they manage people (e.g. to audit what they view).
+    pub fn is_staff(&self) -> bool {
+        self.0.role.is_dashboard()
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for RequireTeamViewer {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let user = AuthUser::from_request_parts(parts, state).await?;
+        if user.role.is_dashboard() {
+            return Ok(Self(user));
+        }
+        if user.role == UserRole::Employee {
+            // Fail CLOSED: an employee gets in only on a confirmed assignment. If the check itself
+            // can't run (database unreachable), they're refused like any employee — a 403, not a 5xx —
+            // exactly as RequireStaff refused them before managers-by-assignment existed.
+            match crate::db::users::manages_any(&state.db, user.id).await {
+                Ok(true) => return Ok(Self(user)),
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(user_id = %user.id, "team-viewer check failed, refusing: {e}")
+                }
+            }
+        }
+        Err(AppError::Forbidden)
+    }
+}
 
 #[cfg(test)]
 mod tests {

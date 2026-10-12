@@ -510,12 +510,15 @@ struct SetUsed {
     leave_type_id: Uuid,
     year: Option<i32>,
     /// The total days of this type the person has used in `year` (approved requests included).
-    used_days: f64,
+    used_days: Option<f64>,
+    /// …or the days they have LEFT of it in `year`. Exactly one of the two.
+    remaining_days: Option<f64>,
 }
 
-/// `POST /admin/leave/used` (HR) — set how many days of a leave type someone has USED in a year (migration
-/// 0053). "Used" is the sum of approved requests, so this records the difference on top of them — leave
-/// taken outside TimeTracker. It can't be lower than what approved requests already add up to.
+/// `POST /admin/leave/used` (HR) — set how many days of a leave type someone has used, or has remaining, in a
+/// year (migrations 0053, 0054). Either way the server records the days used outside TimeTracker on top of the
+/// approved requests, so leave approved afterwards keeps lowering what's remaining. Remaining can't be more
+/// than the allotment minus approved requests; used can't be more than the allotment.
 async fn set_used(
     State(state): State<AppState>,
     RequireHr(hr): RequireHr,
@@ -532,27 +535,46 @@ async fn set_used(
     if !(2000..=2100).contains(&year) {
         return Err(AppError::BadRequest("year is out of range".into()));
     }
-    let used = body.used_days;
+    let (target, what) = match (body.used_days, body.remaining_days) {
+        (Some(d), None) => (leave::UsedTarget::Used(d), "used"),
+        (None, Some(d)) => (leave::UsedTarget::Remaining(d), "remaining"),
+        _ => {
+            return Err(AppError::BadRequest(
+                "send either used_days or remaining_days".into(),
+            ))
+        }
+    };
+    let days = match target {
+        leave::UsedTarget::Used(d) | leave::UsedTarget::Remaining(d) => d,
+    };
     // Leave is counted in half days; a year has at most 366 of them.
-    if !used.is_finite() || !(0.0..=366.0).contains(&used) || (used * 2.0).fract() != 0.0 {
-        return Err(AppError::BadRequest(
-            "used days must be between 0 and 366, in steps of 0.5".into(),
-        ));
+    if !days.is_finite() || !(0.0..=366.0).contains(&days) || (days * 2.0).fract() != 0.0 {
+        return Err(AppError::BadRequest(format!(
+            "{what} days must be between 0 and 366, in steps of 0.5"
+        )));
     }
-    match leave::set_used(&state.db, body.user_id, body.leave_type_id, year, used, hr.id).await? {
+    match leave::set_used(&state.db, body.user_id, body.leave_type_id, year, target, hr.id).await? {
         leave::SetUsed::NotFound => Err(AppError::NotFound),
-        leave::SetUsed::BelowApproved { approved } => Err(AppError::BadRequest(format!(
-            "{approved} day(s) already come from approved leave requests this year, so used can't be lower — \
-             cancel or reject those requests instead"
-        ))),
+        leave::SetUsed::BelowApproved { allotted, approved } => Err(AppError::BadRequest(match target {
+            leave::UsedTarget::Remaining(_) => format!(
+                "approved leave requests already use {approved} of the {allotted} day(s) allotted, so at most {} \
+                 can remain — raise the allotment to give more",
+                (allotted - approved).max(0.0)
+            ),
+            leave::UsedTarget::Used(_) => format!(
+                "{approved} day(s) already come from approved leave requests this year, so used can't be lower — \
+                 cancel or reject those requests instead"
+            ),
+        })),
         leave::SetUsed::AboveAllotment { allotted } => Err(AppError::BadRequest(format!(
             "used can't be more than the {allotted} day(s) allotted for this type — raise the allotment first"
         ))),
-        leave::SetUsed::Saved { approved, adjustment } => {
+        leave::SetUsed::Saved { allotted, approved, adjustment, used, remaining } => {
             audit::log(&state.db, hr.id, "leave.used.set", "user", Some(body.user_id)).await;
             Ok(Json(json!({
                 "user_id": body.user_id, "leave_type_id": body.leave_type_id, "year": year,
-                "used_days": used, "approved_days": approved, "used_adjustment": adjustment
+                "allotted_days": allotted, "used_days": used, "remaining_days": remaining,
+                "approved_days": approved, "used_adjustment": adjustment
             })))
         }
     }

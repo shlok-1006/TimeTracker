@@ -1,9 +1,10 @@
-//! HR sets how many days of a leave type someone has USED (migration 0053).
+//! HR sets how many days of a leave type someone has USED or has REMAINING (migrations 0053, 0054).
 //!
 //! "Used" is the sum of approved requests; `leave::set_used` records the difference HR adds on top (leave taken
-//! outside TimeTracker). Under test: the total HR sets is what the balance reports, it can't go below what
-//! approved requests already account for, a later approved request adds on top, setting it back to the
-//! approved total removes the adjustment, and the "leaves left" roll-up follows the same arithmetic.
+//! outside TimeTracker), whichever of the two HR typed. Under test: the total HR sets is what the balance
+//! reports, it can't go below what approved requests already account for, a later approved request adds on
+//! top (so remaining keeps going down), setting it back to the approved total removes the adjustment, and the
+//! "leaves left" roll-up follows the same arithmetic.
 //! Needs a database: skipped when DATABASE_URL is unset. Uses year-2033 dates, a fresh user and type, and
 //! cleans up after.
 
@@ -90,14 +91,24 @@ async fn hr_sets_used_days_on_top_of_approved_requests() {
     );
 
     // HR records 3.5 days used outside TimeTracker.
-    let r = leave::set_used(&pool, user.id, lt.id, year, 3.5, hr.id)
-        .await
-        .unwrap();
+    let r = leave::set_used(
+        &pool,
+        user.id,
+        lt.id,
+        year,
+        leave::UsedTarget::Used(3.5),
+        hr.id,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         r,
         leave::SetUsed::Saved {
+            allotted: 12.0,
             approved: 0.0,
-            adjustment: 3.5
+            adjustment: 3.5,
+            used: 3.5,
+            remaining: 8.5
         }
     );
     let b = balance_of(&pool, user.id, lt.id, year).await;
@@ -127,10 +138,23 @@ async fn hr_sets_used_days_on_top_of_approved_requests() {
     );
 
     // Can't go below what approved requests already account for.
-    let r = leave::set_used(&pool, user.id, lt.id, year, 0.5, hr.id)
-        .await
-        .unwrap();
-    assert_eq!(r, leave::SetUsed::BelowApproved { approved: 1.0 });
+    let r = leave::set_used(
+        &pool,
+        user.id,
+        lt.id,
+        year,
+        leave::UsedTarget::Used(0.5),
+        hr.id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        r,
+        leave::SetUsed::BelowApproved {
+            allotted: 12.0,
+            approved: 1.0
+        }
+    );
     assert_eq!(
         balance_of(&pool, user.id, lt.id, year).await.used_days,
         4.5,
@@ -138,14 +162,24 @@ async fn hr_sets_used_days_on_top_of_approved_requests() {
     );
 
     // Setting it to exactly the approved total removes the adjustment row.
-    let r = leave::set_used(&pool, user.id, lt.id, year, 1.0, hr.id)
-        .await
-        .unwrap();
+    let r = leave::set_used(
+        &pool,
+        user.id,
+        lt.id,
+        year,
+        leave::UsedTarget::Used(1.0),
+        hr.id,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         r,
         leave::SetUsed::Saved {
+            allotted: 12.0,
             approved: 1.0,
-            adjustment: 0.0
+            adjustment: 0.0,
+            used: 1.0,
+            remaining: 11.0
         }
     );
     let rows: i64 =
@@ -157,9 +191,16 @@ async fn hr_sets_used_days_on_top_of_approved_requests() {
     assert_eq!(rows, 0, "a zero difference leaves no row behind");
 
     // The "leaves left" roll-up follows the same arithmetic (12 allotted − 1 approved − 2 recorded).
-    leave::set_used(&pool, user.id, lt.id, year, 3.0, hr.id)
-        .await
-        .unwrap();
+    leave::set_used(
+        &pool,
+        user.id,
+        lt.id,
+        year,
+        leave::UsedTarget::Used(3.0),
+        hr.id,
+    )
+    .await
+    .unwrap();
     let left = leave::remaining_paid_by_user(&pool, year, None)
         .await
         .unwrap();
@@ -175,15 +216,29 @@ async fn hr_sets_used_days_on_top_of_approved_requests() {
 
     // Unknown user / type.
     assert_eq!(
-        leave::set_used(&pool, Uuid::new_v4(), lt.id, year, 1.0, hr.id)
-            .await
-            .unwrap(),
+        leave::set_used(
+            &pool,
+            Uuid::new_v4(),
+            lt.id,
+            year,
+            leave::UsedTarget::Used(1.0),
+            hr.id
+        )
+        .await
+        .unwrap(),
         leave::SetUsed::NotFound
     );
     assert_eq!(
-        leave::set_used(&pool, user.id, Uuid::new_v4(), year, 1.0, hr.id)
-            .await
-            .unwrap(),
+        leave::set_used(
+            &pool,
+            user.id,
+            Uuid::new_v4(),
+            year,
+            leave::UsedTarget::Used(1.0),
+            hr.id
+        )
+        .await
+        .unwrap(),
         leave::SetUsed::NotFound
     );
 
@@ -254,22 +309,50 @@ async fn used_is_capped_at_the_allotment_recorded_in_history_and_clamped_in_leav
 
     // Above the allotment: refused, nothing written.
     assert_eq!(
-        leave::set_used(&pool, user.id, a.id, year, 10.5, hr.id)
-            .await
-            .unwrap(),
+        leave::set_used(
+            &pool,
+            user.id,
+            a.id,
+            year,
+            leave::UsedTarget::Used(10.5),
+            hr.id
+        )
+        .await
+        .unwrap(),
         leave::SetUsed::AboveAllotment { allotted: 10.0 }
     );
     // Exactly the allotment is fine.
-    leave::set_used(&pool, user.id, a.id, year, 10.0, hr.id)
-        .await
-        .unwrap();
-    leave::set_used(&pool, user.id, a.id, year, 4.0, hr.id)
-        .await
-        .unwrap();
+    leave::set_used(
+        &pool,
+        user.id,
+        a.id,
+        year,
+        leave::UsedTarget::Used(10.0),
+        hr.id,
+    )
+    .await
+    .unwrap();
+    leave::set_used(
+        &pool,
+        user.id,
+        a.id,
+        year,
+        leave::UsedTarget::Used(4.0),
+        hr.id,
+    )
+    .await
+    .unwrap();
     // A save that changes nothing adds no history row.
-    leave::set_used(&pool, user.id, a.id, year, 4.0, hr.id)
-        .await
-        .unwrap();
+    leave::set_used(
+        &pool,
+        user.id,
+        a.id,
+        year,
+        leave::UsedTarget::Used(4.0),
+        hr.id,
+    )
+    .await
+    .unwrap();
     let history: Vec<(f64, f64)> = sqlx::query_as(
         "SELECT old_used, new_used FROM leave_used_history WHERE user_id = $1 AND leave_type_id = $2 ORDER BY created_at",
     )
@@ -318,6 +401,207 @@ async fn used_is_capped_at_the_allotment_recorded_in_history_and_clamped_in_leav
             .await
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn hr_sets_remaining_and_approved_leave_keeps_lowering_it() {
+    let Some(pool) = real_pool().await else {
+        eprintln!("skipping leave-remaining test: DATABASE_URL not set");
+        return;
+    };
+    let tag = Uuid::new_v4().simple().to_string();
+    let year = 2035;
+    let hr = users::create(
+        &pool,
+        "hr-rem",
+        &format!("hr-rem-{tag}@t.local"),
+        "h",
+        UserRole::Hr,
+        None,
+    )
+    .await
+    .unwrap();
+    let user = users::create(
+        &pool,
+        "rem",
+        &format!("rem-{tag}@t.local"),
+        "h",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .unwrap();
+    let lt = leave::create_type(
+        &pool,
+        &format!("earned-rem-{tag}"),
+        true,
+        11.5,
+        11.5,
+        11.5,
+        &leave::TypeRules::default(),
+    )
+    .await
+    .unwrap();
+
+    // From the old records HR knows 8 days are left: 3.5 were used outside TimeTracker.
+    let r = leave::set_used(
+        &pool,
+        user.id,
+        lt.id,
+        year,
+        leave::UsedTarget::Remaining(8.0),
+        hr.id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        r,
+        leave::SetUsed::Saved {
+            allotted: 11.5,
+            approved: 0.0,
+            adjustment: 3.5,
+            used: 3.5,
+            remaining: 8.0
+        }
+    );
+
+    // The employee applies on the platform for 2 days (2035-03-05/06 are Mon/Tue) and it is approved through
+    // the real approval path: remaining drops by exactly those 2 days.
+    let (req, days) = leave_service::submit_request(
+        &pool,
+        user.id,
+        lt.id,
+        d(year, 3, 5),
+        d(year, 3, 6),
+        "",
+        None,
+        None,
+    )
+    .await
+    .expect("a two-day request");
+    assert_eq!(days, 2.0);
+    assert!(leave_service::approve(&pool, req, hr.id).await.unwrap());
+    let b = balance_of(&pool, user.id, lt.id, year).await;
+    assert_eq!(
+        (b.used_days, b.remaining_days, b.used_adjustment),
+        (5.5, 6.0, 3.5)
+    );
+
+    // A half day too.
+    let (req, _) = leave_service::submit_request(
+        &pool,
+        user.id,
+        lt.id,
+        d(year, 3, 12),
+        d(year, 3, 12),
+        "",
+        Some(0.5),
+        Some("first"),
+    )
+    .await
+    .expect("a half-day request");
+    assert!(leave_service::approve(&pool, req, hr.id).await.unwrap());
+    assert_eq!(
+        balance_of(&pool, user.id, lt.id, year).await.remaining_days,
+        5.5
+    );
+
+    // More remaining than the allotment minus approved requests (11.5 − 2.5 = 9) is refused: those days were
+    // taken on the platform, so only a bigger allotment can give them back.
+    assert_eq!(
+        leave::set_used(
+            &pool,
+            user.id,
+            lt.id,
+            year,
+            leave::UsedTarget::Remaining(9.5),
+            hr.id
+        )
+        .await
+        .unwrap(),
+        leave::SetUsed::BelowApproved {
+            allotted: 11.5,
+            approved: 2.5
+        }
+    );
+    // Exactly 9 is allowed and clears what HR had recorded.
+    let r = leave::set_used(
+        &pool,
+        user.id,
+        lt.id,
+        year,
+        leave::UsedTarget::Remaining(9.0),
+        hr.id,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        r,
+        leave::SetUsed::Saved {
+            adjustment,
+            remaining,
+            ..
+        } if adjustment == 0.0 && remaining == 9.0
+    ));
+
+    // Remaining 0: nothing left, so a new request is refused at submit.
+    leave::set_used(
+        &pool,
+        user.id,
+        lt.id,
+        year,
+        leave::UsedTarget::Remaining(0.0),
+        hr.id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        balance_of(&pool, user.id, lt.id, year).await.remaining_days,
+        0.0
+    );
+    assert!(leave_service::submit_request(
+        &pool,
+        user.id,
+        lt.id,
+        d(year, 3, 19),
+        d(year, 3, 19),
+        "",
+        None,
+        None,
+    )
+    .await
+    .is_err());
+
+    // History keeps the allotment of the time with every change.
+    let history: Vec<(f64, f64, f64)> = sqlx::query_as(
+        "SELECT allotted_days, old_used, new_used FROM leave_used_history WHERE user_id = $1 ORDER BY created_at",
+    )
+    .bind(user.id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        history,
+        vec![(11.5, 0.0, 3.5), (11.5, 6.0, 2.5), (11.5, 2.5, 11.5)]
+    );
+
+    sqlx::query("DELETE FROM leave_requests WHERE user_id = $1")
+        .bind(user.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for id in [user.id, hr.id] {
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM leave_types WHERE id = $1")
+        .bind(lt.id)
+        .execute(&pool)
+        .await
+        .unwrap();
 }
 
 // ---- the route: who may call it, and what it accepts ----
@@ -402,6 +686,28 @@ mod route {
                 "used_days {v}"
             );
         }
+        // remaining_days is validated the same way; exactly one of the two must be sent.
+        let remaining = |v: f64| serde_json::json!({ "user_id": someone, "leave_type_id": Uuid::new_v4(), "year": 2034, "remaining_days": v });
+        for v in [-0.5, 2.25, 400.0] {
+            assert_eq!(
+                post(me, UserRole::Hr, remaining(v)).await,
+                StatusCode::BAD_REQUEST,
+                "remaining_days {v}"
+            );
+        }
+        let mut both = body(someone, 1.0);
+        both["remaining_days"] = serde_json::json!(2.0);
+        assert_eq!(post(me, UserRole::Hr, both).await, StatusCode::BAD_REQUEST);
+        let mut neither = body(someone, 1.0);
+        neither.as_object_mut().unwrap().remove("used_days");
+        assert_eq!(
+            post(me, UserRole::Hr, neither).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post(me, UserRole::Hr, remaining(3.0)).await,
+            StatusCode::NOT_FOUND
+        );
         let mut bad_year = body(someone, 1.0);
         bad_year["year"] = serde_json::json!(1999);
         assert_eq!(

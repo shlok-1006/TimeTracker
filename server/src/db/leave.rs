@@ -414,35 +414,57 @@ pub async fn adjust_allocation(
     Ok(Some(next))
 }
 
+/// What HR typed on the People → Leaves screen: the days USED, or the days REMAINING (migration 0054). Either
+/// way the same thing is stored — days used outside TimeTracker — so later approvals still count against it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UsedTarget {
+    Used(f64),
+    Remaining(f64),
+}
+
 /// Outcome of [`set_used`].
 #[derive(Debug, PartialEq)]
 pub enum SetUsed {
-    /// Saved: `approved` days come from approved requests, `adjustment` is what HR added on top.
-    Saved { approved: f64, adjustment: f64 },
-    /// Refused: the approved requests alone already add up to more than the requested total.
-    BelowApproved { approved: f64 },
-    /// Refused: more than the person's allotment for the type (remaining would go negative).
+    /// Saved. `adjustment` is the days recorded on top of `approved` (approved requests); `used` and
+    /// `remaining` are the balance after the save.
+    Saved {
+        allotted: f64,
+        approved: f64,
+        adjustment: f64,
+        used: f64,
+        remaining: f64,
+    },
+    /// Refused: the approved requests alone already add up to more than the requested used total (for a
+    /// remaining target: more remaining than `allotted − approved` leaves room for).
+    BelowApproved { allotted: f64, approved: f64 },
+    /// Refused: more used than the person's allotment for the type (remaining would go negative).
     AboveAllotment { allotted: f64 },
     /// The user or the leave type doesn't exist.
     NotFound,
 }
 
-/// Set how many days of `leave_type_id` the user has USED in `year` (migration 0053). "Used" is the sum of
-/// approved requests, so the total HR types is stored as the difference on top of them. It can't go below
-/// what the approved requests already account for (cancel or reject those instead), nor above the allotment
-/// (or the approved total, if approvals already exceed a since-lowered allotment). A difference of 0 removes
-/// the row, so "used" is plain approved requests again. Every change is appended to `leave_used_history`.
+/// Set how many days of `leave_type_id` the user has used — or has left — in `year` (migrations 0053, 0054).
+///
+/// "Used" is the sum of approved requests, so what HR asks for is stored as the difference on top of them:
+/// days taken outside TimeTracker. A REMAINING target is turned into used = allotted − remaining against the
+/// allotment as it is now, under the lock. Storing used rather than pinning remaining is what keeps leave
+/// approved later counting: each approval adds to the approved total, so remaining goes down by its days.
+///
+/// Used can't go below what approved requests already account for (cancel or reject those, or raise the
+/// allotment, instead), nor above the allotment (or the approved total, if approvals already exceed a
+/// since-lowered allotment). A difference of 0 removes the row, so "used" is plain approved requests again.
+/// Every change is appended to `leave_used_history`.
 ///
 /// Holds the same per-person advisory lock as leave approval ([`crate::leave_service::approve`]) for the
-/// whole read-check-write, so an approval can't land between reading the approved total and writing the
-/// difference (which would leave a total HR never typed), and an approval can't be checked against a
-/// balance this save is about to change.
+/// whole read-check-write, so an approval can't land between reading the balance and writing the difference
+/// (which would leave a total HR never typed), and an approval can't be checked against a balance this save
+/// is about to change.
 pub async fn set_used(
     pool: &PgPool,
     user_id: Uuid,
     leave_type_id: Uuid,
     year: i32,
-    used_days: f64,
+    target: UsedTarget,
     set_by: Uuid,
 ) -> Result<SetUsed, AppError> {
     let mut tx = pool.begin().await?;
@@ -451,7 +473,7 @@ pub async fn set_used(
         .execute(&mut *tx)
         .await?;
     // Reads/writes below run on the pool and see everything committed before we got the lock (as approve).
-    let outcome = set_used_locked(pool, user_id, leave_type_id, year, used_days, set_by).await;
+    let outcome = set_used_locked(pool, user_id, leave_type_id, year, target, set_by).await;
     tx.commit().await?;
     outcome
 }
@@ -461,7 +483,7 @@ async fn set_used_locked(
     user_id: Uuid,
     leave_type_id: Uuid,
     year: i32,
-    used_days: f64,
+    target: UsedTarget,
     set_by: Uuid,
 ) -> Result<SetUsed, AppError> {
     // The current balance: no row for an unknown user (it joins users) or an unknown type.
@@ -472,15 +494,18 @@ async fn set_used_locked(
     else {
         return Ok(SetUsed::NotFound);
     };
+    let allotted = bal.allotted_days;
     let approved = bal.used_days - bal.used_adjustment;
+    let used_days = match target {
+        UsedTarget::Used(d) => d,
+        UsedTarget::Remaining(d) => allotted - d,
+    };
     // Half days are the smallest unit, so anything closer than a hundredth is "the same".
     if used_days < approved - 0.005 {
-        return Ok(SetUsed::BelowApproved { approved });
+        return Ok(SetUsed::BelowApproved { allotted, approved });
     }
-    if used_days > bal.allotted_days.max(approved) + 0.005 {
-        return Ok(SetUsed::AboveAllotment {
-            allotted: bal.allotted_days,
-        });
+    if used_days > allotted.max(approved) + 0.005 {
+        return Ok(SetUsed::AboveAllotment { allotted });
     }
     let adjustment = used_days - approved;
     if adjustment < 0.005 {
@@ -510,11 +535,12 @@ async fn set_used_locked(
     if (used_days - bal.used_days).abs() >= 0.005 {
         sqlx::query!(
             "INSERT INTO leave_used_history
-                 (user_id, leave_type_id, year, approved_days, old_used, new_used, set_by)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                 (user_id, leave_type_id, year, allotted_days, approved_days, old_used, new_used, set_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             user_id,
             leave_type_id,
             year,
+            allotted,
             approved,
             bal.used_days,
             used_days,
@@ -523,9 +549,13 @@ async fn set_used_locked(
         .execute(pool)
         .await?;
     }
+    let adjustment = adjustment.max(0.0);
     Ok(SetUsed::Saved {
+        allotted,
         approved,
-        adjustment: adjustment.max(0.0),
+        adjustment,
+        used: approved + adjustment,
+        remaining: allotted - (approved + adjustment),
     })
 }
 

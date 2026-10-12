@@ -414,85 +414,173 @@ pub async fn adjust_allocation(
     Ok(Some(next))
 }
 
+/// What HR typed on the People → Leaves screen: the days USED, or the days REMAINING (migration 0054). Either
+/// way the same thing is stored — days used outside TimeTracker — so later approvals still count against it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UsedTarget {
+    Used(f64),
+    Remaining(f64),
+}
+
 /// Outcome of [`set_used`].
 #[derive(Debug, PartialEq)]
 pub enum SetUsed {
-    /// Saved: `approved` days come from approved requests, `adjustment` is what HR added on top.
-    Saved { approved: f64, adjustment: f64 },
-    /// Refused: the approved requests alone already add up to more than the requested total.
-    BelowApproved { approved: f64 },
+    /// Saved. `adjustment` is the days recorded on top of `approved` (approved requests); `used` and
+    /// `remaining` are the balance after the save. `changed` is false when it already was that balance —
+    /// nothing was written then.
+    Saved {
+        allotted: f64,
+        approved: f64,
+        adjustment: f64,
+        used: f64,
+        remaining: f64,
+        changed: bool,
+    },
+    /// Refused: the approved requests alone already add up to more than the requested used total (for a
+    /// remaining target: more remaining than `allotted − approved` leaves room for).
+    BelowApproved { allotted: f64, approved: f64 },
+    /// Refused: more used than the person's allotment for the type (remaining would go negative).
+    AboveAllotment { allotted: f64 },
     /// The user or the leave type doesn't exist.
     NotFound,
 }
 
-/// Set how many days of `leave_type_id` the user has USED in `year` (migration 0053). "Used" is the sum of
-/// approved requests, so the total HR types is stored as the difference on top of them; it can't go below
-/// what the approved requests already account for (cancel or reject those instead). A difference of 0
-/// removes the row, so "used" is plain approved requests again.
+/// Set how many days of `leave_type_id` the user has used — or has left — in `year` (migrations 0053, 0054).
+///
+/// "Used" is the sum of approved requests, so what HR asks for is stored as the difference on top of them:
+/// days taken outside TimeTracker. A REMAINING target is turned into used = allotted − remaining against the
+/// allotment as it is now. Storing used rather than pinning remaining is what keeps leave approved later
+/// counting: each approval adds to the approved total, so remaining goes down by its days.
+///
+/// Used can't go below what approved requests already account for (cancel or reject those, or raise the
+/// allotment, instead), nor above the allotment (or the approved total, if approvals already exceed a
+/// since-lowered allotment). Remaining can't be more than `allotted − approved`; when approvals already
+/// exceed the allotment that is 0, and remaining 0 clears what HR recorded (remaining stays negative until the
+/// allotment is raised). A difference of 0 removes the row. Every change is appended to `leave_used_history`;
+/// a save that changes nothing writes nothing (so it can't re-attribute days another HR person recorded).
+///
+/// One transaction on one connection: it holds the same per-person advisory lock as leave approval
+/// ([`crate::leave_service::approve`]) and does the read, the adjustment and the history row inside it, so an
+/// approval can't land between reading the balance and writing the difference, and the balance never changes
+/// without its history row.
 pub async fn set_used(
     pool: &PgPool,
     user_id: Uuid,
     leave_type_id: Uuid,
     year: i32,
-    used_days: f64,
+    target: UsedTarget,
     set_by: Uuid,
 ) -> Result<SetUsed, AppError> {
-    let exists = sqlx::query_scalar!(
-        r#"SELECT (EXISTS (SELECT 1 FROM users WHERE id = $1)
-                  AND EXISTS (SELECT 1 FROM leave_types WHERE id = $2)) AS "ok!""#,
-        user_id,
-        leave_type_id
-    )
-    .fetch_one(pool)
-    .await?;
-    if !exists {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(format!("leave-approve:{user_id}"))
+        .execute(&mut *tx)
+        .await?;
+    let outcome = set_used_locked(&mut tx, user_id, leave_type_id, year, target, set_by).await?;
+    tx.commit().await?;
+    Ok(outcome)
+}
+
+async fn set_used_locked(
+    conn: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: i32,
+    target: UsedTarget,
+    set_by: Uuid,
+) -> Result<SetUsed, AppError> {
+    // The current balance: no row for an unknown user (it joins users) or an unknown type.
+    let Some(bal) = balances_as_of(&mut *conn, user_id, year, display_as_of(year))
+        .await?
+        .into_iter()
+        .find(|b| b.leave_type_id == leave_type_id)
+    else {
         return Ok(SetUsed::NotFound);
-    }
-    let approved = sqlx::query_scalar!(
-        r#"SELECT COALESCE(SUM(days), 0) AS "approved!" FROM leave_requests
-           WHERE user_id = $1 AND leave_type_id = $2 AND status = 'approved'
-             AND EXTRACT(YEAR FROM start_date)::int = $3"#,
-        user_id,
-        leave_type_id,
-        year
-    )
-    .fetch_one(pool)
-    .await?;
+    };
+    let allotted = bal.allotted_days;
+    let approved = bal.used_days - bal.used_adjustment;
     // Half days are the smallest unit, so anything closer than a hundredth is "the same".
-    if used_days < approved - 0.005 {
-        return Ok(SetUsed::BelowApproved { approved });
+    let used_days = match target {
+        UsedTarget::Used(d) => {
+            if d < approved - 0.005 {
+                return Ok(SetUsed::BelowApproved { allotted, approved });
+            }
+            d
+        }
+        UsedTarget::Remaining(d) => {
+            if d > (allotted - approved).max(0.0) + 0.005 {
+                return Ok(SetUsed::BelowApproved { allotted, approved });
+            }
+            // Only short of `approved` when approvals already exceed the allotment (then d is 0).
+            (allotted - d).max(approved)
+        }
+    };
+    if used_days > allotted.max(approved) + 0.005 {
+        return Ok(SetUsed::AboveAllotment { allotted });
     }
-    let adjustment = used_days - approved;
-    if adjustment < 0.005 {
+    let adjustment = if used_days - approved < 0.005 {
+        0.0
+    } else {
+        used_days - approved
+    };
+    let used = approved + adjustment;
+    let remaining = allotted - used;
+    if (used - bal.used_days).abs() < 0.005 {
+        return Ok(SetUsed::Saved {
+            allotted,
+            approved,
+            adjustment: bal.used_adjustment,
+            used: bal.used_days,
+            remaining: bal.remaining_days,
+            changed: false,
+        });
+    }
+    if adjustment == 0.0 {
         sqlx::query!(
             "DELETE FROM leave_used_adjustments WHERE user_id = $1 AND leave_type_id = $2 AND year = $3",
             user_id,
             leave_type_id,
             year
         )
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
-        return Ok(SetUsed::Saved {
-            approved,
-            adjustment: 0.0,
-        });
+    } else {
+        sqlx::query!(
+            "INSERT INTO leave_used_adjustments (user_id, leave_type_id, year, days, set_by, updated_at)
+             VALUES ($1, $2, $3, $4, $5, now())
+             ON CONFLICT (user_id, leave_type_id, year)
+             DO UPDATE SET days = EXCLUDED.days, set_by = EXCLUDED.set_by, updated_at = now()",
+            user_id,
+            leave_type_id,
+            year,
+            adjustment,
+            set_by
+        )
+        .execute(&mut *conn)
+        .await?;
     }
     sqlx::query!(
-        "INSERT INTO leave_used_adjustments (user_id, leave_type_id, year, days, set_by, updated_at)
-         VALUES ($1, $2, $3, $4, $5, now())
-         ON CONFLICT (user_id, leave_type_id, year)
-         DO UPDATE SET days = EXCLUDED.days, set_by = EXCLUDED.set_by, updated_at = now()",
+        "INSERT INTO leave_used_history
+             (user_id, leave_type_id, year, allotted_days, approved_days, old_used, new_used, set_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         user_id,
         leave_type_id,
         year,
-        adjustment,
+        allotted,
+        approved,
+        bal.used_days,
+        used,
         set_by
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(SetUsed::Saved {
+        allotted,
         approved,
         adjustment,
+        used,
+        remaining,
+        changed: true,
     })
 }
 
@@ -502,18 +590,24 @@ pub async fn set_used(
 /// Balances for `year`, with eligibility judged as of today — or 1 January of `year` when that is later, so
 /// next year's balance doesn't hide maternity from someone who reaches one year of service before then.
 pub async fn balances(pool: &PgPool, user_id: Uuid, year: i32) -> Result<Vec<Balance>, AppError> {
+    balances_as_of(pool, user_id, year, display_as_of(year)).await
+}
+
+/// The day eligibility is judged on when a balance is just being shown (see [`balances`]).
+fn display_as_of(year: i32) -> NaiveDate {
     let today = Utc::now().date_naive();
-    let as_of = NaiveDate::from_ymd_opt(year, 1, 1)
+    NaiveDate::from_ymd_opt(year, 1, 1)
         .filter(|jan1| *jan1 > today)
-        .unwrap_or(today);
-    balances_as_of(pool, user_id, year, as_of).await
+        .unwrap_or(today)
 }
 
 /// Balances for `year`, with each type's eligibility rule (migration 0050) judged on `as_of` — the leave's
 /// start date when submitting or approving, today when just displaying. Precedence: an HR allocation for the
 /// year wins outright; otherwise an eligible person gets the category default and an ineligible one gets 0.
-pub async fn balances_as_of(
-    pool: &PgPool,
+///
+/// Takes any executor, so [`set_used`] can read the balance on the connection that holds its lock.
+pub async fn balances_as_of<'e, E: sqlx::PgExecutor<'e>>(
+    db: E,
     user_id: Uuid,
     year: i32,
     as_of: NaiveDate,
@@ -572,7 +666,7 @@ pub async fn balances_as_of(
         year,
         as_of
     )
-    .fetch_all(pool)
+    .fetch_all(db)
     .await?;
 
     Ok(rows
@@ -629,7 +723,9 @@ pub async fn balances_as_of(
 /// Total remaining **paid** leave days per user for `year`, in ONE query — the
 /// "leaves left" column of the HR monthly attendance report. Calling
 /// [`balances`] per employee would be N round-trips; this rolls the same
-/// allotted-minus-approved arithmetic up across every user and every paid type.
+/// allotted-minus-approved arithmetic up across every user and every paid type. Each type counts down to 0,
+/// never below, so one overdrawn type (an allotment lowered after approvals) can't cancel out the days left
+/// on another.
 ///
 /// Scope mirrors [`crate::db::attendance::report`]: `manager_id = Some(pm)`
 /// restricts to that PM's managed users, `None` (HR) is the whole company.
@@ -648,7 +744,7 @@ pub async fn remaining_paid_by_user(
     let rows = sqlx::query!(
         r#"
         SELECT u.id AS user_id,
-          COALESCE(SUM(
+          COALESCE(SUM(GREATEST(
             COALESCE(
                 la.allotted_days,
                 CASE
@@ -671,8 +767,9 @@ pub async fn remaining_paid_by_user(
             - COALESCE((
                 SELECT lu.days FROM leave_used_adjustments lu
                 WHERE lu.user_id = u.id AND lu.leave_type_id = lt.id AND lu.year = $1
-            ), 0)
-          ), 0) AS "remaining!"
+            ), 0),
+            0  -- each type counts down to 0, never below: one overdrawn type mustn't eat another's days
+          )), 0) AS "remaining!"
         FROM users u
         CROSS JOIN leave_types lt
         LEFT JOIN leave_allocations la

@@ -15,6 +15,10 @@ use server::db::{leave, users};
 use server::leave_service;
 use server::role::UserRole;
 
+/// The tests here create company-wide leave types, and the "leaves left" assertions sum over every paid type —
+/// so one test's type appearing mid-assertion in another would make it flaky. Run them one at a time.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn real_pool() -> Option<sqlx::PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
     sqlx::postgres::PgPoolOptions::new()
@@ -39,6 +43,7 @@ async fn balance_of(pool: &sqlx::PgPool, user: Uuid, lt: Uuid, year: i32) -> lea
 
 #[tokio::test]
 async fn hr_sets_used_days_on_top_of_approved_requests() {
+    let _serial = SERIAL.lock().await;
     let Some(pool) = real_pool().await else {
         eprintln!("skipping leave-used test: DATABASE_URL not set");
         return;
@@ -108,7 +113,8 @@ async fn hr_sets_used_days_on_top_of_approved_requests() {
             approved: 0.0,
             adjustment: 3.5,
             used: 3.5,
-            remaining: 8.5
+            remaining: 8.5,
+            changed: true
         }
     );
     let b = balance_of(&pool, user.id, lt.id, year).await;
@@ -179,7 +185,8 @@ async fn hr_sets_used_days_on_top_of_approved_requests() {
             approved: 1.0,
             adjustment: 0.0,
             used: 1.0,
-            remaining: 11.0
+            remaining: 11.0,
+            changed: true
         }
     );
     let rows: i64 =
@@ -258,6 +265,7 @@ async fn hr_sets_used_days_on_top_of_approved_requests() {
 
 #[tokio::test]
 async fn used_is_capped_at_the_allotment_recorded_in_history_and_clamped_in_leaves_left() {
+    let _serial = SERIAL.lock().await;
     let Some(pool) = real_pool().await else {
         eprintln!("skipping leave-used cap test: DATABASE_URL not set");
         return;
@@ -405,6 +413,7 @@ async fn used_is_capped_at_the_allotment_recorded_in_history_and_clamped_in_leav
 
 #[tokio::test]
 async fn hr_sets_remaining_and_approved_leave_keeps_lowering_it() {
+    let _serial = SERIAL.lock().await;
     let Some(pool) = real_pool().await else {
         eprintln!("skipping leave-remaining test: DATABASE_URL not set");
         return;
@@ -461,7 +470,8 @@ async fn hr_sets_remaining_and_approved_leave_keeps_lowering_it() {
             approved: 0.0,
             adjustment: 3.5,
             used: 3.5,
-            remaining: 8.0
+            remaining: 8.0,
+            changed: true
         }
     );
 
@@ -559,7 +569,7 @@ async fn hr_sets_remaining_and_approved_leave_keeps_lowering_it() {
         balance_of(&pool, user.id, lt.id, year).await.remaining_days,
         0.0
     );
-    assert!(leave_service::submit_request(
+    let refused = leave_service::submit_request(
         &pool,
         user.id,
         lt.id,
@@ -570,9 +580,89 @@ async fn hr_sets_remaining_and_approved_leave_keeps_lowering_it() {
         None,
     )
     .await
-    .is_err());
+    .expect_err("nothing left to take");
+    assert!(
+        refused.to_string().contains("insufficient balance"),
+        "refused for the balance, not something else: {refused}"
+    );
 
-    // History keeps the allotment of the time with every change.
+    // Saving the same remaining again writes nothing: no history row, and the recorded days stay attributed
+    // to whoever set them (a second HR person re-saving can't take them over).
+    let hr2 = users::create(
+        &pool,
+        "hr-rem2",
+        &format!("hr-rem2-{tag}@t.local"),
+        "h",
+        UserRole::Hr,
+        None,
+    )
+    .await
+    .unwrap();
+    let r = leave::set_used(
+        &pool,
+        user.id,
+        lt.id,
+        year,
+        leave::UsedTarget::Remaining(0.0),
+        hr2.id,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(r, leave::SetUsed::Saved { changed: false, .. }));
+    let set_by: Uuid = sqlx::query_scalar(
+        "SELECT set_by FROM leave_used_adjustments WHERE user_id = $1 AND leave_type_id = $2",
+    )
+    .bind(user.id)
+    .bind(lt.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(set_by, hr.id);
+
+    // Over-drawn: the allotment is lowered to 2 while 2.5 days are approved. Nothing can remain, but
+    // remaining 0 still clears the days HR recorded (remaining is then 2 − 2.5 = −0.5); anything above 0 is
+    // refused.
+    leave::upsert_allocation(&pool, user.id, lt.id, year, 2.0)
+        .await
+        .unwrap();
+    assert_eq!(
+        leave::set_used(
+            &pool,
+            user.id,
+            lt.id,
+            year,
+            leave::UsedTarget::Remaining(0.5),
+            hr.id
+        )
+        .await
+        .unwrap(),
+        leave::SetUsed::BelowApproved {
+            allotted: 2.0,
+            approved: 2.5
+        }
+    );
+    assert_eq!(
+        leave::set_used(
+            &pool,
+            user.id,
+            lt.id,
+            year,
+            leave::UsedTarget::Remaining(0.0),
+            hr.id
+        )
+        .await
+        .unwrap(),
+        leave::SetUsed::Saved {
+            allotted: 2.0,
+            approved: 2.5,
+            adjustment: 0.0,
+            used: 2.5,
+            remaining: -0.5,
+            changed: true
+        }
+    );
+
+    // History keeps the allotment of the time with every change, and the stored total.
     let history: Vec<(f64, f64, f64)> = sqlx::query_as(
         "SELECT allotted_days, old_used, new_used FROM leave_used_history WHERE user_id = $1 ORDER BY created_at",
     )
@@ -582,7 +672,12 @@ async fn hr_sets_remaining_and_approved_leave_keeps_lowering_it() {
     .unwrap();
     assert_eq!(
         history,
-        vec![(11.5, 0.0, 3.5), (11.5, 6.0, 2.5), (11.5, 2.5, 11.5)]
+        vec![
+            (11.5, 0.0, 3.5),
+            (11.5, 6.0, 2.5),
+            (11.5, 2.5, 11.5),
+            (2.0, 11.5, 2.5)
+        ]
     );
 
     sqlx::query("DELETE FROM leave_requests WHERE user_id = $1")
@@ -590,7 +685,7 @@ async fn hr_sets_remaining_and_approved_leave_keeps_lowering_it() {
         .execute(&pool)
         .await
         .unwrap();
-    for id in [user.id, hr.id] {
+    for id in [user.id, hr.id, hr2.id] {
         sqlx::query("DELETE FROM users WHERE id = $1")
             .bind(id)
             .execute(&pool)
@@ -637,12 +732,24 @@ mod route {
     }
 
     async fn post(caller: Uuid, role: UserRole, body: serde_json::Value) -> StatusCode {
+        send("POST", "/admin/leave/used", caller, role, body).await
+    }
+
+    async fn send(
+        method: &str,
+        path: &str,
+        caller: Uuid,
+        role: UserRole,
+        body: serde_json::Value,
+    ) -> StatusCode {
         let token = JwtKeys::new(SECRET, 900)
             .issue(caller, role, None, None)
             .unwrap();
         app()
             .oneshot(
-                Request::post("/admin/leave/used")
+                Request::builder()
+                    .method(method)
+                    .uri(path)
                     .header("authorization", format!("Bearer {token}"))
                     .header("content-type", "application/json")
                     .body(Body::from(body.to_string()))
@@ -722,6 +829,39 @@ mod route {
         );
         assert_eq!(
             post(me, UserRole::Admin, body(me, 1.0)).await,
+            StatusCode::NOT_FOUND
+        );
+
+        // The allotment endpoints follow the same rule: HR can't raise, adjust or reset their OWN allotment
+        // (that would undo the used/remaining rule by the back door), and an allotment is 0–366.
+        let lt = Uuid::new_v4();
+        let alloc = |u: Uuid, days: f64| serde_json::json!({ "user_id": u, "leave_type_id": lt, "year": 2034, "allotted_days": days });
+        let adjust = |u: Uuid, delta: f64| serde_json::json!({ "user_id": u, "leave_type_id": lt, "year": 2034, "delta": delta });
+        let reset =
+            |u: Uuid| serde_json::json!({ "user_id": u, "leave_type_id": lt, "year": 2034 });
+        for (method, path, b) in [
+            ("POST", "/admin/leave/allocations", alloc(me, 30.0)),
+            ("POST", "/admin/leave/allocations/adjust", adjust(me, 5.0)),
+            ("DELETE", "/admin/leave/allocations", reset(me)),
+            ("POST", "/admin/leave/allocations", alloc(someone, -3.0)),
+            ("POST", "/admin/leave/allocations", alloc(someone, 400.0)),
+        ] {
+            assert_eq!(
+                send(method, path, me, UserRole::Hr, b.clone()).await,
+                StatusCode::BAD_REQUEST,
+                "{method} {path} {b}"
+            );
+        }
+        // An admin may reset their own (nothing there: 404, past the guard).
+        assert_eq!(
+            send(
+                "DELETE",
+                "/admin/leave/allocations",
+                me,
+                UserRole::Admin,
+                reset(me)
+            )
+            .await,
             StatusCode::NOT_FOUND
         );
     }

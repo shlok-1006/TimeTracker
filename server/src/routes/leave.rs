@@ -436,11 +436,34 @@ struct NewAllocation {
     allotted_days: f64,
 }
 
+/// Changing your own leave balance — allotment or used/remaining — is a conflict of interest (and could undo
+/// what another HR person recorded against you); only an admin, the tier above HR, may.
+fn refuse_own_balance(hr: &crate::middleware::AuthUser, user_id: Uuid) -> Result<(), AppError> {
+    if user_id == hr.id && hr.role != UserRole::Admin {
+        return Err(AppError::BadRequest(
+            "you can't change your own leave balance — ask another HR person".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// An allotment is a day count: finite, 0–366.
+fn check_allotment(days: f64) -> Result<(), AppError> {
+    if !days.is_finite() || !(0.0..=366.0).contains(&days) {
+        return Err(AppError::BadRequest(
+            "allotted days must be between 0 and 366".into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn allocate(
     State(state): State<AppState>,
     RequireHr(hr): RequireHr,
     Json(body): Json<NewAllocation>,
 ) -> Result<Json<Value>, AppError> {
+    refuse_own_balance(&hr, body.user_id)?;
+    check_allotment(body.allotted_days)?;
     let year = body.year.unwrap_or_else(|| Utc::now().year());
     leave::upsert_allocation(
         &state.db,
@@ -480,6 +503,12 @@ async fn adjust_allocation(
     RequireHr(hr): RequireHr,
     Json(body): Json<AdjustAllocation>,
 ) -> Result<Json<Value>, AppError> {
+    refuse_own_balance(&hr, body.user_id)?;
+    if !body.delta.is_finite() || body.delta.abs() > 366.0 {
+        return Err(AppError::BadRequest(
+            "delta must be between −366 and 366".into(),
+        ));
+    }
     let year = body.year.unwrap_or_else(|| Utc::now().year());
     let allotted = leave::adjust_allocation(
         &state.db,
@@ -524,13 +553,7 @@ async fn set_used(
     RequireHr(hr): RequireHr,
     Json(body): Json<SetUsed>,
 ) -> Result<Json<Value>, AppError> {
-    // Changing your own balance is a conflict of interest (and could undo days another HR person recorded
-    // against you); only an admin, the tier above HR, may.
-    if body.user_id == hr.id && hr.role != UserRole::Admin {
-        return Err(AppError::BadRequest(
-            "you can't change your own leave balance — ask another HR person".into(),
-        ));
-    }
+    refuse_own_balance(&hr, body.user_id)?;
     let year = body.year.unwrap_or_else(|| Utc::now().year());
     if !(2000..=2100).contains(&year) {
         return Err(AppError::BadRequest("year is out of range".into()));
@@ -556,10 +579,14 @@ async fn set_used(
     match leave::set_used(&state.db, body.user_id, body.leave_type_id, year, target, hr.id).await? {
         leave::SetUsed::NotFound => Err(AppError::NotFound),
         leave::SetUsed::BelowApproved { allotted, approved } => Err(AppError::BadRequest(match target {
+            leave::UsedTarget::Remaining(_) if approved > allotted => format!(
+                "approved leave requests already use {approved} day(s), more than the {allotted} allotted, so \
+                 nothing can remain — raise the allotment first (0 clears days recorded by HR)"
+            ),
             leave::UsedTarget::Remaining(_) => format!(
                 "approved leave requests already use {approved} of the {allotted} day(s) allotted, so at most {} \
                  can remain — raise the allotment to give more",
-                (allotted - approved).max(0.0)
+                allotted - approved
             ),
             leave::UsedTarget::Used(_) => format!(
                 "{approved} day(s) already come from approved leave requests this year, so used can't be lower — \
@@ -569,8 +596,10 @@ async fn set_used(
         leave::SetUsed::AboveAllotment { allotted } => Err(AppError::BadRequest(format!(
             "used can't be more than the {allotted} day(s) allotted for this type — raise the allotment first"
         ))),
-        leave::SetUsed::Saved { allotted, approved, adjustment, used, remaining } => {
-            audit::log(&state.db, hr.id, "leave.used.set", "user", Some(body.user_id)).await;
+        leave::SetUsed::Saved { allotted, approved, adjustment, used, remaining, changed } => {
+            if changed {
+                audit::log(&state.db, hr.id, "leave.used.set", "user", Some(body.user_id)).await;
+            }
             Ok(Json(json!({
                 "user_id": body.user_id, "leave_type_id": body.leave_type_id, "year": year,
                 "allotted_days": allotted, "used_days": used, "remaining_days": remaining,
@@ -594,6 +623,7 @@ async fn delete_allocation(
     RequireHr(hr): RequireHr,
     Json(body): Json<DeleteAllocation>,
 ) -> Result<Json<Value>, AppError> {
+    refuse_own_balance(&hr, body.user_id)?;
     let year = body.year.unwrap_or_else(|| Utc::now().year());
     if !leave::delete_allocation(&state.db, body.user_id, body.leave_type_id, year).await? {
         return Err(AppError::NotFound);

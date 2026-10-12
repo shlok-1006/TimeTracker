@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM leave_used_adjustments WHERE user_id = $1 AND leave_type_id = $2 AND year = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0cda08b639235108851a0418362647d3c77821a1a865788b361c4080c777e15a"
+}

@@ -74,8 +74,12 @@ pub struct Balance {
     pub leave_type_name: String,
     pub paid: bool,
     pub allotted_days: f64,
+    /// Approved requests plus `used_adjustment`.
     pub used_days: f64,
     pub remaining_days: f64,
+    /// Days HR recorded as used on top of the approved requests (leave taken outside TimeTracker; migration
+    /// 0053). 0 when HR hasn't set one. Already included in `used_days`.
+    pub used_adjustment: f64,
     /// True when `allotted_days` comes from an explicit per-user allocation
     /// (a manual override); false when it falls back to the category default.
     pub is_override: bool,
@@ -410,6 +414,88 @@ pub async fn adjust_allocation(
     Ok(Some(next))
 }
 
+/// Outcome of [`set_used`].
+#[derive(Debug, PartialEq)]
+pub enum SetUsed {
+    /// Saved: `approved` days come from approved requests, `adjustment` is what HR added on top.
+    Saved { approved: f64, adjustment: f64 },
+    /// Refused: the approved requests alone already add up to more than the requested total.
+    BelowApproved { approved: f64 },
+    /// The user or the leave type doesn't exist.
+    NotFound,
+}
+
+/// Set how many days of `leave_type_id` the user has USED in `year` (migration 0053). "Used" is the sum of
+/// approved requests, so the total HR types is stored as the difference on top of them; it can't go below
+/// what the approved requests already account for (cancel or reject those instead). A difference of 0
+/// removes the row, so "used" is plain approved requests again.
+pub async fn set_used(
+    pool: &PgPool,
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: i32,
+    used_days: f64,
+    set_by: Uuid,
+) -> Result<SetUsed, AppError> {
+    let exists = sqlx::query_scalar!(
+        r#"SELECT (EXISTS (SELECT 1 FROM users WHERE id = $1)
+                  AND EXISTS (SELECT 1 FROM leave_types WHERE id = $2)) AS "ok!""#,
+        user_id,
+        leave_type_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if !exists {
+        return Ok(SetUsed::NotFound);
+    }
+    let approved = sqlx::query_scalar!(
+        r#"SELECT COALESCE(SUM(days), 0) AS "approved!" FROM leave_requests
+           WHERE user_id = $1 AND leave_type_id = $2 AND status = 'approved'
+             AND EXTRACT(YEAR FROM start_date)::int = $3"#,
+        user_id,
+        leave_type_id,
+        year
+    )
+    .fetch_one(pool)
+    .await?;
+    // Half days are the smallest unit, so anything closer than a hundredth is "the same".
+    if used_days < approved - 0.005 {
+        return Ok(SetUsed::BelowApproved { approved });
+    }
+    let adjustment = used_days - approved;
+    if adjustment < 0.005 {
+        sqlx::query!(
+            "DELETE FROM leave_used_adjustments WHERE user_id = $1 AND leave_type_id = $2 AND year = $3",
+            user_id,
+            leave_type_id,
+            year
+        )
+        .execute(pool)
+        .await?;
+        return Ok(SetUsed::Saved {
+            approved,
+            adjustment: 0.0,
+        });
+    }
+    sqlx::query!(
+        "INSERT INTO leave_used_adjustments (user_id, leave_type_id, year, days, set_by, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (user_id, leave_type_id, year)
+         DO UPDATE SET days = EXCLUDED.days, set_by = EXCLUDED.set_by, updated_at = now()",
+        user_id,
+        leave_type_id,
+        year,
+        adjustment,
+        set_by
+    )
+    .execute(pool)
+    .await?;
+    Ok(SetUsed::Saved {
+        approved,
+        adjustment,
+    })
+}
+
 /// Per-type balances for a user in a given year (allotted, used [approved],
 /// remaining). `allotted` falls back to the user's category default when there
 /// is no explicit allocation override; `is_override` flags which is which.
@@ -470,7 +556,11 @@ pub async fn balances_as_of(
                 WHERE lr.user_id = $1 AND lr.leave_type_id = lt.id
                   AND lr.status = 'approved'
                   AND EXTRACT(YEAR FROM lr.start_date)::int = $2
-            ), 0)                                   AS "used!"
+            ), 0)                                   AS "used!",
+            COALESCE((
+                SELECT lu.days FROM leave_used_adjustments lu
+                WHERE lu.user_id = $1 AND lu.leave_type_id = lt.id AND lu.year = $2
+            ), 0)                                   AS "used_adjustment!"
         FROM leave_types lt
         JOIN users u ON u.id = $1
         LEFT JOIN employee_profiles ep ON ep.user_id = u.id
@@ -518,8 +608,9 @@ pub async fn balances_as_of(
                 leave_type_name: r.leave_type_name,
                 paid: r.paid,
                 allotted_days: allotted,
-                used_days: r.used,
-                remaining_days: allotted - r.used,
+                used_days: r.used + r.used_adjustment,
+                remaining_days: allotted - (r.used + r.used_adjustment),
+                used_adjustment: r.used_adjustment,
                 is_override,
                 eligible,
                 eligibility_note,
@@ -575,6 +666,11 @@ pub async fn remaining_paid_by_user(
                 WHERE lr.user_id = u.id AND lr.leave_type_id = lt.id
                   AND lr.status = 'approved'
                   AND EXTRACT(YEAR FROM lr.start_date)::int = $1
+            ), 0)
+            -- days HR recorded as used outside TimeTracker (migration 0053)
+            - COALESCE((
+                SELECT lu.days FROM leave_used_adjustments lu
+                WHERE lu.user_id = u.id AND lu.leave_type_id = lt.id AND lu.year = $1
             ), 0)
           ), 0) AS "remaining!"
         FROM users u

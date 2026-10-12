@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(days), 0) AS \"approved!\" FROM leave_requests\n           WHERE user_id = $1 AND leave_type_id = $2 AND status = 'approved'\n             AND EXTRACT(YEAR FROM start_date)::int = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "approved!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e9bc943c0d502ed6d18e1f6446b0c086d1d255baa9e24ebd291805594b08ed90"
+}

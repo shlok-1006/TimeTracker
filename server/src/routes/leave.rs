@@ -505,6 +505,50 @@ async fn adjust_allocation(
 }
 
 #[derive(Deserialize)]
+struct SetUsed {
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: Option<i32>,
+    /// The total days of this type the person has used in `year` (approved requests included).
+    used_days: f64,
+}
+
+/// `POST /admin/leave/used` (HR) — set how many days of a leave type someone has USED in a year (migration
+/// 0053). "Used" is the sum of approved requests, so this records the difference on top of them — leave
+/// taken outside TimeTracker. It can't be lower than what approved requests already add up to.
+async fn set_used(
+    State(state): State<AppState>,
+    RequireHr(hr): RequireHr,
+    Json(body): Json<SetUsed>,
+) -> Result<Json<Value>, AppError> {
+    let year = body.year.unwrap_or_else(|| Utc::now().year());
+    if !(2000..=2100).contains(&year) {
+        return Err(AppError::BadRequest("year is out of range".into()));
+    }
+    let used = body.used_days;
+    // Leave is counted in half days; a year has at most 366 of them.
+    if !used.is_finite() || !(0.0..=366.0).contains(&used) || (used * 2.0).fract() != 0.0 {
+        return Err(AppError::BadRequest(
+            "used days must be between 0 and 366, in steps of 0.5".into(),
+        ));
+    }
+    match leave::set_used(&state.db, body.user_id, body.leave_type_id, year, used, hr.id).await? {
+        leave::SetUsed::NotFound => Err(AppError::NotFound),
+        leave::SetUsed::BelowApproved { approved } => Err(AppError::BadRequest(format!(
+            "{approved} day(s) already come from approved leave requests this year, so used can't be lower — \
+             cancel or reject those requests instead"
+        ))),
+        leave::SetUsed::Saved { approved, adjustment } => {
+            audit::log(&state.db, hr.id, "leave.used.set", "user", Some(body.user_id)).await;
+            Ok(Json(json!({
+                "user_id": body.user_id, "leave_type_id": body.leave_type_id, "year": year,
+                "used_days": used, "approved_days": approved, "used_adjustment": adjustment
+            })))
+        }
+    }
+}
+
+#[derive(Deserialize)]
 struct DeleteAllocation {
     user_id: Uuid,
     leave_type_id: Uuid,
@@ -618,6 +662,7 @@ pub fn router() -> Router<AppState> {
             post(allocate).delete(delete_allocation),
         )
         .route("/admin/leave/allocations/adjust", post(adjust_allocation))
+        .route("/admin/leave/used", post(set_used))
         .route("/admin/users/:id/leave/balance", get(user_balance))
         .route("/admin/holidays", get(list_holidays).post(create_holiday))
         .route("/me/holidays", get(my_holidays))

@@ -521,6 +521,13 @@ async fn set_used(
     RequireHr(hr): RequireHr,
     Json(body): Json<SetUsed>,
 ) -> Result<Json<Value>, AppError> {
+    // Changing your own balance is a conflict of interest (and could undo days another HR person recorded
+    // against you); only an admin, the tier above HR, may.
+    if body.user_id == hr.id && hr.role != UserRole::Admin {
+        return Err(AppError::BadRequest(
+            "you can't change your own leave balance — ask another HR person".into(),
+        ));
+    }
     let year = body.year.unwrap_or_else(|| Utc::now().year());
     if !(2000..=2100).contains(&year) {
         return Err(AppError::BadRequest("year is out of range".into()));
@@ -537,6 +544,9 @@ async fn set_used(
         leave::SetUsed::BelowApproved { approved } => Err(AppError::BadRequest(format!(
             "{approved} day(s) already come from approved leave requests this year, so used can't be lower — \
              cancel or reject those requests instead"
+        ))),
+        leave::SetUsed::AboveAllotment { allotted } => Err(AppError::BadRequest(format!(
+            "used can't be more than the {allotted} day(s) allotted for this type — raise the allotment first"
         ))),
         leave::SetUsed::Saved { approved, adjustment } => {
             audit::log(&state.db, hr.id, "leave.used.set", "user", Some(body.user_id)).await;

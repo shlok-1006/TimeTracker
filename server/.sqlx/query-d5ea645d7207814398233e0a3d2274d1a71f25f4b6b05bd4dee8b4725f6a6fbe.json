@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO leave_used_history\n                 (user_id, leave_type_id, year, approved_days, old_used, new_used, set_by)\n             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d5ea645d7207814398233e0a3d2274d1a71f25f4b6b05bd4dee8b4725f6a6fbe"
+}

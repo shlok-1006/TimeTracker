@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, name, paid, default_days, default_days_contractor, default_days_intern,\n                eligible_gender, min_tenure_months, day_basis\n         FROM leave_types ORDER BY name",
+  "query": "INSERT INTO leave_types\n             (name, paid, default_days, default_days_contractor, default_days_intern,\n              eligible_gender, min_tenure_months, day_basis, employment_types)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[]::employment_type[])\n         RETURNING id, name, paid, default_days, default_days_contractor, default_days_intern,\n                   eligible_gender, min_tenure_months, day_basis,\n                   employment_types::text[] AS \"employment_types!\"",
   "describe": {
     "columns": [
       {
@@ -47,10 +47,25 @@
         "ordinal": 8,
         "name": "day_basis",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "employment_types!",
+        "type_info": "TextArray"
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text",
+        "Bool",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Text",
+        "Int4",
+        "Text",
+        "TextArray"
+      ]
     },
     "nullable": [
       false,
@@ -61,8 +76,9 @@
       false,
       true,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "b5877d62f62d403b5e7ad63a255c9034244d751cc861973ccfa00d33fd8f0a73"
+  "hash": "11eef2a2d9589088d533370415adc19e7f598af86b828b0634e7230beb367c4d"
 }

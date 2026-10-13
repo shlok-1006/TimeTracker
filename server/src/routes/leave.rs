@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::db::{audit, leave, users};
+use crate::employment_type::EmploymentType;
 use crate::error::AppError;
 use crate::leave_service;
 use crate::middleware::{AuthUser, RequireHr, RequireStaff, RequireTeamViewer};
@@ -266,6 +267,9 @@ struct NewType {
     min_tenure_months: Option<i32>,
     #[serde(default)]
     day_basis: Option<String>,
+    /// Who may take it (migration 0055). Omitted = everyone.
+    #[serde(default)]
+    employment_types: Option<Vec<EmploymentType>>,
 }
 fn default_true() -> bool {
     true
@@ -278,6 +282,22 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(Some(Option::<String>::deserialize(de)?))
+}
+
+/// Who may take a type: at least one employment type, each once.
+fn parse_employment_types(given: &[EmploymentType]) -> Result<Vec<EmploymentType>, AppError> {
+    let mut out: Vec<EmploymentType> = Vec::new();
+    for t in given {
+        if !out.contains(t) {
+            out.push(*t);
+        }
+    }
+    if out.is_empty() {
+        return Err(AppError::BadRequest(
+            "a leave type must be open to at least one employment type".into(),
+        ));
+    }
+    Ok(out)
 }
 
 /// Validate the eligibility fields of a create/update body into [`leave::TypeRules`].
@@ -329,7 +349,11 @@ async fn create_type(
         body.min_tenure_months,
         body.day_basis.as_deref(),
     )?;
-    let t = leave::create_type(
+    let types = match &body.employment_types {
+        Some(given) => parse_employment_types(given)?,
+        None => leave::all_employment_types(),
+    };
+    let t = leave::create_type_for(
         &state.db,
         body.name.trim(),
         body.paid,
@@ -337,6 +361,7 @@ async fn create_type(
         body.default_days_contractor,
         body.default_days_intern,
         &rules,
+        &types,
     )
     .await?;
     audit::log(
@@ -369,6 +394,9 @@ struct UpdateType {
     min_tenure_months: Option<i32>,
     #[serde(default)]
     day_basis: Option<String>,
+    /// Who may take it (migration 0055). Omitted = unchanged.
+    #[serde(default)]
+    employment_types: Option<Vec<EmploymentType>>,
 }
 
 /// `PATCH /admin/leave/types/:id` (HR) — update a type's paid flag and its
@@ -406,7 +434,11 @@ async fn update_type(
     } else {
         None
     };
-    let t = leave::update_type(
+    let types = match &body.employment_types {
+        Some(given) => Some(parse_employment_types(given)?),
+        None => None,
+    };
+    let t = leave::update_type_for(
         &state.db,
         id,
         body.paid,
@@ -414,6 +446,7 @@ async fn update_type(
         body.default_days_contractor,
         body.default_days_intern,
         rules.as_ref(),
+        types.as_deref(),
     )
     .await?
     .ok_or(AppError::NotFound)?;
@@ -447,6 +480,27 @@ fn refuse_own_balance(hr: &crate::middleware::AuthUser, user_id: Uuid) -> Result
     Ok(())
 }
 
+/// HR can't give someone days of a type that isn't for their category (migration 0055): no Earned Leave
+/// allocated to an intern. 0 days is always allowed (it changes nothing they can take).
+async fn refuse_type_not_for(
+    state: &AppState,
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    days: f64,
+) -> Result<(), AppError> {
+    if days <= 0.0 {
+        return Ok(());
+    }
+    match leave::type_allowed_for(&state.db, user_id, leave_type_id).await? {
+        None => Err(AppError::NotFound),
+        Some((true, _)) => Ok(()),
+        Some((false, category)) => Err(AppError::BadRequest(format!(
+            "this leave type isn't available to {}",
+            leave::category_plural(&category)
+        ))),
+    }
+}
+
 /// An allotment is a day count: finite, 0–366.
 fn check_allotment(days: f64) -> Result<(), AppError> {
     if !days.is_finite() || !(0.0..=366.0).contains(&days) {
@@ -464,6 +518,7 @@ async fn allocate(
 ) -> Result<Json<Value>, AppError> {
     refuse_own_balance(&hr, body.user_id)?;
     check_allotment(body.allotted_days)?;
+    refuse_type_not_for(&state, body.user_id, body.leave_type_id, body.allotted_days).await?;
     let year = body.year.unwrap_or_else(|| Utc::now().year());
     leave::upsert_allocation(
         &state.db,
@@ -509,6 +564,7 @@ async fn adjust_allocation(
             "delta must be between −366 and 366".into(),
         ));
     }
+    refuse_type_not_for(&state, body.user_id, body.leave_type_id, body.delta).await?;
     let year = body.year.unwrap_or_else(|| Utc::now().year());
     let allotted = leave::adjust_allocation(
         &state.db,

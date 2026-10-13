@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO leave_types\n             (name, paid, default_days, default_days_contractor, default_days_intern,\n              eligible_gender, min_tenure_months, day_basis)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n         RETURNING id, name, paid, default_days, default_days_contractor, default_days_intern,\n                   eligible_gender, min_tenure_months, day_basis",
+  "query": "UPDATE leave_types\n         SET paid = $2, default_days = $3,\n             default_days_contractor = $4, default_days_intern = $5,\n             eligible_gender   = CASE WHEN $6 THEN $7 ELSE eligible_gender END,\n             min_tenure_months = CASE WHEN $6 THEN $8 ELSE min_tenure_months END,\n             day_basis         = CASE WHEN $6 THEN $9 ELSE day_basis END,\n             employment_types  = COALESCE($10::text[]::employment_type[], employment_types)\n         WHERE id = $1\n         RETURNING id, name, paid, default_days, default_days_contractor, default_days_intern,\n                   eligible_gender, min_tenure_months, day_basis,\n                   employment_types::text[] AS \"employment_types!\"",
   "describe": {
     "columns": [
       {
@@ -47,18 +47,25 @@
         "ordinal": 8,
         "name": "day_basis",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "employment_types!",
+        "type_info": "TextArray"
       }
     ],
     "parameters": {
       "Left": [
-        "Text",
+        "Uuid",
         "Bool",
         "Float8",
         "Float8",
         "Float8",
+        "Bool",
         "Text",
         "Int4",
-        "Text"
+        "Text",
+        "TextArray"
       ]
     },
     "nullable": [
@@ -70,8 +77,9 @@
       false,
       true,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "3e8bdaac55bf53044be7be69f9187c3f54e0b68a3358f3ee28b5cf0354b9537b"
+  "hash": "ea1748f02191a63ece06a909a5069e9080d6dc2bf23f15283edc0ce31c756225"
 }

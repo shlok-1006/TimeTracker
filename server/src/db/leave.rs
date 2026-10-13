@@ -5,6 +5,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::employment_type::EmploymentType;
 use crate::error::AppError;
 
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +23,24 @@ pub struct LeaveType {
     pub min_tenure_months: i32,
     /// `"working"` (weekdays minus holidays) or `"calendar"` (every day in the range).
     pub day_basis: String,
+    /// Who may take it (migration 0055): PMs and HR count as `employee`. Anyone else gets 0 days of it,
+    /// can't request it and can't be allocated it — Earned Leave is employees only.
+    pub employment_types: Vec<EmploymentType>,
+}
+
+/// The `employment_types` column as read (`::text[]`), in the enum. A value the enum doesn't know is
+/// dropped rather than failing the whole read; the column's type makes that impossible today.
+fn employment_types_of(raw: Vec<String>) -> Vec<EmploymentType> {
+    raw.iter().filter_map(|t| t.parse().ok()).collect()
+}
+
+/// Every employment type: what a type allows when nobody has said otherwise.
+pub fn all_employment_types() -> Vec<EmploymentType> {
+    vec![
+        EmploymentType::Employee,
+        EmploymentType::Contractor,
+        EmploymentType::Intern,
+    ]
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,9 +121,10 @@ pub struct Balance {
 
 pub async fn list_types(pool: &PgPool) -> Result<Vec<LeaveType>, AppError> {
     let rows = sqlx::query!(
-        "SELECT id, name, paid, default_days, default_days_contractor, default_days_intern,
-                eligible_gender, min_tenure_months, day_basis
-         FROM leave_types ORDER BY name"
+        r#"SELECT id, name, paid, default_days, default_days_contractor, default_days_intern,
+                eligible_gender, min_tenure_months, day_basis,
+                employment_types::text[] AS "employment_types!"
+         FROM leave_types ORDER BY name"#
     )
     .fetch_all(pool)
     .await?;
@@ -120,6 +140,7 @@ pub async fn list_types(pool: &PgPool) -> Result<Vec<LeaveType>, AppError> {
             eligible_gender: r.eligible_gender,
             min_tenure_months: r.min_tenure_months,
             day_basis: r.day_basis,
+            employment_types: employment_types_of(r.employment_types),
         })
         .collect())
 }
@@ -143,6 +164,7 @@ impl Default for TypeRules {
     }
 }
 
+/// [`create_type_for`] open to every employment type.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_type(
     pool: &PgPool,
@@ -153,13 +175,43 @@ pub async fn create_type(
     default_days_intern: f64,
     rules: &TypeRules,
 ) -> Result<LeaveType, AppError> {
+    create_type_for(
+        pool,
+        name,
+        paid,
+        default_days,
+        default_days_contractor,
+        default_days_intern,
+        rules,
+        &all_employment_types(),
+    )
+    .await
+}
+
+/// Create a leave type that only `employment_types` may take (migration 0055).
+#[allow(clippy::too_many_arguments)]
+pub async fn create_type_for(
+    pool: &PgPool,
+    name: &str,
+    paid: bool,
+    default_days: f64,
+    default_days_contractor: f64,
+    default_days_intern: f64,
+    rules: &TypeRules,
+    employment_types: &[EmploymentType],
+) -> Result<LeaveType, AppError> {
+    let types: Vec<String> = employment_types
+        .iter()
+        .map(|t| t.as_str().to_string())
+        .collect();
     let r = sqlx::query!(
-        "INSERT INTO leave_types
+        r#"INSERT INTO leave_types
              (name, paid, default_days, default_days_contractor, default_days_intern,
-              eligible_gender, min_tenure_months, day_basis)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+              eligible_gender, min_tenure_months, day_basis, employment_types)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[]::employment_type[])
          RETURNING id, name, paid, default_days, default_days_contractor, default_days_intern,
-                   eligible_gender, min_tenure_months, day_basis",
+                   eligible_gender, min_tenure_months, day_basis,
+                   employment_types::text[] AS "employment_types!""#,
         name,
         paid,
         default_days,
@@ -167,7 +219,8 @@ pub async fn create_type(
         default_days_intern,
         rules.eligible_gender,
         rules.min_tenure_months,
-        rules.day_basis
+        rules.day_basis,
+        &types
     )
     .fetch_one(pool)
     .await?;
@@ -181,12 +234,13 @@ pub async fn create_type(
         eligible_gender: r.eligible_gender,
         min_tenure_months: r.min_tenure_months,
         day_basis: r.day_basis,
+        employment_types: employment_types_of(r.employment_types),
     })
 }
 
 /// Update a leave type's paid flag and its per-category default allotments, and — when `rules` is
 /// `Some` — its eligibility + day basis. `rules: None` leaves them as they are, so an older client that
-/// only edits days can never wipe a type's eligibility rule.
+/// only edits days can never wipe a type's eligibility rule. `employment_types` likewise: `None` keeps them.
 /// Returns the updated type, or `None` if no type has that id.
 #[allow(clippy::too_many_arguments)]
 pub async fn update_type(
@@ -198,6 +252,33 @@ pub async fn update_type(
     default_days_intern: f64,
     rules: Option<&TypeRules>,
 ) -> Result<Option<LeaveType>, AppError> {
+    update_type_for(
+        pool,
+        id,
+        paid,
+        default_days,
+        default_days_contractor,
+        default_days_intern,
+        rules,
+        None,
+    )
+    .await
+}
+
+/// [`update_type`], and — when `employment_types` is `Some` — who may take the type (migration 0055).
+#[allow(clippy::too_many_arguments)]
+pub async fn update_type_for(
+    pool: &PgPool,
+    id: Uuid,
+    paid: bool,
+    default_days: f64,
+    default_days_contractor: f64,
+    default_days_intern: f64,
+    rules: Option<&TypeRules>,
+    employment_types: Option<&[EmploymentType]>,
+) -> Result<Option<LeaveType>, AppError> {
+    let types: Option<Vec<String>> =
+        employment_types.map(|ts| ts.iter().map(|t| t.as_str().to_string()).collect());
     let set_rules = rules.is_some();
     let (gender, tenure, basis) = match rules {
         Some(r) => (
@@ -208,15 +289,17 @@ pub async fn update_type(
         None => (None, 0, String::new()),
     };
     let row = sqlx::query!(
-        "UPDATE leave_types
+        r#"UPDATE leave_types
          SET paid = $2, default_days = $3,
              default_days_contractor = $4, default_days_intern = $5,
              eligible_gender   = CASE WHEN $6 THEN $7 ELSE eligible_gender END,
              min_tenure_months = CASE WHEN $6 THEN $8 ELSE min_tenure_months END,
-             day_basis         = CASE WHEN $6 THEN $9 ELSE day_basis END
+             day_basis         = CASE WHEN $6 THEN $9 ELSE day_basis END,
+             employment_types  = COALESCE($10::text[]::employment_type[], employment_types)
          WHERE id = $1
          RETURNING id, name, paid, default_days, default_days_contractor, default_days_intern,
-                   eligible_gender, min_tenure_months, day_basis",
+                   eligible_gender, min_tenure_months, day_basis,
+                   employment_types::text[] AS "employment_types!""#,
         id,
         paid,
         default_days,
@@ -225,7 +308,8 @@ pub async fn update_type(
         set_rules,
         gender,
         tenure,
-        basis
+        basis,
+        types.as_deref()
     )
     .fetch_optional(pool)
     .await?;
@@ -239,7 +323,37 @@ pub async fn update_type(
         eligible_gender: r.eligible_gender,
         min_tenure_months: r.min_tenure_months,
         day_basis: r.day_basis,
+        employment_types: employment_types_of(r.employment_types),
     }))
+}
+
+/// Whether `leave_type_id` is for this person's category (migration 0055), and the category — `None` when
+/// the type or the user doesn't exist. PMs and HR count as `employee`, as for the default allotments.
+pub async fn type_allowed_for(
+    pool: &PgPool,
+    user_id: Uuid,
+    leave_type_id: Uuid,
+) -> Result<Option<(bool, String)>, AppError> {
+    let row = sqlx::query!(
+        r#"SELECT
+             (CASE WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)
+                   THEN 'employee'::employment_type ELSE u.employment_type END) = ANY(lt.employment_types)
+                 AS "allowed!",
+             (CASE WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)
+                   THEN 'employee'::employment_type ELSE u.employment_type END)::text AS "category!"
+           FROM users u, leave_types lt
+           WHERE u.id = $1 AND lt.id = $2"#,
+        user_id,
+        leave_type_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| (r.allowed, r.category)))
+}
+
+/// "interns" / "contractors" / "employees": how a refusal names the people a type isn't for.
+pub fn category_plural(category: &str) -> String {
+    format!("{category}s")
 }
 
 // ---- Holidays ----
@@ -621,6 +735,12 @@ pub async fn balances_as_of<'e, E: sqlx::PgExecutor<'e>>(
             lt.day_basis                            AS day_basis,
             lt.eligible_gender                      AS eligible_gender,
             lt.min_tenure_months                    AS min_tenure_months,
+            -- migration 0055: is this type for the person's category at all (PM/HR count as employee)?
+            ((CASE WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)
+                   THEN 'employee'::employment_type ELSE u.employment_type END)
+             = ANY(lt.employment_types))            AS "type_ok!",
+            (CASE WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)
+                  THEN 'employee'::employment_type ELSE u.employment_type END)::text AS "category!",
             CASE
                 WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)
                     THEN lt.default_days
@@ -672,15 +792,20 @@ pub async fn balances_as_of<'e, E: sqlx::PgExecutor<'e>>(
     Ok(rows
         .into_iter()
         .map(|r| {
-            let eligible = r.gender_ok && r.tenure_ok;
-            let is_override = r.override_days.is_some();
+            // A type that isn't for the person's category (Earned Leave for an intern) is 0 whatever HR
+            // allocated: unlike gender or tenure, an allocation can't make it theirs.
+            let eligible = r.type_ok && r.gender_ok && r.tenure_ok;
+            let is_override = r.type_ok && r.override_days.is_some();
             let allotted = match r.override_days {
+                _ if !r.type_ok => 0.0,
                 Some(d) => d,
                 None if eligible => r.default_allotted,
                 None => 0.0,
             };
             let eligibility_note = if eligible {
                 None
+            } else if !r.type_ok {
+                Some(format!("Not available to {}", category_plural(&r.category)))
             } else if !r.gender_ok {
                 Some(format!(
                     "Available to {} employees (as recorded on your profile)",
@@ -710,7 +835,7 @@ pub async fn balances_as_of<'e, E: sqlx::PgExecutor<'e>>(
                 eligibility_note,
                 day_basis: r.day_basis,
                 special: r.eligible_gender.is_some() || r.min_tenure_months > 0,
-                eligible_from: if !eligible && r.gender_ok && r.has_joined_on {
+                eligible_from: if !eligible && r.type_ok && r.gender_ok && r.has_joined_on {
                     r.eligible_from
                 } else {
                     None
@@ -777,6 +902,9 @@ pub async fn remaining_paid_by_user(
         WHERE lt.paid = TRUE
           -- regular paid leave only: paternity/maternity (an eligibility rule) are not "leaves left"
           AND lt.eligible_gender IS NULL AND lt.min_tenure_months = 0
+          -- only types for the person's category (migration 0055): no Earned Leave for an intern
+          AND (CASE WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)
+                    THEN 'employee'::employment_type ELSE u.employment_type END) = ANY(lt.employment_types)
           AND u.deactivated_at IS NULL
           AND ($2::uuid IS NULL
                OR EXISTS (SELECT 1 FROM user_managers um

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n             (CASE WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)\n                   THEN 'employee'::employment_type ELSE u.employment_type END) = ANY(lt.employment_types)\n                 AS \"allowed!\",\n             (CASE WHEN u.role IN ('project_manager'::user_role, 'hr'::user_role)\n                   THEN 'employee'::employment_type ELSE u.employment_type END)::text AS \"category!\"\n           FROM users u, leave_types lt\n           WHERE u.id = $1 AND lt.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allowed!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "category!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "a8bc9a10254d6fb568b7458f344624cb5b1427bd74f5d2131d03723a35473a1b"
+}

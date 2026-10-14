@@ -217,7 +217,7 @@ const leaveRequestSchema = z.object({
   end_date: z.string(),
   days: z.number(),
   reason: z.string(),
-  status: z.enum(["pending", "approved", "rejected", "cancelled"]),
+  status: z.enum(["pending", "approved", "rejected", "cancelled", "expired"]),
   created_at: z.string(),
 });
 export type LeaveRequest = z.infer<typeof leaveRequestSchema>;

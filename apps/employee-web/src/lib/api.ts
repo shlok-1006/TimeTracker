@@ -210,6 +210,10 @@ const balanceRespSchema = z.object({
 });
 export type LeaveBalanceResp = z.infer<typeof balanceRespSchema>;
 
+/** Statuses the server sends today (`expired`: OKF LV-13). */
+export const LEAVE_REQUEST_STATUSES = ["pending", "approved", "rejected", "cancelled", "expired"] as const;
+export type KnownLeaveRequestStatus = (typeof LEAVE_REQUEST_STATUSES)[number];
+
 const leaveRequestSchema = z.object({
   id: z.string(),
   leave_type_name: z.string(),
@@ -217,7 +221,8 @@ const leaveRequestSchema = z.object({
   end_date: z.string(),
   days: z.number(),
   reason: z.string(),
-  status: z.enum(["pending", "approved", "rejected", "cancelled", "expired"]),
+  // Tolerant: a status this build doesn't know yet must not fail the whole list; the page shows it neutrally.
+  status: z.union([z.enum(LEAVE_REQUEST_STATUSES), z.string()]),
   created_at: z.string(),
 });
 export type LeaveRequest = z.infer<typeof leaveRequestSchema>;

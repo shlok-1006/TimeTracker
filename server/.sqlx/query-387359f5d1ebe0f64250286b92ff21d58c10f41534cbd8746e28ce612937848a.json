@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH expired AS (\n               UPDATE leave_requests\n                  SET status = 'expired', decided_at = now()\n                WHERE status = 'pending'\n                  AND end_date < $1\n                  AND GREATEST(end_date, (created_at AT TIME ZONE 'Asia/Kolkata')::date) < $1\n            RETURNING id, user_id, end_date\n           ), audited AS (\n               INSERT INTO audit_logs (actor_id, action, entity_type, entity_id)\n               SELECT NULL::uuid, 'leave.expired', 'leave_request', id FROM expired\n           )\n           SELECT id AS \"id!\", user_id AS \"user_id!\", end_date AS \"end_date!\" FROM expired",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "end_date!",
+        "type_info": "Date"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "387359f5d1ebe0f64250286b92ff21d58c10f41534cbd8746e28ce612937848a"
+}

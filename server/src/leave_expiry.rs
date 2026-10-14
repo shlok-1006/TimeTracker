@@ -1,13 +1,18 @@
 //! Leave requests nobody decided in time EXPIRE (migration 0056, OKF LV-13).
 //!
-//! A request still `pending` more than [`expiry_days`] days after its leave ended is marked `expired`: it
-//! leaves the approvals queue and shows as Expired in the employee's history. Nothing is deleted, and no
-//! balance changes — only approved requests count as used. The grace days are there because leave is often
-//! applied for after the fact (sick leave): such a request must still reach HR before it can expire.
+//! A request still `pending` more than [`expiry_days`] days after the LATER of its leave's end date and the
+//! day it was submitted is marked `expired`: it leaves the approvals queue and shows as Expired in the
+//! employee's history. Nothing is deleted, and no balance changes — only approved requests count as used.
+//! Each expiry writes a `leave.expired` audit row (entity `leave_request`, no actor: nobody decided it).
 //!
-//! Runs at start-up and then every hour. Days are judged in the org time zone (Asia/Kolkata). The UPDATE only
-//! touches rows that are still `pending`, so a request HR approves or rejects at the same moment keeps HR's
-//! decision (the row lock serializes the two; the loser matches nothing).
+//! The grace days are there because leave is often applied for after the fact (sick leave): such a request
+//! must still reach HR before it can expire. Counting from the submit day too means a request filed today for
+//! leave that ended weeks ago still gets the full grace days in the queue, instead of expiring on the next run.
+//!
+//! Runs at start-up and then every hour. Days are judged in the org time zone (Asia/Kolkata), including the
+//! submit day (`created_at` is a UTC timestamptz, converted to its IST date). The UPDATE only touches rows that
+//! are still `pending`, so a request HR approves or rejects at the same moment keeps HR's decision (the row
+//! lock serializes the two; the loser matches nothing).
 
 use chrono::{Duration, NaiveDate, Utc};
 use sqlx::PgPool;
@@ -41,19 +46,32 @@ pub struct Expired {
     pub end_date: NaiveDate,
 }
 
-/// Expire every request still pending whose leave ended more than `grace_days` before `today`: a leave
-/// ending on the 9th with 3 grace days may wait through the 12th, and expires from the 13th.
+/// Expire every request still pending whose leave ended, and which was submitted, more than `grace_days`
+/// before `today` (both judged as IST dates). A leave ending on the 9th, submitted by the 9th, with 3 grace
+/// days may wait through the 12th and expires from the 13th; the same leave submitted on the 20th may wait
+/// through the 23rd. Writes one `leave.expired` audit row per expired request, in the same statement.
 pub async fn expire_pending(
     pool: &PgPool,
     today: NaiveDate,
     grace_days: i64,
 ) -> Result<Vec<Expired>, AppError> {
     let cutoff = today - Duration::days(grace_days);
+    // `end_date < $1` is implied by the GREATEST test; it is spelled out so the partial index
+    // `idx_leave_requests_pending_end` (end_date WHERE status = 'pending') can narrow the scan.
+    // The audit rows have a NULL actor_id: the system expired the request, no person decided it.
     let rows = sqlx::query!(
-        r#"UPDATE leave_requests
-              SET status = 'expired', decided_at = now()
-            WHERE status = 'pending' AND end_date < $1
-        RETURNING id, user_id, end_date"#,
+        r#"WITH expired AS (
+               UPDATE leave_requests
+                  SET status = 'expired', decided_at = now()
+                WHERE status = 'pending'
+                  AND end_date < $1
+                  AND GREATEST(end_date, (created_at AT TIME ZONE 'Asia/Kolkata')::date) < $1
+            RETURNING id, user_id, end_date
+           ), audited AS (
+               INSERT INTO audit_logs (actor_id, action, entity_type, entity_id)
+               SELECT NULL::uuid, 'leave.expired', 'leave_request', id FROM expired
+           )
+           SELECT id AS "id!", user_id AS "user_id!", end_date AS "end_date!" FROM expired"#,
         cutoff
     )
     .fetch_all(pool)

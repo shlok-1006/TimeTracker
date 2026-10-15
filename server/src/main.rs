@@ -70,6 +70,8 @@ async fn main() -> anyhow::Result<()> {
     // Month-end summaries: once the IST month closes, build every employee's
     // monthly report so it's ready without anyone generating it by hand.
     tokio::spawn(server::monthly_report_scheduler::run(state.clone()));
+    // Leave requests nobody decided within LEAVE_PENDING_EXPIRY_DAYS (default 3) of their end date expire.
+    tokio::spawn(server::leave_expiry::run(state.clone()));
 
     let app = server::build_router(state);
 

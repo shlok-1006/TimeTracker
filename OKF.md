@@ -72,6 +72,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | LV-10 | **Monthly leave cap.** An employee may take at most **2 leave days per calendar month**. ⚠️ New policy — not enforced yet (see §12-F). | **2 days / month** | `code` | *(to implement — §12-F)* |
 | LV-11 | **Annual carry-over cap.** Up to **10 unused leave days** carry forward into the next annual year; the remainder lapses. ⚠️ New policy — LV-07 carries none today (see §12-G). | **≤ 10 days / year** | `code` | *(to implement — §12-G)* |
 | LV-12 | **Maternity / Paternity eligibility.** Maternity and paternity leave apply **only after 1 year** of employment. ⚠️ New policy — not enforced yet (see §12-H). | **≥ 1 year tenure** | `code` | *(to implement — §12-H)* |
+| LV-13 | **Undecided requests expire.** A leave request still **pending** more than this many days after the **later** of its leave's **end date** and the day it was **submitted** is marked `expired` (not deleted; balance untouched — only approved leave counts). It leaves the approvals queue, shows as Expired to the employee, and is written to the audit log as `leave.expired` (no actor). The grace exists for leave applied after the fact (sick leave): a request filed today for leave that ended weeks ago still waits the full grace days. Checked hourly, in IST. | **3 days** | `env` `LEAVE_PENDING_EXPIRY_DAYS` (0–60) | `server/src/leave_expiry.rs` (`expiry_days`, `expire_pending`); migration `0056_leave_request_expired.sql` |
 
 ---
 

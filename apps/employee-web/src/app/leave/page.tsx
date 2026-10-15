@@ -16,6 +16,8 @@ const STATUS_BADGE: Record<string, string> = {
   approved: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
   cancelled: "bg-slate-100 text-slate-600",
+  // Pending past LEAVE_PENDING_EXPIRY_DAYS after the leave ended (or was applied for, if later), with nobody deciding (OKF LV-13).
+  expired: "bg-slate-100 text-slate-500",
 };
 
 export default function LeavePage() {

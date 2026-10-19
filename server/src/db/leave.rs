@@ -530,10 +530,24 @@ pub async fn adjust_allocation(
 
 /// What HR typed on the People → Leaves screen: the days USED, or the days REMAINING (migration 0054). Either
 /// way the same thing is stored — days used outside TimeTracker — so later approvals still count against it.
+/// `Add` (migration 0057) moves used by that many days from wherever it is when the lock is held — negative gives
+/// days back — so callers that deduct (HRMS's half days for short working days) never read-modify-write.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UsedTarget {
     Used(f64),
     Remaining(f64),
+    Add(f64),
+}
+
+impl UsedTarget {
+    /// The request as stored next to an idempotency key, so a reused key with a different request is caught.
+    fn describe(self) -> String {
+        match self {
+            UsedTarget::Used(d) => format!("used_days={d}"),
+            UsedTarget::Remaining(d) => format!("remaining_days={d}"),
+            UsedTarget::Add(d) => format!("add_used_days={d}"),
+        }
+    }
 }
 
 /// Outcome of [`set_used`].
@@ -557,9 +571,24 @@ pub enum SetUsed {
     AboveAllotment { allotted: f64 },
     /// The user or the leave type doesn't exist.
     NotFound,
+    /// The idempotency key was already used for this same request: nothing was changed, and this is the balance
+    /// as it is now (migration 0057).
+    Replayed {
+        allotted: f64,
+        approved: f64,
+        adjustment: f64,
+        used: f64,
+        remaining: f64,
+    },
+    /// The idempotency key was already used for a different person, type, year or request: nothing was changed.
+    KeyConflict,
 }
 
-/// Set how many days of `leave_type_id` the user has used — or has left — in `year` (migrations 0053, 0054).
+/// The unique index behind idempotency keys (migration 0057).
+const IDEMPOTENCY_KEY_INDEX: &str = "uq_leave_used_history_idempotency_key";
+
+/// Set how many days of `leave_type_id` the user has used — or has left — in `year`, or add to what they have used
+/// (migrations 0053, 0054, 0057).
 ///
 /// "Used" is the sum of approved requests, so what HR asks for is stored as the difference on top of them:
 /// days taken outside TimeTracker. A REMAINING target is turned into used = allotted − remaining against the
@@ -585,14 +614,68 @@ pub async fn set_used(
     target: UsedTarget,
     set_by: Uuid,
 ) -> Result<SetUsed, AppError> {
+    set_used_keyed(pool, user_id, leave_type_id, year, target, set_by, None).await
+}
+
+/// [`set_used`] with an optional idempotency key (migration 0057).
+///
+/// The key is checked and stored inside the same transaction, under the same per-person lock, as the change:
+/// - a key already stored for this person, type, year and request → [`SetUsed::Replayed`], nothing written;
+/// - a key already stored for anything else → [`SetUsed::KeyConflict`], nothing written;
+/// - otherwise the save runs as usual and its history row carries the key. A keyed save that changes nothing
+///   still writes that row (old = new used), so a retry replays rather than re-applying an absolute target
+///   after someone else has changed the balance.
+///
+/// Two calls with the same key for the same person serialise on the lock, and the second sees the first's row.
+/// Calls for different people take different locks; the unique index makes the later insert wait for the
+/// earlier transaction and then fail, which rolls this one back and reports [`SetUsed::KeyConflict`].
+/// A refused call (not found, below approved, above the allotment) stores nothing, so the key stays unused.
+pub async fn set_used_keyed(
+    pool: &PgPool,
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: i32,
+    target: UsedTarget,
+    set_by: Uuid,
+    idempotency_key: Option<&str>,
+) -> Result<SetUsed, AppError> {
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
         .bind(format!("leave-approve:{user_id}"))
         .execute(&mut *tx)
         .await?;
-    let outcome = set_used_locked(&mut tx, user_id, leave_type_id, year, target, set_by).await?;
-    tx.commit().await?;
-    Ok(outcome)
+    let key = idempotency_key.map(|k| (k, target.describe()));
+    let outcome = set_used_locked(
+        &mut tx,
+        user_id,
+        leave_type_id,
+        year,
+        target,
+        set_by,
+        key.as_ref().map(|(k, r)| (*k, r.as_str())),
+    )
+    .await;
+    match outcome {
+        Ok(SetUsed::KeyConflict) => {
+            tx.rollback().await?;
+            Ok(SetUsed::KeyConflict)
+        }
+        Ok(outcome) => {
+            tx.commit().await?;
+            Ok(outcome)
+        }
+        // Another transaction stored the same key first (for another person, so it didn't share our lock).
+        Err(AppError::Database(e)) if is_idempotency_key_violation(&e) => {
+            tx.rollback().await?;
+            Ok(SetUsed::KeyConflict)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn is_idempotency_key_violation(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .is_some_and(|d| d.is_unique_violation() && d.constraint() == Some(IDEMPOTENCY_KEY_INDEX))
 }
 
 async fn set_used_locked(
@@ -602,7 +685,29 @@ async fn set_used_locked(
     year: i32,
     target: UsedTarget,
     set_by: Uuid,
+    key: Option<(&str, &str)>,
 ) -> Result<SetUsed, AppError> {
+    // Has this key been used already? Read under the lock, so a same-person call that stored it has committed.
+    let mut replay = false;
+    if let Some((key, request)) = key {
+        let prior = sqlx::query!(
+            r#"SELECT user_id, leave_type_id, year, idempotency_request AS "request!"
+               FROM leave_used_history WHERE idempotency_key = $1"#,
+            key
+        )
+        .fetch_optional(&mut *conn)
+        .await?;
+        if let Some(p) = prior {
+            if p.user_id != user_id
+                || p.leave_type_id != leave_type_id
+                || p.year != year
+                || p.request != request
+            {
+                return Ok(SetUsed::KeyConflict);
+            }
+            replay = true;
+        }
+    }
     // The current balance: no row for an unknown user (it joins users) or an unknown type.
     let Some(bal) = balances_as_of(&mut *conn, user_id, year, display_as_of(year))
         .await?
@@ -613,6 +718,15 @@ async fn set_used_locked(
     };
     let allotted = bal.allotted_days;
     let approved = bal.used_days - bal.used_adjustment;
+    if replay {
+        return Ok(SetUsed::Replayed {
+            allotted,
+            approved,
+            adjustment: bal.used_adjustment,
+            used: bal.used_days,
+            remaining: bal.remaining_days,
+        });
+    }
     // Half days are the smallest unit, so anything closer than a hundredth is "the same".
     let used_days = match target {
         UsedTarget::Used(d) => {
@@ -620,6 +734,16 @@ async fn set_used_locked(
                 return Ok(SetUsed::BelowApproved { allotted, approved });
             }
             d
+        }
+        // An add is a used target computed from the balance read under the lock: an approval that landed
+        // before it is already in `bal.used_days`, so it can't cancel the days added. A negative add can give
+        // back at most the days HR recorded — not approved requests.
+        UsedTarget::Add(d) => {
+            let used = bal.used_days + d;
+            if used < approved - 0.005 {
+                return Ok(SetUsed::BelowApproved { allotted, approved });
+            }
+            used
         }
         UsedTarget::Remaining(d) => {
             if d > (allotted - approved).max(0.0) + 0.005 {
@@ -629,7 +753,9 @@ async fn set_used_locked(
             (allotted - d).max(approved)
         }
     };
-    if used_days > allotted.max(approved) + 0.005 {
+    // Giving days back is always allowed, even while used is still over a since-lowered allotment.
+    let gives_back = matches!(target, UsedTarget::Add(d) if d < 0.0);
+    if used_days > allotted.max(approved) + 0.005 && !gives_back {
         return Ok(SetUsed::AboveAllotment { allotted });
     }
     let adjustment = if used_days - approved < 0.005 {
@@ -640,6 +766,19 @@ async fn set_used_locked(
     let used = approved + adjustment;
     let remaining = allotted - used;
     if (used - bal.used_days).abs() < 0.005 {
+        // Nothing to change — but remember a key, so a retry replays (see `set_used_keyed`).
+        if let Some((key, request)) = key {
+            insert_history(
+                conn,
+                user_id,
+                leave_type_id,
+                year,
+                (allotted, approved, bal.used_days, bal.used_days),
+                set_by,
+                Some((key, request)),
+            )
+            .await?;
+        }
         return Ok(SetUsed::Saved {
             allotted,
             approved,
@@ -673,20 +812,15 @@ async fn set_used_locked(
         .execute(&mut *conn)
         .await?;
     }
-    sqlx::query!(
-        "INSERT INTO leave_used_history
-             (user_id, leave_type_id, year, allotted_days, approved_days, old_used, new_used, set_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    insert_history(
+        conn,
         user_id,
         leave_type_id,
         year,
-        allotted,
-        approved,
-        bal.used_days,
-        used,
-        set_by
+        (allotted, approved, bal.used_days, used),
+        set_by,
+        key,
     )
-    .execute(&mut *conn)
     .await?;
     Ok(SetUsed::Saved {
         allotted,
@@ -696,6 +830,38 @@ async fn set_used_locked(
         remaining,
         changed: true,
     })
+}
+
+/// One `leave_used_history` row: `(allotted, approved, old_used, new_used)`, and the idempotency key with the
+/// request it was used for, if any.
+async fn insert_history(
+    conn: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    leave_type_id: Uuid,
+    year: i32,
+    (allotted, approved, old_used, new_used): (f64, f64, f64, f64),
+    set_by: Uuid,
+    key: Option<(&str, &str)>,
+) -> Result<(), AppError> {
+    sqlx::query!(
+        "INSERT INTO leave_used_history
+             (user_id, leave_type_id, year, allotted_days, approved_days, old_used, new_used, set_by,
+              idempotency_key, idempotency_request)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        user_id,
+        leave_type_id,
+        year,
+        allotted,
+        approved,
+        old_used,
+        new_used,
+        set_by,
+        key.map(|(k, _)| k),
+        key.map(|(_, r)| r)
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }
 
 /// Per-type balances for a user in a given year (allotted, used [approved],

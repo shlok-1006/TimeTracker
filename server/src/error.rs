@@ -24,6 +24,11 @@ pub enum AppError {
     #[error("forbidden")]
     Forbidden,
 
+    /// The request clashes with what is already stored (409) — e.g. an idempotency key reused for a different
+    /// request.
+    #[error("{0}")]
+    Conflict(String),
+
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 
@@ -51,6 +56,7 @@ impl AppError {
             AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden => StatusCode::FORBIDDEN,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Database(e) if db_unavailable(e) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Database(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -101,6 +107,10 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(AppError::NotFound.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            AppError::Conflict("taken".into()).status(),
+            StatusCode::CONFLICT
+        );
     }
 }
 

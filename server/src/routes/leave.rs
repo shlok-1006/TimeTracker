@@ -596,14 +596,75 @@ struct SetUsed {
     year: Option<i32>,
     /// The total days of this type the person has used in `year` (approved requests included).
     used_days: Option<f64>,
-    /// …or the days they have LEFT of it in `year`. Exactly one of the two.
+    /// …or the days they have LEFT of it in `year`…
     remaining_days: Option<f64>,
+    /// …or days to ADD to what they have used (negative gives days back), applied to the balance as it is when
+    /// the server holds the person's lock (migration 0057). Exactly one of the three.
+    add_used_days: Option<f64>,
+    /// Optional: makes the call safe to retry. A key already used for the same request replays (nothing changes,
+    /// `"replayed": true`); one used for a different person, type, year or request is a 409.
+    idempotency_key: Option<String>,
+}
+
+/// An idempotency key: 1–200 characters of `A–Z a–z 0–9 : _ -`.
+fn check_idempotency_key(key: &str) -> Result<(), AppError> {
+    let ok = (1..=200).contains(&key.len())
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'_' | b'-'));
+    if !ok {
+        return Err(AppError::BadRequest(
+            "idempotency_key must be 1–200 characters of letters, digits, ':', '_' or '-'".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Which of `used_days`, `remaining_days` and `add_used_days` was sent, checked: exactly one, a whole or half
+/// day, 0–366 for a total (−366–366 and not 0 for an add).
+fn used_target(body: &SetUsed) -> Result<leave::UsedTarget, AppError> {
+    let target = match (body.used_days, body.remaining_days, body.add_used_days) {
+        (Some(d), None, None) => leave::UsedTarget::Used(d),
+        (None, Some(d), None) => leave::UsedTarget::Remaining(d),
+        (None, None, Some(d)) => leave::UsedTarget::Add(d),
+        _ => {
+            return Err(AppError::BadRequest(
+                "send exactly one of used_days, remaining_days or add_used_days".into(),
+            ))
+        }
+    };
+    // Leave is counted in half days; a year has at most 366 of them.
+    let half_days = |d: f64| d.is_finite() && (d * 2.0).fract() == 0.0;
+    match target {
+        leave::UsedTarget::Used(d) | leave::UsedTarget::Remaining(d)
+            if !half_days(d) || !(0.0..=366.0).contains(&d) =>
+        {
+            let what = if matches!(target, leave::UsedTarget::Used(_)) {
+                "used"
+            } else {
+                "remaining"
+            };
+            Err(AppError::BadRequest(format!(
+                "{what} days must be between 0 and 366, in steps of 0.5"
+            )))
+        }
+        leave::UsedTarget::Add(d)
+            if !half_days(d) || d == 0.0 || !(-366.0..=366.0).contains(&d) =>
+        {
+            Err(AppError::BadRequest(
+                "add_used_days must be between −366 and 366, not 0, in steps of 0.5".into(),
+            ))
+        }
+        _ => Ok(target),
+    }
 }
 
 /// `POST /admin/leave/used` (HR) — set how many days of a leave type someone has used, or has remaining, in a
-/// year (migrations 0053, 0054). Either way the server records the days used outside TimeTracker on top of the
-/// approved requests, so leave approved afterwards keeps lowering what's remaining. Remaining can't be more
-/// than the allotment minus approved requests; used can't be more than the allotment.
+/// year, or add to what they have used (migrations 0053, 0054, 0057). Either way the server records the days used
+/// outside TimeTracker on top of the approved requests, so leave approved afterwards keeps lowering what's
+/// remaining. Remaining can't be more than the allotment minus approved requests; used can't be more than the
+/// allotment. An add is applied under the same per-person lock as leave approval, so concurrent adds and
+/// approvals don't lose each other; an `idempotency_key` makes a retry replay instead of applying twice.
 async fn set_used(
     State(state): State<AppState>,
     RequireHr(hr): RequireHr,
@@ -614,55 +675,68 @@ async fn set_used(
     if !(2000..=2100).contains(&year) {
         return Err(AppError::BadRequest("year is out of range".into()));
     }
-    let (target, what) = match (body.used_days, body.remaining_days) {
-        (Some(d), None) => (leave::UsedTarget::Used(d), "used"),
-        (None, Some(d)) => (leave::UsedTarget::Remaining(d), "remaining"),
-        _ => {
-            return Err(AppError::BadRequest(
-                "send either used_days or remaining_days".into(),
+    let target = used_target(&body)?;
+    if let Some(key) = &body.idempotency_key {
+        check_idempotency_key(key)?;
+    }
+    let outcome = leave::set_used_keyed(
+        &state.db,
+        body.user_id,
+        body.leave_type_id,
+        year,
+        target,
+        hr.id,
+        body.idempotency_key.as_deref(),
+    )
+    .await?;
+    let (allotted, approved, adjustment, used, remaining, replayed) = match outcome {
+        leave::SetUsed::NotFound => return Err(AppError::NotFound),
+        leave::SetUsed::KeyConflict => {
+            return Err(AppError::Conflict(
+                "idempotency_key was already used for a different person, leave type, year or request".into(),
             ))
         }
-    };
-    let days = match target {
-        leave::UsedTarget::Used(d) | leave::UsedTarget::Remaining(d) => d,
-    };
-    // Leave is counted in half days; a year has at most 366 of them.
-    if !days.is_finite() || !(0.0..=366.0).contains(&days) || (days * 2.0).fract() != 0.0 {
-        return Err(AppError::BadRequest(format!(
-            "{what} days must be between 0 and 366, in steps of 0.5"
-        )));
-    }
-    match leave::set_used(&state.db, body.user_id, body.leave_type_id, year, target, hr.id).await? {
-        leave::SetUsed::NotFound => Err(AppError::NotFound),
-        leave::SetUsed::BelowApproved { allotted, approved } => Err(AppError::BadRequest(match target {
-            leave::UsedTarget::Remaining(_) if approved > allotted => format!(
-                "approved leave requests already use {approved} day(s), more than the {allotted} allotted, so \
-                 nothing can remain — raise the allotment first (0 clears days recorded by HR)"
-            ),
-            leave::UsedTarget::Remaining(_) => format!(
-                "approved leave requests already use {approved} of the {allotted} day(s) allotted, so at most {} \
-                 can remain — raise the allotment to give more",
-                allotted - approved
-            ),
-            leave::UsedTarget::Used(_) => format!(
-                "{approved} day(s) already come from approved leave requests this year, so used can't be lower — \
-                 cancel or reject those requests instead"
-            ),
-        })),
-        leave::SetUsed::AboveAllotment { allotted } => Err(AppError::BadRequest(format!(
-            "used can't be more than the {allotted} day(s) allotted for this type — raise the allotment first"
-        ))),
+        leave::SetUsed::BelowApproved { allotted, approved } => {
+            return Err(AppError::BadRequest(match target {
+                leave::UsedTarget::Remaining(_) if approved > allotted => format!(
+                    "approved leave requests already use {approved} day(s), more than the {allotted} allotted, so \
+                     nothing can remain — raise the allotment first (0 clears days recorded by HR)"
+                ),
+                leave::UsedTarget::Remaining(_) => format!(
+                    "approved leave requests already use {approved} of the {allotted} day(s) allotted, so at most \
+                     {} can remain — raise the allotment to give more",
+                    allotted - approved
+                ),
+                leave::UsedTarget::Used(_) => format!(
+                    "{approved} day(s) already come from approved leave requests this year, so used can't be \
+                     lower — cancel or reject those requests instead"
+                ),
+                leave::UsedTarget::Add(_) => format!(
+                    "{approved} day(s) already come from approved leave requests this year, so used can't go \
+                     below that — only days recorded by HR can be given back; cancel or reject requests instead"
+                ),
+            }))
+        }
+        leave::SetUsed::AboveAllotment { allotted } => {
+            return Err(AppError::BadRequest(format!(
+                "used can't be more than the {allotted} day(s) allotted for this type — raise the allotment first"
+            )))
+        }
+        leave::SetUsed::Replayed { allotted, approved, adjustment, used, remaining } => {
+            (allotted, approved, adjustment, used, remaining, true)
+        }
         leave::SetUsed::Saved { allotted, approved, adjustment, used, remaining, changed } => {
             if changed {
                 audit::log(&state.db, hr.id, "leave.used.set", "user", Some(body.user_id)).await;
             }
-            Ok(Json(json!({
-                "user_id": body.user_id, "leave_type_id": body.leave_type_id, "year": year,
-                "allotted_days": allotted, "used_days": used, "remaining_days": remaining,
-                "approved_days": approved, "used_adjustment": adjustment
-            })))
+            (allotted, approved, adjustment, used, remaining, false)
         }
-    }
+    };
+    Ok(Json(json!({
+        "user_id": body.user_id, "leave_type_id": body.leave_type_id, "year": year,
+        "allotted_days": allotted, "used_days": used, "remaining_days": remaining,
+        "approved_days": approved, "used_adjustment": adjustment, "replayed": replayed
+    })))
 }
 
 #[derive(Deserialize)]
@@ -784,4 +858,84 @@ pub fn router() -> Router<AppState> {
         .route("/admin/users/:id/leave/balance", get(user_balance))
         .route("/admin/holidays", get(list_holidays).post(create_holiday))
         .route("/me/holidays", get(my_holidays))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(used: Option<f64>, remaining: Option<f64>, add: Option<f64>) -> SetUsed {
+        SetUsed {
+            user_id: Uuid::nil(),
+            leave_type_id: Uuid::nil(),
+            year: None,
+            used_days: used,
+            remaining_days: remaining,
+            add_used_days: add,
+            idempotency_key: None,
+        }
+    }
+
+    #[test]
+    fn exactly_one_target_is_accepted() {
+        assert!(matches!(
+            used_target(&body(Some(3.5), None, None)),
+            Ok(leave::UsedTarget::Used(d)) if d == 3.5
+        ));
+        assert!(matches!(
+            used_target(&body(None, Some(4.0), None)),
+            Ok(leave::UsedTarget::Remaining(d)) if d == 4.0
+        ));
+        assert!(matches!(
+            used_target(&body(None, None, Some(-0.5))),
+            Ok(leave::UsedTarget::Add(d)) if d == -0.5
+        ));
+        for b in [
+            body(None, None, None),
+            body(Some(1.0), Some(1.0), None),
+            body(Some(1.0), None, Some(0.5)),
+            body(None, Some(1.0), Some(0.5)),
+            body(Some(1.0), Some(1.0), Some(0.5)),
+        ] {
+            assert!(used_target(&b).is_err());
+        }
+    }
+
+    #[test]
+    fn add_must_be_a_nonzero_half_day_step_within_a_year() {
+        for ok in [0.5, -0.5, 1.0, 366.0, -366.0] {
+            assert!(used_target(&body(None, None, Some(ok))).is_ok(), "{ok}");
+        }
+        for bad in [
+            0.0,
+            -0.0,
+            0.25,
+            1.3,
+            366.5,
+            -366.5,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            assert!(used_target(&body(None, None, Some(bad))).is_err(), "{bad}");
+        }
+        // Totals keep their 0–366 range: negative is still refused.
+        assert!(used_target(&body(Some(-0.5), None, None)).is_err());
+        assert!(used_target(&body(None, Some(0.0), None)).is_ok());
+    }
+
+    #[test]
+    fn idempotency_keys_are_short_and_plain() {
+        for ok in [
+            "a",
+            "hrms:short-day:2033-03-07:42",
+            "A_b-C:9",
+            &"k".repeat(200),
+        ] {
+            assert!(check_idempotency_key(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", " ", "a b", "a/b", "ü", "a\n", &"k".repeat(201)] {
+            assert!(check_idempotency_key(bad).is_err(), "{bad:?}");
+        }
+    }
 }

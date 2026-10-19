@@ -2,7 +2,10 @@
 //!
 //! Reads the per-day attendance rollup (`attendance_days`) to compute each
 //! employee's weekly working days + worked seconds, and persists a compliance
-//! row per (user, week_start). Working days = Mon–Fri days classified
+//! row per (user, week_start). For the weekly report, worked time is all tracked
+//! time: active + meeting + idle (HR policy, 19 Oct 2026). Breaks are not tracked
+//! time and stay out. Attendance itself (present/absent) still counts active +
+//! meeting only. Working days = Mon–Fri days classified
 //! present/partial/absent — i.e. business days that were not weekend, holiday,
 //! or approved leave. Worked seconds sum every day in the window (so weekend or
 //! holiday work still counts toward meeting the target).
@@ -155,7 +158,8 @@ pub struct Upserted {
 }
 
 /// Aggregate every employee's working days + worked seconds over `[from, to]`
-/// (inclusive) from the attendance rollup. `ISODOW < 6` keeps Mon–Fri only, so
+/// (inclusive) from the attendance rollup. Worked = the rollup's worked seconds
+/// (active + meeting) plus its idle seconds. `ISODOW < 6` keeps Mon–Fri only, so
 /// work logged on a weekend does not inflate the required-hours count.
 pub async fn week_activity(
     pool: &PgPool,
@@ -169,7 +173,7 @@ pub async fn week_activity(
               WHERE ad.status IN ('present','partial','absent')
                 AND EXTRACT(ISODOW FROM ad.day) < 6
           ) AS "working_days!",
-          CAST(COALESCE(SUM(ad.worked_seconds), 0) AS BIGINT) AS "worked!"
+          CAST(COALESCE(SUM(ad.worked_seconds + ad.idle_seconds), 0) AS BIGINT) AS "worked!"
         FROM users u
         LEFT JOIN attendance_days ad
                ON ad.user_id = u.id AND ad.day >= $1 AND ad.day <= $2

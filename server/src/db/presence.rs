@@ -5,7 +5,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::presence::PresenceStatus;
+use crate::org_time;
+use crate::presence::{roster_status, PresenceStatus};
 
 /// Grace period (seconds): if the last heartbeat is older than this, the user is
 /// derived as `not_logged_in`. The desktop beats every ~45s, so 2× gives slack.
@@ -54,7 +55,9 @@ pub async fn heartbeat(
 /// `manager_id = Some(id)` scopes to that manager's assigned users (via
 /// `user_managers`) plus themselves; `None` (HR/admin) returns EVERYONE —
 /// employees, project managers, and HR alike, so admin dashboards show every
-/// person's live status. A stale heartbeat or missing row => `not_logged_in`.
+/// person's live status. A stale heartbeat or missing row => `not_logged_in`, then
+/// [`roster_status`] turns "off the clock" into `on_leave` (approved leave today),
+/// `logged_out` (already worked today) or `not_logged_in` (app open, timer never started).
 pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMember>, AppError> {
     let rows = sqlx::query!(
         r#"
@@ -68,7 +71,11 @@ pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMem
                -- nearly double their real day.
                CAST((SELECT s.active + s.meeting
                      FROM interval_seconds(u.id, date_trunc('day', now()), 'infinity'::timestamptz, NULL) s)
-                    AS BIGINT) AS "today_seconds!"
+                    AS BIGINT) AS "today_seconds!",
+               -- An approved leave covering today (org day, Asia/Kolkata) → "on_leave" off the clock.
+               EXISTS (SELECT 1 FROM leave_requests lr
+                       WHERE lr.user_id = u.id AND lr.status = 'approved'
+                         AND lr.start_date <= $3 AND lr.end_date >= $3) AS "on_leave_today!"
         FROM users u
         LEFT JOIN presence p ON p.user_id = u.id
         -- A deactivated account is off the roster everywhere else (directory, Manage users,
@@ -80,7 +87,8 @@ pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMem
         ORDER BY u.name
         "#,
         manager_id,
-        GRACE_SECONDS
+        GRACE_SECONDS,
+        org_time::today()
     )
     .fetch_all(pool)
     .await?;
@@ -92,7 +100,7 @@ pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMem
             name: r.name,
             email: r.email,
             role: r.role,
-            status: r.status,
+            status: roster_status(&r.status, r.today_seconds > 0, r.on_leave_today),
             last_seen_at: r.last_seen_at,
             today_seconds: r.today_seconds,
         })
@@ -118,7 +126,11 @@ pub async fn team_members(pool: &PgPool, team_id: Uuid) -> Result<Vec<TeamMember
                p.last_seen_at AS "last_seen_at?",
                CAST((SELECT s.active + s.meeting
                      FROM interval_seconds(u.id, date_trunc('day', now()), 'infinity'::timestamptz, NULL) s)
-                    AS BIGINT) AS "today_seconds!"
+                    AS BIGINT) AS "today_seconds!",
+               -- An approved leave covering today (org day, Asia/Kolkata) → "on_leave" off the clock.
+               EXISTS (SELECT 1 FROM leave_requests lr
+                       WHERE lr.user_id = u.id AND lr.status = 'approved'
+                         AND lr.start_date <= $3 AND lr.end_date >= $3) AS "on_leave_today!"
         FROM users u
         JOIN user_teams ut ON ut.user_id = u.id AND ut.team_id = $1
         LEFT JOIN presence p ON p.user_id = u.id
@@ -126,7 +138,8 @@ pub async fn team_members(pool: &PgPool, team_id: Uuid) -> Result<Vec<TeamMember
         ORDER BY u.name
         "#,
         team_id,
-        GRACE_SECONDS
+        GRACE_SECONDS,
+        org_time::today()
     )
     .fetch_all(pool)
     .await?;
@@ -138,7 +151,7 @@ pub async fn team_members(pool: &PgPool, team_id: Uuid) -> Result<Vec<TeamMember
             name: r.name,
             email: r.email,
             role: r.role,
-            status: r.status,
+            status: roster_status(&r.status, r.today_seconds > 0, r.on_leave_today),
             last_seen_at: r.last_seen_at,
             today_seconds: r.today_seconds,
         })

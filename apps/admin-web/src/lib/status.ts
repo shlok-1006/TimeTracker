@@ -1,6 +1,6 @@
 import type { PresenceStatus } from "@/lib/api";
 
-/** Spec colors: green=working, yellow=idle, blue=break, red=not logged in. */
+/** Spec colors: green=working, yellow=idle, blue=break, red=not logged in; grey once the day is done, pink on leave. */
 export const STATUS_STYLES: Record<PresenceStatus, { label: string; dot: string; text: string }> = {
   working: { label: "Working", dot: "bg-green-500", text: "text-green-700" },
   idle: { label: "Idle", dot: "bg-yellow-500", text: "text-yellow-700" },
@@ -8,4 +8,6 @@ export const STATUS_STYLES: Record<PresenceStatus, { label: string; dot: string;
   meeting: { label: "In meeting", dot: "bg-purple-500", text: "text-purple-700" },
   not_working: { label: "Not working", dot: "bg-slate-400", text: "text-slate-600" },
   not_logged_in: { label: "Not logged in", dot: "bg-red-500", text: "text-red-700" },
+  logged_out: { label: "Logged out", dot: "bg-slate-500", text: "text-slate-700" },
+  on_leave: { label: "On leave", dot: "bg-pink-500", text: "text-pink-700" },
 };

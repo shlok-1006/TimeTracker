@@ -1258,6 +1258,54 @@ pub async fn list_in_range(
         .collect())
 }
 
+/// One person off work in a window, as every signed-in user may see it (`GET /me/leave/out`): who and which
+/// days, whether it is approved yet, and which half a half-day covers. Deliberately NO leave type and NO reason —
+/// those stay with HR and the person's own approver ([`CalendarLeave`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct OutLeave {
+    pub user_id: Uuid,
+    pub name: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub days: f64,
+    pub half_period: Option<String>,
+    pub status: String,
+}
+
+/// Every approved or pending leave overlapping `[from, to]`, company-wide, for active people only (a
+/// deactivated person is not "on leave", they have left). Newest-first is not useful here: soonest first.
+pub async fn list_out_in_range(
+    pool: &PgPool,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Result<Vec<OutLeave>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT lr.user_id, u.name, lr.start_date, lr.end_date, lr.days, lr.half_period, lr.status
+           FROM leave_requests lr
+           JOIN users u ON u.id = lr.user_id
+           WHERE lr.status IN ('approved', 'pending')
+             AND lr.start_date <= $2 AND lr.end_date >= $1
+             AND u.deactivated_at IS NULL
+           ORDER BY lr.start_date, u.name"#,
+        from,
+        to
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| OutLeave {
+            user_id: r.user_id,
+            name: r.name,
+            start_date: r.start_date,
+            end_date: r.end_date,
+            days: r.days,
+            half_period: r.half_period,
+            status: r.status,
+        })
+        .collect())
+}
+
 /// True when the user already has a PENDING or APPROVED request overlapping `[start, end]` (any type) —
 /// the same days can't be booked twice.
 pub async fn has_overlapping_request(

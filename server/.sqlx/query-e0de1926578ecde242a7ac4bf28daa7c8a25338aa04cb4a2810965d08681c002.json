@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lr.user_id, u.name, lr.start_date, lr.end_date, lr.days, lr.half_period, lr.status\n           FROM leave_requests lr\n           JOIN users u ON u.id = lr.user_id\n           WHERE lr.status IN ('approved', 'pending')\n             AND lr.start_date <= $2 AND lr.end_date >= $1\n             AND u.deactivated_at IS NULL\n           ORDER BY lr.start_date, u.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "start_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 3,
+        "name": "end_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 4,
+        "name": "days",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "half_period",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "status",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e0de1926578ecde242a7ac4bf28daa7c8a25338aa04cb4a2810965d08681c002"
+}

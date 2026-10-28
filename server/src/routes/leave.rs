@@ -176,6 +176,32 @@ async fn leave_calendar(
     )))
 }
 
+/// The widest window `/me/leave/out` serves: the dashboard asks for a few weeks; nobody needs a year of it.
+const OUT_MAX_DAYS: i64 = 62;
+
+/// `GET /me/leave/out?from=YYYY-MM-DD&to=YYYY-MM-DD` — who is off work in the window, for ANY signed-in user
+/// (HRMS integration: the "On Leave" card on every home dashboard). Approved and pending leave, company-wide,
+/// active people only. Same reasoning as `/me/holidays`: a team needs to know who is away on which day, so this
+/// is name + days + status only — never the leave type or the reason, which stay with HR and the approver
+/// (`/admin/leave/calendar`).
+async fn who_is_out(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(q): Query<CalendarQuery>,
+) -> Result<Json<Value>, AppError> {
+    if q.to < q.from {
+        return Err(AppError::BadRequest("`to` is before `from`".into()));
+    }
+    if (q.to - q.from).num_days() > OUT_MAX_DAYS {
+        return Err(AppError::BadRequest(format!(
+            "the window is at most {OUT_MAX_DAYS} days"
+        )));
+    }
+    Ok(Json(json!(
+        leave::list_out_in_range(&state.db, q.from, q.to).await?
+    )))
+}
+
 async fn decide_request(
     state: &AppState,
     approver: &AuthUser,
@@ -841,6 +867,7 @@ pub fn router() -> Router<AppState> {
         .route("/me/leave/balance", get(my_balance))
         .route("/me/leave/requests", get(my_requests).post(request_leave))
         .route("/me/leave/requests/:id/cancel", post(cancel_leave))
+        .route("/me/leave/out", get(who_is_out))
         // Approver
         .route("/admin/leave/requests", get(pending_requests))
         .route("/admin/leave/calendar", get(leave_calendar))

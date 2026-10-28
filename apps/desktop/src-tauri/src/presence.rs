@@ -181,9 +181,19 @@ async fn send_heartbeat(state: &DesktopState) -> anyhow::Result<()> {
     // display at this employee's local 4 AM boundary (matches the desktop's own
     // local figure). Falls back to UTC if detection fails.
     let timezone = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
+    // Which machine this is, so someone working on two at once keeps one live status per
+    // machine and their badge shows the best of them. Without it the server still copes
+    // (it falls back to keying by status), so a local-DB hiccup must not stop the beat.
+    let device_id = match crate::db::device_id(&state.pool).await {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!("device id unavailable, heartbeat sent without it: {e:#}");
+            None
+        }
+    };
     http::post_json(
         "/presence",
-        serde_json::json!({ "status": status, "timezone": timezone }),
+        serde_json::json!({ "status": status, "timezone": timezone, "device_id": device_id }),
     )
     .await
     .map_err(|e| anyhow::anyhow!(e))?;

@@ -24,14 +24,36 @@ pub struct TeamMember {
     pub today_seconds: i64,
 }
 
-/// Upsert the heartbeat for `user_id`.
+/// Rows for devices not heard from in this long are dropped on the owner's next heartbeat.
+/// Far past any grace window; it only stops reinstalled machines piling up.
+pub const DEVICE_RETENTION_SECONDS: f64 = 86_400.0;
+
+/// Which `presence_devices` row a heartbeat lands on (migration 0058).
+///
+/// A build that sends its install id gets a row of its own. An older build sends none, so its
+/// beats are keyed by the status they report: two old-build machines stay apart whenever they
+/// disagree, which is all the badge needs.
+pub fn device_key(device_id: Option<Uuid>, status: PresenceStatus) -> String {
+    match device_id {
+        Some(id) => format!("device:{}", id.simple()),
+        None => format!("legacy:{}", status.as_str()),
+    }
+}
+
+/// Record a heartbeat for `user_id` from one of their devices.
+///
+/// `presence` keeps the last heartbeat as before; `presence_devices` keeps one row per device,
+/// which is what the live status is derived from.
 pub async fn heartbeat(
     pool: &PgPool,
     user_id: Uuid,
     status: PresenceStatus,
     current_interval_id: Option<Uuid>,
+    device_id: Option<Uuid>,
 ) -> Result<(), AppError> {
     let status_str = status.as_str();
+    let key = device_key(device_id, status);
+    let mut tx = pool.begin().await?;
     sqlx::query!(
         r#"
         INSERT INTO presence (user_id, status, last_seen_at, current_interval_id)
@@ -45,9 +67,50 @@ pub async fn heartbeat(
         status_str,
         current_interval_id
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query!(
+        r#"
+        INSERT INTO presence_devices (user_id, device_key, status, last_seen_at)
+        VALUES ($1, $2, $3::text::presence_status, now())
+        ON CONFLICT (user_id, device_key) DO UPDATE SET
+            status = EXCLUDED.status,
+            last_seen_at = now()
+        "#,
+        user_id,
+        key,
+        status_str
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        r#"
+        DELETE FROM presence_devices
+        WHERE user_id = $1
+          AND device_key <> $2
+          AND last_seen_at < now() - make_interval(secs => $3)
+        "#,
+        user_id,
+        key,
+        DEVICE_RETENTION_SECONDS
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(())
+}
+
+/// The live status shown for `user_id` right now: the best status among their devices heard
+/// from within [`GRACE_SECONDS`], or `not_logged_in`.
+pub async fn live_status(pool: &PgPool, user_id: Uuid) -> Result<String, AppError> {
+    let status = sqlx::query_scalar!(
+        r#"SELECT presence_live_status($1, $2) AS "status!""#,
+        user_id,
+        GRACE_SECONDS
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(status)
 }
 
 /// Team roster with live, server-derived statuses.
@@ -62,9 +125,9 @@ pub async fn team(pool: &PgPool, manager_id: Option<Uuid>) -> Result<Vec<TeamMem
     let rows = sqlx::query!(
         r#"
         SELECT u.id, u.name, u.email, u.role::text AS "role!",
-               CASE WHEN p.last_seen_at IS NULL THEN 'not_logged_in'
-                    WHEN EXTRACT(EPOCH FROM (now() - p.last_seen_at))::double precision > $2 THEN 'not_logged_in'
-                    ELSE p.status::text END AS "status!",
+               -- Best status across the person's devices (migration 0058): one machine on a
+               -- break while another is working reads as working, not a flip-flop between them.
+               presence_live_status(u.id, $2) AS "status!",
                p.last_seen_at AS "last_seen_at?",
                -- Unioned, not summed (migration 0044): two devices signed in as the same person
                -- each record the same minute, and adding those up put someone's live card at
@@ -120,9 +183,7 @@ pub async fn team_members(pool: &PgPool, team_id: Uuid) -> Result<Vec<TeamMember
     let rows = sqlx::query!(
         r#"
         SELECT u.id, u.name, u.email, u.role::text AS "role!",
-               CASE WHEN p.last_seen_at IS NULL THEN 'not_logged_in'
-                    WHEN EXTRACT(EPOCH FROM (now() - p.last_seen_at))::double precision > $2 THEN 'not_logged_in'
-                    ELSE p.status::text END AS "status!",
+               presence_live_status(u.id, $2) AS "status!",
                p.last_seen_at AS "last_seen_at?",
                CAST((SELECT s.active + s.meeting
                      FROM interval_seconds(u.id, date_trunc('day', now()), 'infinity'::timestamptz, NULL) s)

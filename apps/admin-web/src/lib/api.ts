@@ -33,6 +33,9 @@ export const presenceStatusSchema = z.enum([
   "meeting",
   "not_working",
   "not_logged_in",
+  // Roster-only (server roster_status): worked today and stopped / approved leave today.
+  "logged_out",
+  "on_leave",
 ]);
 export type PresenceStatus = z.infer<typeof presenceStatusSchema>;
 

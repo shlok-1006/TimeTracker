@@ -33,6 +33,10 @@ const SYNC_CHUNK: usize = 500;
 pub struct SyncHealth {
     last_ok: Option<DateTime<Utc>>,
     last_err: Option<(DateTime<Utc>, String)>,
+    /// Whether the most recent attempt failed. Kept as its own flag rather than
+    /// compared from the timestamps: two attempts in the same clock tick (the
+    /// interval sync and the screenshot drain run back to back) would tie.
+    latest_failed: bool,
 }
 
 pub type SharedSyncHealth = Arc<Mutex<SyncHealth>>;
@@ -40,19 +44,17 @@ pub type SharedSyncHealth = Arc<Mutex<SyncHealth>>;
 impl SyncHealth {
     pub fn record_ok(&mut self) {
         self.last_ok = Some(Utc::now());
+        self.latest_failed = false;
     }
 
     pub fn record_err(&mut self, err: impl Into<String>) {
         self.last_err = Some((Utc::now(), err.into()));
+        self.latest_failed = true;
     }
 
     /// Did the latest attempt fail?
     pub fn offline(&self) -> bool {
-        match (&self.last_ok, &self.last_err) {
-            (_, None) => false,
-            (None, Some(_)) => true,
-            (Some(ok), Some((err_at, _))) => err_at > ok,
-        }
+        self.latest_failed
     }
 }
 

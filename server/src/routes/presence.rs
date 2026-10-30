@@ -22,6 +22,10 @@ struct HeartbeatBody {
     /// business-day boundary on the hours display. Optional; validated + stored.
     #[serde(default)]
     timezone: Option<String>,
+    /// A random id the desktop mints once per install, so each machine keeps its own live
+    /// status and the badge shows the best of them. Optional: older builds don't send it.
+    #[serde(default)]
+    device_id: Option<Uuid>,
 }
 
 /// `POST /presence` — record a heartbeat for the authenticated user.
@@ -34,7 +38,14 @@ async fn heartbeat(
     if !body.status.is_reportable() {
         return Err(AppError::BadRequest("invalid status".into()));
     }
-    presence::heartbeat(&state.db, user.id, body.status, body.current_interval_id).await?;
+    presence::heartbeat(
+        &state.db,
+        user.id,
+        body.status,
+        body.current_interval_id,
+        body.device_id,
+    )
+    .await?;
     if let Some(tz) = body.timezone.as_deref() {
         users::set_timezone(&state.db, user.id, tz).await?;
     }

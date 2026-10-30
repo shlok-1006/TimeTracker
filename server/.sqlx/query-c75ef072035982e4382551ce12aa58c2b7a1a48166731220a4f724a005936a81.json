@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM presence_devices\n        WHERE user_id = $1\n          AND device_key <> $2\n          AND last_seen_at < now() - make_interval(secs => $3)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c75ef072035982e4382551ce12aa58c2b7a1a48166731220a4f724a005936a81"
+}

@@ -88,8 +88,12 @@ pub fn is_on_break(state: State<'_, DesktopState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn set_meeting(state: State<'_, DesktopState>, on: bool) -> Result<(), String> {
+pub fn set_meeting(app: AppHandle, state: State<'_, DesktopState>, on: bool) -> Result<(), String> {
     state.in_meeting.store(on, Ordering::Relaxed);
+    // Ending the meeting here answers the "still in a meeting?" question.
+    if crate::meeting_check::on_meeting_toggled(&state, on) {
+        reminder::close(&app, "meeting turned off");
+    }
     Ok(())
 }
 

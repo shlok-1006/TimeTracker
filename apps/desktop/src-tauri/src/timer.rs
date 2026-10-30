@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::idle::IdleHandle;
 use crate::interval_repository::{self, Interval};
+use crate::meeting_check::SharedMeetingCheck;
 use crate::outbox::ScreenshotOutbox;
 use crate::sync_worker::SharedSyncHealth;
 
@@ -54,6 +55,8 @@ pub struct DesktopState {
     /// Suppress break reminders for the CURRENT break (reset when a new break
     /// starts). Set by the "Don't remind me" action.
     pub break_reminders_muted: Arc<AtomicBool>,
+    /// The hourly "are you still in a meeting?" check (see `meeting_check`).
+    pub meeting_check: SharedMeetingCheck,
     pub idle: IdleHandle,
     /// Screenshots captured but not yet uploaded (local first).
     pub outbox: ScreenshotOutbox,
@@ -70,6 +73,7 @@ impl DesktopState {
             on_break: Arc::new(AtomicBool::new(false)),
             in_meeting: Arc::new(AtomicBool::new(false)),
             break_reminders_muted: Arc::new(AtomicBool::new(false)),
+            meeting_check: SharedMeetingCheck::default(),
             idle,
             outbox,
             sync_health: SharedSyncHealth::default(),

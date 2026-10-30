@@ -118,7 +118,7 @@ pub fn on_meeting_toggled(state: &DesktopState, on: bool) -> bool {
 }
 
 /// "On for 1 hour", "on for 2 hours 15 minutes".
-fn describe(on_for: Duration) -> String {
+pub(crate) fn describe(on_for: Duration) -> String {
     let mins = on_for.as_secs() / 60;
     let (h, m) = (mins / 60, mins % 60);
     let hours = match h {

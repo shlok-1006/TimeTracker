@@ -59,6 +59,11 @@ impl IdleHandle {
         }
     }
 
+    /// No input for this long counts as idle.
+    pub fn threshold(&self) -> Duration {
+        self.threshold
+    }
+
     pub fn is_idle(&self) -> bool {
         self.idle_for() >= self.threshold
     }

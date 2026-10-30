@@ -72,6 +72,16 @@ pub fn current_reminder() -> Option<Reminder> {
     PENDING.lock().ok().and_then(|g| g.clone())
 }
 
+/// Is a reminder of this `kind` on screen right now (shown and not yet
+/// dismissed)?
+pub fn showing(kind: &str) -> bool {
+    PENDING
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|r| r.kind == kind))
+        .unwrap_or(false)
+}
+
 /// "Ok" — the user acknowledged, so close the window. Closing is done here
 /// rather than from the webview so the window needs no capability of its own.
 #[tauri::command]

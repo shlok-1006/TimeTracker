@@ -12,6 +12,7 @@ mod client;
 mod db;
 mod http;
 mod idle;
+mod idle_notice;
 mod interval_repository;
 mod meeting_check;
 mod outbox;
@@ -131,6 +132,7 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     tauri::async_runtime::spawn(presence::run(state.clone()));
     tauri::async_runtime::spawn(presence::run_break_reminders(handle.clone(), state.clone()));
     tauri::async_runtime::spawn(meeting_check::run(handle.clone(), state.clone()));
+    tauri::async_runtime::spawn(idle_notice::run(handle.clone(), state.clone()));
     tauri::async_runtime::spawn(presence::run_not_tracking_reminders(
         handle.clone(),
         state.clone(),

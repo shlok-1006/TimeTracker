@@ -29,6 +29,10 @@ const ACCOUNT_PROFILE: &str = "profile";
 /// token finally expires or is revoked. Cleared on a deliberate "Sign out", but
 /// kept when a session merely expires so the user isn't asked to retype anything.
 const ACCOUNT_CREDENTIALS: &str = "credentials";
+/// Key that encrypts screenshots queued on disk while the server is unreachable
+/// (see `outbox`). Device-scoped, not session-scoped: it survives sign-out so a
+/// queued backlog stays readable until it uploads.
+const ACCOUNT_OUTBOX_KEY: &str = "outbox_key";
 
 /// Default API base URL, resolved at compile time. **Release** builds (the
 /// installers employees run) point at the hosted backend so a fresh install
@@ -97,6 +101,22 @@ fn store_profile(s: &EmployeeSession) {
 
 fn stored_profile() -> Option<EmployeeSession> {
     serde_json::from_str(&read(ACCOUNT_PROFILE)?).ok()
+}
+
+/// Id of the user whose session is stored on this machine, if any. Queued data
+/// (intervals, screenshots) is uploaded only for this user.
+pub fn signed_in_user_id() -> Option<uuid::Uuid> {
+    stored_refresh()?;
+    uuid::Uuid::parse_str(&stored_profile()?.id).ok()
+}
+
+/// The hex-encoded screenshot-outbox key, if one has been created.
+pub fn stored_outbox_key() -> Option<String> {
+    read(ACCOUNT_OUTBOX_KEY)
+}
+
+pub fn store_outbox_key(hex: &str) -> Result<(), String> {
+    write(ACCOUNT_OUTBOX_KEY, hex)
 }
 
 /// Remember the last-used credentials so the login form can pre-fill them.
@@ -179,7 +199,7 @@ pub struct SavedCredentials {
 /// stores both tokens on success.
 #[tauri::command]
 pub async fn login(email: String, password: String) -> Result<EmployeeSession, String> {
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .post(format!("{}/auth/login", api_base()))
         .json(&LoginBody {
             email: &email,
@@ -187,7 +207,7 @@ pub async fn login(email: String, password: String) -> Result<EmployeeSession, S
         })
         .send()
         .await
-        .map_err(|e| format!("could not reach the server: {e}"))?;
+        .map_err(|e| format!("could not reach the server: {}", crate::http::describe(&e)))?;
 
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
         return Err("Invalid email or password.".to_string());
@@ -222,7 +242,7 @@ pub async fn change_password(
     current_password: String,
     new_password: String,
 ) -> Result<EmployeeSession, String> {
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .post(format!("{}/auth/change-password", api_base()))
         .json(&ChangePasswordBody {
             email: &email,
@@ -231,7 +251,7 @@ pub async fn change_password(
         })
         .send()
         .await
-        .map_err(|e| format!("could not reach the server: {e}"))?;
+        .map_err(|e| format!("could not reach the server: {}", crate::http::describe(&e)))?;
 
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
         return Err("Current email or password is incorrect.".to_string());
@@ -278,14 +298,14 @@ pub async fn change_password(
 /// tokens so a blip doesn't force a re-login.
 pub async fn do_refresh() -> Result<(), String> {
     let refresh = stored_refresh().ok_or_else(|| "no refresh token".to_string())?;
-    let resp = reqwest::Client::new()
+    let resp = crate::http::client()
         .post(format!("{}/auth/refresh", api_base()))
         .json(&RefreshBody {
             refresh_token: &refresh,
         })
         .send()
         .await
-        .map_err(|e| format!("refresh request failed: {e}"))?;
+        .map_err(|e| format!("refresh request failed: {}", crate::http::describe(&e)))?;
     if !resp.status().is_success() {
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             // The refresh token is dead (rotated, revoked, or expired). Clear it
@@ -399,7 +419,7 @@ pub async fn session_alive() -> Result<bool, String> {
 #[tauri::command]
 pub async fn logout(forget: bool) -> Result<(), String> {
     if let Some(refresh) = stored_refresh() {
-        let _ = reqwest::Client::new()
+        let _ = crate::http::client()
             .post(format!("{}/auth/logout", api_base()))
             .json(&RefreshBody {
                 refresh_token: &refresh,

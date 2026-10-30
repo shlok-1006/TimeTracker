@@ -38,8 +38,18 @@ sha2 = { workspace = true }
 # loop (the release binary is windowed — panics have no console). gtk3 backend
 # on Linux matches the GTK stack Tauri already links.
 rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
-# HTTP client to talk to the API server.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# HTTP client to talk to the API server. Built to work behind corporate VPNs:
+#   * rustls-tls-native-roots — also trust the OS certificate store, so a VPN
+#     that inspects HTTPS with its own root CA (Zscaler, Netskope, FortiClient…)
+#     is accepted exactly as the browser accepts it. The bundled Mozilla roots
+#     (rustls-tls) stay as the fallback.
+#   * system-proxy — honour the macOS / Windows system proxy a VPN may install.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "rustls-tls-native-roots",
+    "system-proxy",
+] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
@@ -47,6 +57,9 @@ chrono = { workspace = true }
 # Randomized screenshot cadence: pick each next-capture delay from a window so
 # the interval is unpredictable (anti-gaming) rather than a fixed 5 minutes.
 rand = "0.8"
+# Encrypts screenshots queued on disk while the server is unreachable (outbox).
+# XChaCha20-Poly1305: random 24-byte nonces are safe, no counter to persist.
+chacha20poly1305 = "0.10"
 # OS-native idle timer for idle detection (Rule: idle.rs). Uses CoreGraphics on
 # macOS (no Input-Monitoring permission needed) and GetLastInputInfo on Windows.
 user-idle = "0.6"

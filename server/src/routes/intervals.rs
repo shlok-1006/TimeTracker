@@ -2,8 +2,10 @@
 
 use axum::extract::DefaultBodyLimit;
 use axum::{extract::State, routing::get, routing::post, Json, Router};
+use chrono::Utc;
 use serde_json::{json, Value};
 
+use crate::attendance_service;
 use crate::db::intervals::{self, IntervalDto};
 use crate::error::AppError;
 use crate::middleware::AuthUser;
@@ -11,12 +13,35 @@ use crate::state::AppState;
 
 /// `POST /intervals` — sync a batch of intervals for the authenticated user.
 /// `user_id` is taken from the token, not the body. Idempotent.
+///
+/// When the batch brings new time for days that are already over, those days'
+/// attendance is re-derived on the spot: the desktop syncs whenever it can reach
+/// us, which for someone on a VPN that blocks the app may be days later.
 async fn create_intervals(
     State(state): State<AppState>,
     user: AuthUser,
     Json(items): Json<Vec<IntervalDto>>,
 ) -> Result<Json<Value>, AppError> {
     let accepted = intervals::insert_batch(&state.db, user.id, &items).await?;
+    if accepted > 0 {
+        let days = attendance_service::completed_days_touched(
+            items.iter().map(|i| (i.start_utc, i.end_utc)),
+            Utc::now().date_naive(),
+        );
+        if !days.is_empty() {
+            // The intervals are saved; a failed recompute must not make the
+            // desktop resend them. The nightly job and the calendar's own
+            // refresh are still there for days it missed.
+            match attendance_service::refresh_days(&state.db, user.id, &days).await {
+                Ok(()) => {
+                    tracing::info!(user_id = %user.id, ?days, "late intervals: attendance re-derived")
+                }
+                Err(e) => {
+                    tracing::warn!(user_id = %user.id, ?days, "late intervals: attendance refresh failed: {e}")
+                }
+            }
+        }
+    }
     Ok(Json(
         json!({ "accepted": accepted, "received": items.len() }),
     ))

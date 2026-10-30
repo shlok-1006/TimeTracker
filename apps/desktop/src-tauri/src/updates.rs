@@ -27,12 +27,8 @@ pub async fn check_for_update(app: tauri::AppHandle) -> Result<Option<String>, S
     // crate version (which `env!("CARGO_PKG_VERSION")` would give).
     let current = app.package_info().version.to_string();
 
-    let client = reqwest::Client::builder()
-        // GitHub's API rejects requests without a User-Agent.
-        .user_agent("TimeTracker-Desktop")
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client
+    // The shared client sends a User-Agent, which GitHub's API requires.
+    let resp = crate::http::client()
         .get(LATEST_RELEASE_API)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .send()

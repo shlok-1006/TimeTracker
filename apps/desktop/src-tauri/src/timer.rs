@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 use crate::idle::IdleHandle;
 use crate::interval_repository::{self, Interval};
+use crate::outbox::ScreenshotOutbox;
+use crate::sync_worker::SharedSyncHealth;
 
 /// How often the recorder samples status, and how long a single segment grows
 /// before rolling over (so worked totals accrue without one giant row).
@@ -53,11 +55,15 @@ pub struct DesktopState {
     /// starts). Set by the "Don't remind me" action.
     pub break_reminders_muted: Arc<AtomicBool>,
     pub idle: IdleHandle,
+    /// Screenshots captured but not yet uploaded (local first).
+    pub outbox: ScreenshotOutbox,
+    /// Whether the server answered lately — drives the "offline" banner.
+    pub sync_health: SharedSyncHealth,
     segment: Arc<Mutex<Option<RecSegment>>>,
 }
 
 impl DesktopState {
-    pub fn new(pool: SqlitePool, idle: IdleHandle) -> Self {
+    pub fn new(pool: SqlitePool, idle: IdleHandle, outbox: ScreenshotOutbox) -> Self {
         Self {
             pool,
             tracker: Arc::new(Mutex::new(None)),
@@ -65,6 +71,8 @@ impl DesktopState {
             in_meeting: Arc::new(AtomicBool::new(false)),
             break_reminders_muted: Arc::new(AtomicBool::new(false)),
             idle,
+            outbox,
+            sync_health: SharedSyncHealth::default(),
             segment: Arc::new(Mutex::new(None)),
         }
     }

@@ -13,6 +13,7 @@ mod db;
 mod http;
 mod idle;
 mod interval_repository;
+mod outbox;
 mod presence;
 mod reminder;
 mod reports;
@@ -115,7 +116,14 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     // Idle is now read from the OS on demand (no sampler thread).
     let idle = idle::IdleHandle::from_env();
 
-    let state = timer::DesktopState::new(pool, idle);
+    // Screenshots queued on disk while the server was unreachable. Tidy any
+    // half-written entries left by a crash before the uploader starts.
+    let outbox = outbox::ScreenshotOutbox::new(&data_dir);
+    if let Err(e) = outbox.sweep(&pool).await {
+        tracing::warn!("screenshot outbox sweep failed: {e}");
+    }
+
+    let state = timer::DesktopState::new(pool, idle, outbox);
     handle.manage(state.clone());
     tauri::async_runtime::spawn(timer::run_recorder(state.clone()));
     tauri::async_runtime::spawn(sync_worker::run(state.clone()));
@@ -202,6 +210,8 @@ pub fn run() {
             presence::is_in_meeting,
             presence::current_status,
             presence::heartbeat_now,
+            sync_worker::sync_status,
+            sync_worker::sync_now,
             reports::get_hours_summary,
             reports::get_daily_timeline,
             client::me_hours,

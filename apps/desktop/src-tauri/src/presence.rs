@@ -181,12 +181,13 @@ async fn send_heartbeat(state: &DesktopState) -> anyhow::Result<()> {
     // display at this employee's local 4 AM boundary (matches the desktop's own
     // local figure). Falls back to UTC if detection fails.
     let timezone = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
-    http::post_json(
+    let sent = http::post_json(
         "/presence",
         serde_json::json!({ "status": status, "timezone": timezone }),
     )
-    .await
-    .map_err(|e| anyhow::anyhow!(e))?;
+    .await;
+    crate::sync_worker::note(&state.sync_health, &sent);
+    sent.map_err(|e| anyhow::anyhow!(e))?;
     Ok(())
 }
 

@@ -126,6 +126,51 @@ async fn run_once(state: &AppState) {
         }
     }
     tracing::info!(day = %yesterday, "nightly analysis: done");
+
+    catch_up_late_days(state).await;
+}
+
+/// How far back the nightly run looks for days whose screenshots arrived after
+/// that day's review. Matches how long the desktop keeps an unsent screenshot.
+const LATE_SCREENSHOT_DAYS: i64 = 7;
+
+/// Review again any recent day that now has working screenshots but whose
+/// review sampled none — the desktop queues screenshots while the server is
+/// unreachable (a VPN that blocks us) and uploads them, with their real capture
+/// time, once it can. `build_report` upserts, so the day's report is replaced.
+/// No low-score email here: these days are already history for HR, and a week
+/// of backlog arriving at once must not turn into a burst of alerts.
+async fn catch_up_late_days(state: &AppState) {
+    let today = org_time::today();
+    for back in 2..=LATE_SCREENSHOT_DAYS {
+        let day = today - Duration::days(back);
+        let users = match screenshots::users_with_unsampled_working_shots(&state.db, day).await {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!(%day, "late screenshot catch-up: selection failed: {e}");
+                continue;
+            }
+        };
+        for user_id in users {
+            match analysis_service::analyze_user_day(
+                &state.db,
+                &state.storage,
+                &state.claude,
+                &state.linear,
+                user_id,
+                day,
+            )
+            .await
+            {
+                Ok(o) => tracing::info!(
+                    %user_id, %day, analyzed = o.analyzed, skipped = o.skipped,
+                    score = o.report.alignment_score,
+                    "late screenshots: report rebuilt"
+                ),
+                Err(e) => tracing::warn!(%user_id, %day, "late screenshot catch-up failed: {e}"),
+            }
+        }
+    }
 }
 
 /// If a freshly built daily report is below the low-score threshold (and has

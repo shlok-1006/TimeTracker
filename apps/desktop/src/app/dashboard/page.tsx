@@ -15,6 +15,7 @@ import { MyTasks } from "@/components/my-tasks";
 import { Tickets } from "@/components/tickets";
 import { RecordingIndicator } from "@/components/recording-indicator";
 import { UpdateBanner } from "@/components/update-banner";
+import { SyncBanner } from "@/components/sync-banner";
 import { YesterdayScoreDialog } from "@/components/yesterday-score";
 
 type View = "dashboard" | "myday" | "work" | "leave" | "attendance";
@@ -102,6 +103,7 @@ export default function DashboardPage() {
                 <h2 className="text-2xl font-bold">Welcome, {session.name}</h2>
                 <p className="text-slate-500">Your tracking and today&apos;s activity</p>
               </header>
+              <SyncBanner />
               <Controls userId={session.id} />
               <MyTeams />
               <Dashboard userId={session.id} />

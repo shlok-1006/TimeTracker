@@ -13,7 +13,9 @@
 //! within the `attendance_days_status_check` constraint: present | partial |
 //! absent | leave | holiday | weekend.
 
-use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc, Weekday};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -171,6 +173,53 @@ pub async fn ensure_range(
 
 /// Roll up a single day for every employee — plus any HR/PM who tracked time
 /// that day (the desktop app accepts all roles) — the nightly batch.
+/// Most completed days a single sync may re-derive. Real segments are a minute
+/// long and a backlog spans days, so this only bounds a malformed batch.
+const MAX_LATE_DAYS: usize = 31;
+
+/// The completed (before `today`) UTC days that intervals `[start, end)` touch:
+/// the days whose attendance may already have been rolled up without them.
+/// Only each interval's first and last day count — a segment that claims to
+/// span weeks is not a reason to rewrite weeks. Newest first, at most
+/// `MAX_LATE_DAYS`.
+pub fn completed_days_touched(
+    spans: impl IntoIterator<Item = (DateTime<Utc>, DateTime<Utc>)>,
+    today: NaiveDate,
+) -> Vec<NaiveDate> {
+    let mut days = BTreeSet::new();
+    for (start, end) in spans {
+        // `end` is exclusive: a segment ending exactly at midnight belongs to
+        // the day before.
+        let last = if end > start {
+            end - Duration::nanoseconds(1)
+        } else {
+            start
+        };
+        for day in [start.date_naive(), last.date_naive()] {
+            if day < today {
+                days.insert(day);
+            }
+        }
+    }
+    days.into_iter().rev().take(MAX_LATE_DAYS).collect()
+}
+
+/// Re-derive attendance for completed days that just received intervals. The
+/// nightly rollup writes each day once and `ensure_range` only fills missing
+/// days, so without this a day synced late (laptop on a VPN that blocked us,
+/// offline for the weekend) would stay "absent" for good. HR overrides are
+/// untouched — the derived upsert skips them.
+pub async fn refresh_days(
+    pool: &PgPool,
+    user_id: Uuid,
+    days: &[NaiveDate],
+) -> Result<(), AppError> {
+    for &day in days {
+        rollup_day(pool, user_id, day).await?;
+    }
+    Ok(())
+}
+
 pub async fn rollup_all_for_day(pool: &PgPool, day: NaiveDate) -> Result<usize, AppError> {
     let (start, end) = day_bounds(day);
     let ids = crate::db::users::attendance_rollup_ids(pool, start, end).await?;
@@ -279,6 +328,55 @@ mod tests {
     }
     fn weekend() -> NaiveDate {
         d(2026, 6, 13)
+    }
+
+    fn at(day: NaiveDate, h: u32, m: u32) -> DateTime<Utc> {
+        Utc.from_utc_datetime(&day.and_hms_opt(h, m, 0).unwrap())
+    }
+
+    #[test]
+    fn late_intervals_touch_only_completed_days() {
+        let today = d(2026, 6, 10);
+        let days = completed_days_touched(
+            [
+                (at(d(2026, 6, 8), 9, 0), at(d(2026, 6, 8), 9, 1)),
+                (at(d(2026, 6, 8), 9, 1), at(d(2026, 6, 8), 9, 2)), // same day twice
+                (at(today, 9, 0), at(today, 9, 1)),                 // today: not yet rolled up
+            ],
+            today,
+        );
+        assert_eq!(days, vec![d(2026, 6, 8)]);
+    }
+
+    #[test]
+    fn a_segment_across_midnight_touches_both_days_but_one_ending_at_midnight_does_not() {
+        let today = d(2026, 6, 10);
+        let across = completed_days_touched(
+            [(at(d(2026, 6, 8), 23, 59), at(d(2026, 6, 9), 0, 1))],
+            today,
+        );
+        assert_eq!(across, vec![d(2026, 6, 9), d(2026, 6, 8)]);
+        let to_midnight = completed_days_touched(
+            [(at(d(2026, 6, 8), 23, 59), at(d(2026, 6, 9), 0, 0))],
+            today,
+        );
+        assert_eq!(to_midnight, vec![d(2026, 6, 8)]);
+    }
+
+    #[test]
+    fn a_bogus_span_does_not_rewrite_every_day_between() {
+        let today = d(2026, 6, 10);
+        let days =
+            completed_days_touched([(at(d(2020, 1, 1), 0, 0), at(d(2026, 6, 1), 0, 0))], today);
+        assert_eq!(days, vec![d(2026, 5, 31), d(2020, 1, 1)]);
+
+        let many = (0..100).map(|i| {
+            let day = today - Duration::days(i + 1);
+            (at(day, 9, 0), at(day, 9, 1))
+        });
+        let capped = completed_days_touched(many, today);
+        assert_eq!(capped.len(), MAX_LATE_DAYS);
+        assert_eq!(capped[0], today - Duration::days(1), "newest first");
     }
 
     #[test]

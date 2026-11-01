@@ -278,10 +278,14 @@ Statuses: `working`, `idle`, `break`, `not_logged_in`.
 ### Server
 - `migrations/0003_presence.sql` — `presence` table
   (`user_id, status, last_seen_at, current_interval_id`) + `presence_status` enum.
+- `migrations/0058_presence_devices.sql` — one live status per device, so
+  someone on two machines doesn't flicker between them.
 - `POST /presence` — heartbeat; `user_id` from JWT; rejects `not_logged_in`.
+  Optional `device_id` (minted once per install, desktop `device` table).
 - `GET /admin/team` (HR / project-manager) — live roster. Status is
-  **derived server-side**: no row or `last_seen_at` older than the 90s grace
-  period ⇒ `not_logged_in`. HR sees all employees; a PM sees their own team.
+  **derived server-side**: the best status among the person's devices heard
+  from within the 90s grace period (meeting > working > idle > break >
+  not_working); none ⇒ `not_logged_in`. HR sees all employees; a PM sees their own team.
 
 ### Admin dashboard
 After login, a **live team table** polls `/admin/team` every 10s (TanStack Query)

@@ -115,9 +115,16 @@ One row per user (PK `user_id`), upserted by the desktop heartbeat every ~45s:
 `status` (`working`/`idle`/`break`/`meeting`/`not_working`), `last_seen_at`,
 `current_interval_id`.
 
+`presence` records the last heartbeat. The live status comes from
+`presence_devices` (migration 0058): one row per device (`device:<install id>`;
+older desktop builds that send no id are keyed `legacy:<status>`), and the
+person's status is the best one heard within the 90s grace period —
+`meeting > working > idle > break > not_working` (`presence_live_status()`).
+A laptop on a break while the desktop is working reads **working**. Rows for
+devices silent for a day are dropped on the owner's next heartbeat.
+
 **Fetched by:** the live roster (`GET /admin/team`). `not_logged_in` is
-**derived at read time**: no row, or `last_seen_at` older than the 90s grace
-period. Employees always appear in the roster; HR/PM accounts appear once they
+**derived at read time**: no device heard from within the 90s grace period. Employees always appear in the roster; HR/PM accounts appear once they
 have a presence row (i.e. actually used the tracker).
 
 ---

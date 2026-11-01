@@ -163,7 +163,7 @@ async fn off_the_clock_reads_logged_out_or_on_leave() {
     // Ended the day with the app still open (heartbeat says not_working).
     let ended_open = seed_user(&pool, "employee", "Live Ended Open").await;
     worked_today(&pool, ended_open).await;
-    presence::heartbeat(&pool, ended_open, PresenceStatus::NotWorking, None)
+    presence::heartbeat(&pool, ended_open, PresenceStatus::NotWorking, None, None)
         .await
         .unwrap();
 
@@ -175,7 +175,7 @@ async fn off_the_clock_reads_logged_out_or_on_leave() {
     // Hasn't started: never seen, and app open but no time today.
     let not_started = seed_user(&pool, "employee", "Live Not Started").await;
     let app_open = seed_user(&pool, "employee", "Live App Open").await;
-    presence::heartbeat(&pool, app_open, PresenceStatus::NotWorking, None)
+    presence::heartbeat(&pool, app_open, PresenceStatus::NotWorking, None, None)
         .await
         .unwrap();
 
@@ -188,7 +188,7 @@ async fn off_the_clock_reads_logged_out_or_on_leave() {
     leave_today(&pool, half_day, lt, "approved").await;
     let working_on_leave = seed_user(&pool, "employee", "Live Working On Leave").await;
     leave_today(&pool, working_on_leave, lt, "approved").await;
-    presence::heartbeat(&pool, working_on_leave, PresenceStatus::Working, None)
+    presence::heartbeat(&pool, working_on_leave, PresenceStatus::Working, None, None)
         .await
         .unwrap();
     let pending = seed_user(&pool, "employee", "Live Pending").await;

@@ -102,7 +102,7 @@ agent normalises to the unit the binding expects. `—` means "no limit / not se
 | DSK-03 | **Break reminder cadence.** Repeats every interval until the break is paused/ended; a new break re-enables it. | **3m** (180 s) | `code` | `apps/desktop/src-tauri/src/presence.rs:20` |
 | DSK-04 | **"You haven't started the timer" nudge.** Fires only when signed-in, machine active (not idle), timer stopped. | **5m** (300 s) | `code` | `apps/desktop/src-tauri/src/presence.rs:23` |
 | DSK-05 | **Presence heartbeat interval.** | **45 s** | `code` | `apps/desktop/src-tauri/src/presence.rs:18` |
-| DSK-06 | **Offline / stale presence.** A user shows `not_logged_in` if no heartbeat for this long. | **90 s** | `code` | `server/src/db/presence.rs:12` |
+| DSK-06 | **Offline / stale presence.** A user shows `not_logged_in` if no device has sent a heartbeat for this long. With several devices, the best fresh status wins (meeting > working > idle > break > not_working). | **90 s** | `code` | `server/src/db/presence.rs:12` |
 | DSK-07 | **Launch at login + single instance.** The app auto-starts at system login and runs as a single instance — a second launch (e.g. autostart firing while it's already open) focuses the existing window instead of opening a duplicate. | Autostart on; single-instance | `code` | `apps/desktop/src-tauri/src/lib.rs` |
 
 ---

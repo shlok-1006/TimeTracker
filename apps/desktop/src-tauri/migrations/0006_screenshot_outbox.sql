@@ -1,4 +1,4 @@
--- 0005_screenshot_outbox.sql — screenshots waiting to reach storage + the API.
+-- 0006_screenshot_outbox.sql — screenshots waiting to reach storage + the API.
 --
 -- Capture used to ask the server for an upload URL first, so with the server
 -- unreachable (a VPN that blocks us, no Wi-Fi) no screenshot was taken at all

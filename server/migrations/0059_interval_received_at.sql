@@ -1,4 +1,4 @@
--- 0058_interval_received_at.sql — when the server received each interval.
+-- 0059_interval_received_at.sql — when the server received each interval.
 --
 -- The desktop records time locally and syncs it later (Rule 1). For someone on
 -- a VPN that blocks the app, "later" can be the next day or the next week, after

@@ -41,7 +41,7 @@ pub async fn connect_in_memory() -> anyhow::Result<SqlitePool> {
         .context("failed to open in-memory SQLite database")
 }
 
-/// Apply embedded migrations (creates `intervals` + `interval_sync`).
+/// Apply embedded migrations.
 pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     let migrator = sqlx::migrate!("./migrations");
     repair_line_ending_checksums(pool, &migrator)
@@ -51,6 +51,22 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
         .run(pool)
         .await
         .context("failed to run local migrations")
+}
+
+/// This install's device id (see migrations/0005_device.sql), minted on first use.
+///
+/// `INSERT OR IGNORE` then read back, so two callers racing on first use agree on one id.
+pub async fn device_id(pool: &SqlitePool) -> anyhow::Result<uuid::Uuid> {
+    sqlx::query("INSERT OR IGNORE INTO device (singleton, device_id) VALUES (1, ?)")
+        .bind(uuid::Uuid::new_v4().to_string())
+        .execute(pool)
+        .await
+        .context("mint device id")?;
+    let stored: String = sqlx::query_scalar("SELECT device_id FROM device WHERE singleton = 1")
+        .fetch_one(pool)
+        .await
+        .context("read device id")?;
+    uuid::Uuid::parse_str(&stored).context("stored device id is not a uuid")
 }
 
 /// Repair `_sqlx_migrations` checksums that differ from the embedded
@@ -181,5 +197,24 @@ mod tests {
             format!("{err:#}").contains("previously applied but has been modified"),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[tokio::test]
+    async fn device_id_is_minted_once_and_kept() {
+        let pool = connect_in_memory().await.unwrap();
+        migrate(&pool).await.unwrap();
+
+        let first = device_id(&pool).await.unwrap();
+        assert_eq!(device_id(&pool).await.unwrap(), first);
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM device")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+
+        // A second install has its own.
+        let other = connect_in_memory().await.unwrap();
+        migrate(&other).await.unwrap();
+        assert_ne!(device_id(&other).await.unwrap(), first);
     }
 }

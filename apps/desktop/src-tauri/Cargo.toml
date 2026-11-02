@@ -76,6 +76,8 @@ iana-time-zone = "0.1.65"
 # OS credential store per platform.
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# Reads which apps are using the microphone (call detection, call_detect.rs).
+winreg = "0.55"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

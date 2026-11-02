@@ -8,6 +8,7 @@
 
 mod activity_tracker;
 mod auth;
+mod call_detect;
 mod client;
 mod db;
 mod http;
@@ -131,6 +132,7 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     tauri::async_runtime::spawn(presence::run(state.clone()));
     tauri::async_runtime::spawn(presence::run_break_reminders(handle.clone(), state.clone()));
     tauri::async_runtime::spawn(idle_notice::run(handle.clone(), state.clone()));
+    tauri::async_runtime::spawn(call_detect::run(state.idle.clone()));
     tauri::async_runtime::spawn(presence::run_not_tracking_reminders(
         handle.clone(),
         state.clone(),

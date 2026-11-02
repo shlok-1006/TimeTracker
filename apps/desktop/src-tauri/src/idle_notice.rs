@@ -8,7 +8,8 @@
 //! 14 minutes" and waits for Ok, so whoever returns to the desk sees it in
 //! whatever app they go back to.
 //!
-//! Not shown on a break (idle isn't recorded then) or with the timer off.
+//! Not shown on a break (idle isn't recorded then) or with the timer off, nor
+//! during a Meet call or Slack huddle (`call_detect` holds idle off).
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};

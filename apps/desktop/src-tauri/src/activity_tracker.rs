@@ -193,7 +193,7 @@ pub async fn run(state: DesktopState) {
 
         if status == "working" {
             // Input in the last sample window? (Duration since last OS input.)
-            let input_active = state.idle.idle_for() < Duration::from_secs(SAMPLE_SECS as u64);
+            let input_active = state.idle.since_input() < Duration::from_secs(SAMPLE_SECS as u64);
             // Foreground lookup is a blocking OS call.
             let app = tokio::task::spawn_blocking(foreground_app_name)
                 .await

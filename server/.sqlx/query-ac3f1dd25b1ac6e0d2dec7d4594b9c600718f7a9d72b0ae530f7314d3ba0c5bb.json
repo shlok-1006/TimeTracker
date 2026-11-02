@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO analysis_job_samples (job_id, screenshot_id, bucket)\n         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ac3f1dd25b1ac6e0d2dec7d4594b9c600718f7a9d72b0ae530f7314d3ba0c5bb"
+}

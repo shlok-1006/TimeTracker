@@ -1,10 +1,9 @@
 //! Screenshot capture (STEP 4).
 //!
-//! Captures the primary monitor while **Working or in a Meeting** (never during
-//! a break, idle, or when not tracking). Meeting shots are uploaded too, tagged
-//! `meeting`, so they appear in the gallery — but the server never samples or
-//! analyses them, so meeting time still can't skew the report. Each capture is
-//! tagged with the capture-time status.
+//! Captures the primary monitor while **Working** (never during a break, idle,
+//! or when not tracking). Each capture is tagged with the capture-time status.
+//! Calls are recognised on the server from the screenshot itself: a Google Meet
+//! or Slack huddle shot is tagged `meeting` there and left out of the score.
 //!
 //! Capture never touches the network: the JPEG goes to the local `outbox`
 //! (Rule 1) and the sync worker uploads it (Rule 5: presign -> PUT to storage
@@ -67,12 +66,10 @@ fn next_delay() -> Duration {
     Duration::from_secs(pick_delay_secs(min, max, rand::random::<u64>()))
 }
 
-/// Capture is allowed while actively **working** or **in a meeting**. Meeting
-/// shots are uploaded (tagged `meeting`) so they show in the gallery, but the
-/// server never samples or analyses them. Idle, break, and not-tracking are
-/// excluded.
+/// Capture is allowed only while actively **working**. Idle, break, and
+/// not-tracking are excluded.
 pub fn should_capture(status: &str) -> bool {
-    status == "working" || status == "meeting"
+    status == "working"
 }
 
 /// Encode an RGBA frame as JPEG bytes.
@@ -213,22 +210,15 @@ pub fn repair_stale_grant_if_needed(data_dir: &std::path::Path) {
     }
 }
 
-/// Background worker: after each randomized delay, capture + queue if Working
-/// or in a Meeting.
+/// Background worker: after each randomized delay, capture + queue if Working.
 pub async fn run(state: DesktopState) {
     loop {
         tokio::time::sleep(next_delay()).await;
 
         let (status, user_id) = {
             let on_break = state.on_break.load(Ordering::Relaxed);
-            let in_meeting = state.in_meeting.load(Ordering::Relaxed);
             let session = state.tracker.lock().await;
-            let status = derive_status(
-                on_break,
-                in_meeting,
-                session.is_some(),
-                state.idle.is_idle(),
-            );
+            let status = derive_status(on_break, session.is_some(), state.idle.is_idle());
             (status, session.as_ref().map(|s| s.user_id))
         };
         let Some(user_id) = user_id else {
@@ -279,9 +269,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn captures_while_working_or_meeting() {
+    fn captures_only_while_working() {
         assert!(should_capture("working"));
-        assert!(should_capture("meeting")); // meeting shots are captured (tagged, never analysed)
+        assert!(!should_capture("meeting")); // no Meeting mode since 0.1.19
         assert!(!should_capture("idle"));
         assert!(!should_capture("break"));
         assert!(!should_capture("not_working"));

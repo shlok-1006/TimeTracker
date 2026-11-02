@@ -24,25 +24,21 @@ const NOT_TRACKING_REMINDER_INTERVAL: Duration = Duration::from_secs(300); // 5 
 
 /// Pure status derivation.
 ///
-/// Precedence: break > not_working (timer stopped) > meeting > idle > working.
+/// Precedence: not_working (timer stopped) > break > idle > working.
 /// - `break`       — manual; timer stopped.
 /// - `not_working` — logged in but the timer is not running.
-/// - `meeting`     — manual; timer running, idle suppressed (meetings are work).
 /// - `idle`        — timer running but no input past the idle threshold.
 /// - `working`     — timer running with recent input.
 /// (`not_logged_in` is derived server-side when heartbeats stop.)
-pub fn derive_status(
-    on_break: bool,
-    in_meeting: bool,
-    is_tracking: bool,
-    is_idle: bool,
-) -> &'static str {
+///
+/// There is no manual Meeting mode any more (0.1.19): a call is recognised from
+/// its screenshots on the server, where those shots are tagged `meeting` and
+/// left out of the score. The server still accepts `meeting` from older apps.
+pub fn derive_status(on_break: bool, is_tracking: bool, is_idle: bool) -> &'static str {
     if !is_tracking {
         "not_working"
     } else if on_break {
         "break"
-    } else if in_meeting {
-        "meeting"
     } else if is_idle {
         "idle"
     } else {
@@ -87,28 +83,12 @@ pub fn is_on_break(state: State<'_, DesktopState>) -> Result<bool, String> {
     Ok(state.on_break.load(Ordering::Relaxed))
 }
 
-#[tauri::command]
-pub fn set_meeting(app: AppHandle, state: State<'_, DesktopState>, on: bool) -> Result<(), String> {
-    state.in_meeting.store(on, Ordering::Relaxed);
-    // Ending the meeting here answers the "still in a meeting?" question.
-    if crate::meeting_check::on_meeting_toggled(&state, on) {
-        reminder::close(&app, "meeting turned off");
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn is_in_meeting(state: State<'_, DesktopState>) -> Result<bool, String> {
-    Ok(state.in_meeting.load(Ordering::Relaxed))
-}
-
 /// Current derived status string (for the UI badge).
 #[tauri::command]
 pub async fn current_status(state: State<'_, DesktopState>) -> Result<String, String> {
     let on_break = state.on_break.load(Ordering::Relaxed);
-    let in_meeting = state.in_meeting.load(Ordering::Relaxed);
     let tracking = state.tracker.lock().await.is_some();
-    Ok(derive_status(on_break, in_meeting, tracking, state.idle.is_idle()).to_string())
+    Ok(derive_status(on_break, tracking, state.idle.is_idle()).to_string())
 }
 
 /// Background heartbeat: POST /presence immediately, then every 45s while
@@ -177,9 +157,8 @@ async fn send_heartbeat(state: &DesktopState) -> anyhow::Result<()> {
     }
 
     let on_break = state.on_break.load(Ordering::Relaxed);
-    let in_meeting = state.in_meeting.load(Ordering::Relaxed);
     let tracking = state.tracker.lock().await.is_some();
-    let status = derive_status(on_break, in_meeting, tracking, state.idle.is_idle());
+    let status = derive_status(on_break, tracking, state.idle.is_idle());
 
     // Report the machine's IANA timezone so the server can bucket the hours
     // display at this employee's local 4 AM boundary (matches the desktop's own
@@ -211,12 +190,11 @@ mod tests {
 
     #[test]
     fn status_transitions() {
-        // (on_break, in_meeting, is_tracking, is_idle)
-        assert_eq!(derive_status(false, false, true, false), "working"); // tracking + active
-        assert_eq!(derive_status(false, false, true, true), "idle"); // tracking + no input
-        assert_eq!(derive_status(false, false, false, false), "not_working"); // timer off
-        assert_eq!(derive_status(true, false, false, false), "not_working"); // not tracking wins
-        assert_eq!(derive_status(false, true, true, true), "meeting"); // meeting > idle
-        assert_eq!(derive_status(true, true, true, false), "break"); // break > meeting
+        // (on_break, is_tracking, is_idle)
+        assert_eq!(derive_status(false, true, false), "working"); // tracking + active
+        assert_eq!(derive_status(false, true, true), "idle"); // tracking + no input
+        assert_eq!(derive_status(false, false, false), "not_working"); // timer off
+        assert_eq!(derive_status(true, false, false), "not_working"); // not tracking wins
+        assert_eq!(derive_status(true, true, true), "break"); // break > idle
     }
 }

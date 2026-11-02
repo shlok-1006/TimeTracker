@@ -2,14 +2,18 @@
 //! scheduler): sample the day's screenshots → vision-analyze the working ones →
 //! persist verdicts → build the daily report.
 //!
+//! A sampled shot that turns out to be a live Google Meet call or Slack huddle
+//! is tagged `meeting`, left unscored, and replaced by another shot from the same
+//! part of the day (up to `MAX_MEETING_REPLACEMENTS` per slot).
+//!
 //! Also hosts the admin *range* analysis: exhaustively verify EVERY working
 //! screenshot in an arbitrary `[from, to)` window (bypassing the 4–5/day
 //! sampler), with live progress recorded in `analysis_range_runs`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use chrono::{DateTime, NaiveDate, Utc};
-use futures::stream::{self, StreamExt};
+use futures::stream::{self, FuturesUnordered, StreamExt};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -36,6 +40,12 @@ const EXCERPT_CHARS: usize = 200;
 /// with backoff in claude_provider. DB writes stay on the orchestrating task —
 /// only fetch+analyze fan out.
 const ANALYZE_CONCURRENCY: usize = 2;
+
+/// How many times one slot may be re-drawn after landing on a call. Each draw
+/// is another vision call; a person in meetings all morning would otherwise
+/// cost a call per screenshot of it. Past this the slot is simply left without
+/// a score.
+const MAX_MEETING_REPLACEMENTS: usize = 3;
 
 fn excerpt(s: &str) -> String {
     if s.chars().count() <= EXCERPT_CHARS {
@@ -81,8 +91,32 @@ pub async fn build_context(
 /// Counts + the stored report from one analyze run.
 pub struct AnalyzeOutcome {
     pub analyzed: usize,
+    /// Not scored: meeting/break shots, and calls recognised in this run.
     pub skipped: usize,
     pub report: AnalysisReport,
+}
+
+/// Fetch one sampled shot and ask the analyzer about it.
+async fn analyze_sampled(
+    storage: &StorageClient,
+    claude: &ClaudeProvider,
+    tickets: &[Ticket],
+    s: sampler::SampledShot,
+) -> (sampler::SampledShot, Result<AnalysisOutcome, String>) {
+    let image = match storage.fetch_object(&s.storage_key).await {
+        Ok(bytes) => bytes,
+        Err(e) => return (s, Err(format!("fetch failed: {e}"))),
+    };
+    let out = vision_analyzer::analyze_screenshot(
+        claude,
+        &image,
+        "image/jpeg",
+        &s.captured_status,
+        tickets,
+    )
+    .await
+    .map_err(|e| e.to_string());
+    (s, out)
 }
 
 /// Analyze one employee's day end-to-end and build their report. Per-screenshot
@@ -103,36 +137,46 @@ pub async fn analyze_user_day(
 
     let mut analyzed = 0usize;
     let mut skipped = 0usize;
-    let tickets_ref = &tickets;
-    let mut results = stream::iter(shots.into_iter().map(|s| async move {
-        let image = match storage.fetch_object(&s.storage_key).await {
-            Ok(bytes) => bytes,
-            Err(e) => return (s, Err(format!("fetch failed: {e}"))),
-        };
-        let out = vision_analyzer::analyze_screenshot(
-            claude,
-            &image,
-            "image/jpeg",
-            &s.captured_status,
-            tickets_ref,
-        )
-        .await
-        .map_err(|e| e.to_string());
-        (s, out)
-    }))
-    .buffer_unordered(ANALYZE_CONCURRENCY);
+    // Up to ANALYZE_CONCURRENCY vision calls in flight. A queue rather than a
+    // fixed stream because a call found on screen adds its replacement to it.
+    let mut queue: VecDeque<sampler::SampledShot> = shots.into();
+    let mut in_flight = FuturesUnordered::new();
+    let mut redraws: HashMap<String, usize> = HashMap::new();
 
-    while let Some((s, res)) = results.next().await {
+    loop {
+        while in_flight.len() < ANALYZE_CONCURRENCY {
+            let Some(s) = queue.pop_front() else { break };
+            in_flight.push(analyze_sampled(storage, claude, &tickets, s));
+        }
+        let Some((s, res)) = in_flight.next().await else {
+            break;
+        };
         match res {
             Ok(AnalysisOutcome::Analyzed(a)) => {
                 analysis_results::upsert(db, job.id, s.screenshot_id, &a).await?;
                 analyzed += 1;
             }
             Ok(AnalysisOutcome::SkippedMeetingScreenshot) => skipped += 1,
+            Ok(AnalysisOutcome::MeetingDetected { observed }) => {
+                skipped += 1;
+                screenshots::mark_meeting_detected(db, s.screenshot_id).await?;
+                let tries = redraws.entry(s.bucket.clone()).or_default();
+                let replacement = if *tries < MAX_MEETING_REPLACEMENTS {
+                    *tries += 1;
+                    sampler::add_replacement(db, job.id, user_id, day, &s).await?
+                } else {
+                    None
+                };
+                tracing::info!(
+                    screenshot = %s.screenshot_id, slot = %s.bucket, %observed,
+                    replacement = ?replacement.as_ref().map(|r| r.screenshot_id),
+                    "analysis: meeting on screen, tagged and not scored"
+                );
+                queue.extend(replacement);
+            }
             Err(e) => tracing::warn!(screenshot = %s.screenshot_id, "analysis failed: {e}"),
         }
     }
-    drop(results);
 
     let report = report_service::build_report(db, user_id, day, job.id, claude).await?;
     Ok(AnalyzeOutcome {
@@ -209,6 +253,12 @@ async fn analyze_user_range(
                     analysis_runs::bump(db, run_id, 1, 0, 0).await?;
                 }
                 Ok(AnalysisOutcome::SkippedMeetingScreenshot) => {
+                    analysis_runs::bump(db, run_id, 0, 1, 0).await?;
+                }
+                // Every working shot in the range is analysed anyway, so a call
+                // needs no replacement — just the tag, and no score.
+                Ok(AnalysisOutcome::MeetingDetected { .. }) => {
+                    screenshots::mark_meeting_detected(db, s.id).await?;
                     analysis_runs::bump(db, run_id, 0, 1, 0).await?;
                 }
                 Err(e) => {

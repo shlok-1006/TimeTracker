@@ -1,9 +1,10 @@
 //! Interval engine (Rule 2: immutable segments; monotonic clock for durations).
 //!
 //! A background **recorder** writes status-tagged segments (active | idle |
-//! meeting | break) while a session is active. `start_tracking` opens a session;
-//! `stop_tracking` closes it. Break/meeting are statuses *within* a session, so
-//! they're captured for the timeline; only active+meeting count as worked time.
+//! break) while a session is active. `start_tracking` opens a session;
+//! `stop_tracking` closes it. Break is a status *within* a session, so it's
+//! captured for the timeline; only active counts as worked time. (Older
+//! versions also recorded `meeting` segments; those are still read and synced.)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,7 +18,6 @@ use uuid::Uuid;
 
 use crate::idle::IdleHandle;
 use crate::interval_repository::{self, Interval};
-use crate::meeting_check::SharedMeetingCheck;
 use crate::outbox::ScreenshotOutbox;
 use crate::sync_worker::SharedSyncHealth;
 
@@ -51,12 +51,9 @@ pub struct DesktopState {
     pub pool: SqlitePool,
     pub tracker: Arc<Mutex<Option<ActiveSession>>>,
     pub on_break: Arc<AtomicBool>,
-    pub in_meeting: Arc<AtomicBool>,
     /// Suppress break reminders for the CURRENT break (reset when a new break
     /// starts). Set by the "Don't remind me" action.
     pub break_reminders_muted: Arc<AtomicBool>,
-    /// The hourly "are you still in a meeting?" check (see `meeting_check`).
-    pub meeting_check: SharedMeetingCheck,
     pub idle: IdleHandle,
     /// Screenshots captured but not yet uploaded (local first).
     pub outbox: ScreenshotOutbox,
@@ -71,9 +68,7 @@ impl DesktopState {
             pool,
             tracker: Arc::new(Mutex::new(None)),
             on_break: Arc::new(AtomicBool::new(false)),
-            in_meeting: Arc::new(AtomicBool::new(false)),
             break_reminders_muted: Arc::new(AtomicBool::new(false)),
-            meeting_check: SharedMeetingCheck::default(),
             idle,
             outbox,
             sync_health: SharedSyncHealth::default(),
@@ -83,18 +78,11 @@ impl DesktopState {
 }
 
 /// The interval kind being recorded right now (None = untracked).
-pub fn current_kind(
-    on_break: bool,
-    in_meeting: bool,
-    is_tracking: bool,
-    is_idle: bool,
-) -> Option<&'static str> {
+pub fn current_kind(on_break: bool, is_tracking: bool, is_idle: bool) -> Option<&'static str> {
     if !is_tracking {
         None
     } else if on_break {
         Some("break")
-    } else if in_meeting {
-        Some("meeting")
     } else if is_idle {
         Some("idle")
     } else {
@@ -117,7 +105,6 @@ pub async fn start_tracking(
         Some(t) => Some(Uuid::parse_str(t).map_err(|_| "invalid team id".to_string())?),
     };
     state.on_break.store(false, Ordering::Relaxed);
-    state.in_meeting.store(false, Ordering::Relaxed);
     let mut guard = state.tracker.lock().await;
     if guard.is_some() {
         return Err("tracking already in progress".to_string());
@@ -143,7 +130,6 @@ pub async fn stop_tracking(state: State<'_, DesktopState>) -> Result<(), String>
         *guard = None;
     }
     state.on_break.store(false, Ordering::Relaxed);
-    state.in_meeting.store(false, Ordering::Relaxed);
     // Finalize the open segment immediately so totals update promptly.
     record_tick(&state).await;
     Ok(())
@@ -186,7 +172,6 @@ async fn record_tick(state: &DesktopState) {
     };
     let kind = current_kind(
         state.on_break.load(Ordering::Relaxed),
-        state.in_meeting.load(Ordering::Relaxed),
         tracking,
         state.idle.is_idle(),
     );
@@ -237,11 +222,10 @@ mod tests {
 
     #[test]
     fn current_kind_precedence() {
-        assert_eq!(current_kind(false, false, false, false), None); // not tracking
-        assert_eq!(current_kind(false, false, true, false), Some("active"));
-        assert_eq!(current_kind(false, false, true, true), Some("idle"));
-        assert_eq!(current_kind(false, true, true, true), Some("meeting")); // meeting > idle
-        assert_eq!(current_kind(true, true, true, false), Some("break")); // break > meeting
-        assert_eq!(current_kind(true, false, false, false), None); // break needs a session
+        assert_eq!(current_kind(false, false, false), None); // not tracking
+        assert_eq!(current_kind(false, true, false), Some("active"));
+        assert_eq!(current_kind(false, true, true), Some("idle"));
+        assert_eq!(current_kind(true, true, true), Some("break")); // break > idle
+        assert_eq!(current_kind(true, false, false), None); // break needs a session
     }
 }

@@ -14,7 +14,6 @@ mod http;
 mod idle;
 mod idle_notice;
 mod interval_repository;
-mod meeting_check;
 mod outbox;
 mod presence;
 mod reminder;
@@ -131,7 +130,6 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     tauri::async_runtime::spawn(sync_worker::run(state.clone()));
     tauri::async_runtime::spawn(presence::run(state.clone()));
     tauri::async_runtime::spawn(presence::run_break_reminders(handle.clone(), state.clone()));
-    tauri::async_runtime::spawn(meeting_check::run(handle.clone(), state.clone()));
     tauri::async_runtime::spawn(idle_notice::run(handle.clone(), state.clone()));
     tauri::async_runtime::spawn(presence::run_not_tracking_reminders(
         handle.clone(),
@@ -210,10 +208,6 @@ pub fn run() {
             presence::break_reminders_muted,
             reminder::current_reminder,
             reminder::dismiss_reminder,
-            presence::set_meeting,
-            meeting_check::still_in_meeting,
-            meeting_check::end_meeting,
-            presence::is_in_meeting,
             presence::current_status,
             presence::heartbeat_now,
             sync_worker::sync_status,

@@ -2,7 +2,8 @@
 //!
 //! Feature 2: each screenshot records `captured_status` — the employee's
 //! presence status at capture time — so sampling/analysis can exclude
-//! non-working (e.g. meeting) shots.
+//! non-working (e.g. meeting) shots. A working shot the analyzer recognises as
+//! a call is re-tagged `meeting` afterwards (`mark_meeting_detected`).
 
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
@@ -250,6 +251,34 @@ pub async fn users_with_unsampled_working_shots(
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(|r| r.user_id).collect())
+}
+
+/// Re-tag a working screenshot the analyzer recognised as a call (Google Meet,
+/// Slack huddle) as `meeting`, stamping when that was decided. From then on it is
+/// treated like a meeting shot everywhere: never sampled or scored, and shown with
+/// the meeting badge. A verdict stored for it earlier is removed so it can't count
+/// towards a report. Returns whether the row changed (false if it was already
+/// tagged, or gone).
+pub async fn mark_meeting_detected(pool: &PgPool, screenshot_id: Uuid) -> Result<bool, AppError> {
+    let mut tx = pool.begin().await?;
+    let changed = sqlx::query!(
+        r#"UPDATE screenshots
+           SET captured_status = 'meeting', meeting_detected_at = now()
+           WHERE id = $1 AND captured_status = 'working'"#,
+        screenshot_id
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        > 0;
+    sqlx::query!(
+        "DELETE FROM analysis_results WHERE screenshot_id = $1",
+        screenshot_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(changed)
 }
 
 /// Count a user's screenshots (used by tests / future reporting).

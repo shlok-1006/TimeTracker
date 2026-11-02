@@ -187,9 +187,8 @@ pub async fn run(state: DesktopState) {
 
         let status = {
             let on_break = state.on_break.load(Ordering::Relaxed);
-            let in_meeting = state.in_meeting.load(Ordering::Relaxed);
             let tracking = state.tracker.lock().await.is_some();
-            derive_status(on_break, in_meeting, tracking, state.idle.is_idle())
+            derive_status(on_break, tracking, state.idle.is_idle())
         };
 
         if status == "working" {

@@ -88,7 +88,6 @@ export default function ReminderPage() {
   }, []);
 
   const isBreak = reminder?.kind === "break";
-  const isMeeting = reminder?.kind === "meeting";
   const isIdle = reminder?.kind === "idle";
 
   return (
@@ -102,12 +101,10 @@ export default function ReminderPage() {
           className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg ${
             isBreak
               ? "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300"
-              : isMeeting
-                ? "bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300"
-                : "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
+              : "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
           }`}
         >
-          {isBreak ? "☕" : isMeeting ? "👥" : isIdle ? "💤" : "⏱"}
+          {isBreak ? "☕" : isIdle ? "💤" : "⏱"}
         </span>
         <div data-tauri-drag-region className="min-w-0">
           <h1 className="text-[15px] font-semibold leading-tight text-slate-900 dark:text-slate-100">
@@ -130,25 +127,15 @@ export default function ReminderPage() {
             Don&apos;t remind me
           </button>
         )}
-        {isMeeting && (
-          <button
-            type="button"
-            disabled={busy || !armed}
-            onClick={() => void run("end_meeting")}
-            className="rounded-md px-3 py-2 text-[13px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-400 dark:hover:bg-slate-800"
-          >
-            Turn it off
-          </button>
-        )}
         {/* No autoFocus: the window does not take keyboard focus, and a default
             button here would let a stray Enter dismiss an unread reminder. */}
         <button
           type="button"
           disabled={busy || !armed}
-          onClick={() => void run(isMeeting ? "still_in_meeting" : "dismiss_reminder")}
+          onClick={() => void run("dismiss_reminder")}
           className="min-w-[90px] rounded-md bg-slate-900 px-4 py-2 text-[13px] font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
         >
-          {isMeeting ? "Yes, still in it" : "Ok"}
+          Ok
         </button>
       </div>
     </main>

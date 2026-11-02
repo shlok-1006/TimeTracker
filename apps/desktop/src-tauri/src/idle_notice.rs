@@ -8,15 +8,13 @@
 //! 14 minutes" and waits for Ok, so whoever returns to the desk sees it in
 //! whatever app they go back to.
 //!
-//! Not shown on a break or in Meeting mode (idle isn't recorded then) or with
-//! the timer off.
+//! Not shown on a break (idle isn't recorded then) or with the timer off.
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
-use crate::meeting_check::describe;
 use crate::reminder::{self, Reminder};
 use crate::timer::DesktopState;
 
@@ -41,13 +39,13 @@ enum Step {
     CameBack {
         was_idle_for: Duration,
     },
-    /// Idle stopped counting another way (break, meeting, timer off).
+    /// Idle stopped counting another way (break, timer off).
     Withdraw,
 }
 
 impl IdleNotice {
-    /// `watching` — the timer runs and idle is being recorded (not on a break,
-    /// not in a meeting). `idle_for` — time since the last input.
+    /// `watching` — the timer runs and idle is being recorded (not on a
+    /// break). `idle_for` — time since the last input.
     fn step(
         &mut self,
         watching: bool,
@@ -79,6 +77,26 @@ impl IdleNotice {
     }
 }
 
+/// "1 hour", "2 hours 15 minutes", "5 minutes".
+fn describe(d: Duration) -> String {
+    let mins = d.as_secs() / 60;
+    let (h, m) = (mins / 60, mins % 60);
+    let hours = match h {
+        0 => String::new(),
+        1 => "1 hour".to_string(),
+        n => format!("{n} hours"),
+    };
+    let minutes = match m {
+        1 => "1 minute".to_string(),
+        n => format!("{n} minutes"),
+    };
+    match (hours.is_empty(), m) {
+        (true, _) => minutes,
+        (false, 0) => hours,
+        (false, _) => format!("{hours} {minutes}"),
+    }
+}
+
 fn went_idle(idle_for: Duration) -> Reminder {
     Reminder {
         kind: KIND,
@@ -107,9 +125,7 @@ pub async fn run(app: AppHandle, state: DesktopState) {
     loop {
         tokio::time::sleep(TICK).await;
         let tracking = state.tracker.lock().await.is_some();
-        let watching = tracking
-            && !state.on_break.load(Ordering::Relaxed)
-            && !state.in_meeting.load(Ordering::Relaxed);
+        let watching = tracking && !state.on_break.load(Ordering::Relaxed);
         let step = notice.step(
             watching,
             state.idle.idle_for(),
@@ -180,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn breaks_meetings_and_a_stopped_timer_withdraw_it() {
+    fn a_break_or_a_stopped_timer_withdraws_it() {
         let t0 = Instant::now();
         let mut n = IdleNotice::default();
         let _ = n.step(true, secs(310), T, t0);
@@ -188,6 +204,14 @@ mod tests {
         // Nothing under way: nothing to withdraw, and idle while not watching
         // never notifies.
         assert_eq!(n.step(false, secs(999), T, t0 + secs(20)), Step::Nothing);
+    }
+
+    #[test]
+    fn durations_read_naturally() {
+        assert_eq!(describe(secs(3600)), "1 hour");
+        assert_eq!(describe(secs(2 * 3600 + 15 * 60)), "2 hours 15 minutes");
+        assert_eq!(describe(secs(61 * 60)), "1 hour 1 minute");
+        assert_eq!(describe(secs(5 * 60)), "5 minutes");
     }
 
     #[test]

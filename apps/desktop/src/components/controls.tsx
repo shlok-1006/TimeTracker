@@ -6,9 +6,9 @@ import { invoker, STATUS_LABEL } from "@/lib/tauri";
 
 type Team = { id: string; name: string; description: string; created_at: string };
 
-/** Tracking controls: start/stop, break, meeting mode + live status badge.
- *  Break/meeting are statuses within a session (recorded for the timeline);
- *  break time is not counted as worked. */
+/** Tracking controls: start/stop, break + live status badge.
+ *  Break is a status within a session (recorded for the timeline); break time
+ *  is not counted as worked. */
 export function Controls({ userId }: { userId: string }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -27,11 +27,6 @@ export function Controls({ userId }: { userId: string }) {
   const { data: onBreak } = useQuery({
     queryKey: ["is_on_break"],
     queryFn: async () => (await invoker())<boolean>("is_on_break"),
-    refetchInterval: 5000,
-  });
-  const { data: inMeeting } = useQuery({
-    queryKey: ["is_in_meeting"],
-    queryFn: async () => (await invoker())<boolean>("is_in_meeting"),
     refetchInterval: 5000,
   });
   const { data: remindersMuted } = useQuery({
@@ -139,17 +134,6 @@ export function Controls({ userId }: { userId: string }) {
               }`}
             >
               {onBreak ? "Resume work" : "Break"}
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => run((i) => i("set_meeting", { on: !inMeeting }))}
-              className={`flex-1 rounded-md px-4 py-2 font-medium disabled:opacity-50 ${
-                inMeeting
-                  ? "bg-purple-600 text-white hover:bg-purple-700"
-                  : "bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
-              }`}
-            >
-              {inMeeting ? "End meeting" : "Meeting mode"}
             </button>
           </div>
           {onBreak && (

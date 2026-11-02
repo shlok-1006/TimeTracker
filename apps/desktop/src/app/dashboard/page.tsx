@@ -105,8 +105,8 @@ export default function DashboardPage() {
               </header>
               <SyncBanner />
               <Controls userId={session.id} />
-              <MyTeams />
               <Dashboard userId={session.id} />
+              <MyTeams />
             </>
           )}
           {/* Hidden for now — code kept, just not rendered. */}

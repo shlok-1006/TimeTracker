@@ -1,7 +1,7 @@
-//! The Weekly Report counts all tracked time toward the 40h: active + meeting + idle (HR policy,
-//! 19 Oct 2026). Breaks are not tracked time and stay out. Attendance (present/absent) still counts
-//! active + meeting only, so the day rows keep idle in their own column. Hits a live DB via
-//! DATABASE_URL; skips if unset. Uses a 2019 week and a fresh user so it never collides with real data.
+//! The Weekly Report counts work toward the 40h: active + meeting. Idle is not work (since 0.1.19,
+//! 3 Nov 2026 — from 19 Oct it had counted) and breaks are not tracked time, so neither counts.
+//! The day rows keep idle in their own column. Hits a live DB via DATABASE_URL; skips if unset.
+//! Uses a 2019 week and a fresh user so it never collides with real data.
 
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use sqlx::postgres::PgPoolOptions;
@@ -42,7 +42,7 @@ async fn day_of(pool: &PgPool, user: Uuid, day: NaiveDate, parts: &[(&str, i64)]
 }
 
 #[tokio::test]
-async fn idle_time_counts_toward_the_weekly_hours() {
+async fn idle_time_does_not_count_toward_the_weekly_hours() {
     let Some(pool) = pool().await else {
         eprintln!("skipping weekly-report idle test: DATABASE_URL not set");
         return;
@@ -89,7 +89,7 @@ async fn idle_time_counts_toward_the_weekly_hours() {
         assert_eq!(d.idle_seconds, 2 * 3600, "idle kept in its own column");
     }
 
-    // Weekly Report: 5 × (5h + 1h + 2h) = 40h; the 5h of breaks never count.
+    // Weekly Report: 5 × (5h + 1h) = 30h; the 10h of idle and 5h of breaks never count.
     let week = weekly_hours::week_activity(&pool, monday, sunday)
         .await
         .unwrap()
@@ -99,12 +99,12 @@ async fn idle_time_counts_toward_the_weekly_hours() {
     assert_eq!(week.working_days, 5);
     assert_eq!(
         week.worked_seconds,
-        40 * 3600,
-        "active + meeting + idle, no breaks"
+        30 * 3600,
+        "active + meeting only: no idle, no breaks"
     );
     let h = weekly_hours_service::evaluate(week.working_days, week.worked_seconds);
-    assert!(h.compliant, "40h of tracked time meets 40h");
-    assert_eq!(h.shortfall_seconds, 0);
+    assert!(!h.compliant, "40h tracked, but only 30h of it work");
+    assert_eq!(h.shortfall_seconds, 10 * 3600);
 
     users::delete(&pool, emp.id).await.unwrap();
 }

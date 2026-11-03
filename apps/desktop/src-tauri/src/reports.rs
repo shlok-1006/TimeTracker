@@ -13,9 +13,10 @@ use crate::timer::DesktopState;
 /// it began. Must match the server's hours-summary boundary.
 const BUSINESS_DAY_START_HOUR: i64 = 4;
 
-/// A "day's work" = active + idle + meeting (only Break is excluded). Today and
-/// this week are period-scoped totals of that, each broken out so idle and
-/// meeting are visible on their own. Mirrors the server's `HoursSummary`.
+/// A "day's work" = active + meeting. Idle is not work (since 0.1.19) and
+/// Break is a deliberate pause, so neither is in the totals. Today and this
+/// week are period-scoped totals of that, each broken out so idle and meeting
+/// are visible on their own. Mirrors the server's `HoursSummary`.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct HoursSummary {
     pub today_seconds: i64,
@@ -65,16 +66,17 @@ pub fn summarize(intervals: &[Interval], now: DateTime<Local>) -> HoursSummary {
     for iv in intervals {
         let d = biz_day(iv.start_utc.with_timezone(&Local));
         let n = secs(iv);
-        // Only Break is excluded from a day's work; active/idle/meeting all count.
+        // A day's work is active + meeting; idle is shown on its own, break not at all.
         let (is_active, is_idle, is_meeting) = match iv.kind.as_str() {
             "break" => continue,
             "idle" => (false, true, false),
             "meeting" => (false, false, true),
             _ => (true, false, false), // active (default)
         };
-        s.total_seconds += n;
+        let worked = if is_idle { 0 } else { n };
+        s.total_seconds += worked;
         if d == today {
-            s.today_seconds += n;
+            s.today_seconds += worked;
             if is_active {
                 s.today_active_seconds += n;
             }
@@ -86,7 +88,7 @@ pub fn summarize(intervals: &[Interval], now: DateTime<Local>) -> HoursSummary {
             }
         }
         if d >= week_start {
-            s.week_seconds += n;
+            s.week_seconds += worked;
             if is_active {
                 s.week_active_seconds += n;
             }
@@ -187,17 +189,17 @@ mod tests {
             iv(now - Duration::days(20), 3600, "active"), // old active (total only)
         ];
         let s = summarize(&items, now);
-        // A day's work = active + idle + meeting (break excluded).
-        assert_eq!(s.today_seconds, 3600 + 900 + 1800);
+        // A day's work = active + meeting (idle shown separately, break excluded).
+        assert_eq!(s.today_seconds, 3600 + 1800);
         assert_eq!(s.today_active_seconds, 3600);
         assert_eq!(s.today_idle_seconds, 900);
         assert_eq!(s.today_meeting_seconds, 1800);
-        assert_eq!(s.week_seconds, 3600 + 900 + 1800);
+        assert_eq!(s.week_seconds, 3600 + 1800);
         assert_eq!(s.week_active_seconds, 3600);
         assert_eq!(s.week_idle_seconds, 900);
         assert_eq!(s.week_meeting_seconds, 1800);
-        // All-time worked includes the 20-day-old active interval; break never counts.
-        assert_eq!(s.total_seconds, 3600 + 900 + 1800 + 3600);
+        // All-time worked includes the 20-day-old active interval; idle and break never count.
+        assert_eq!(s.total_seconds, 3600 + 1800 + 3600);
     }
 
     #[test]

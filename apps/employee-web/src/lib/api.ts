@@ -121,7 +121,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
 
 // ---- Hours (own) ----
 
-// A "day's work" = active + idle + meeting (only Break is excluded). today/week
+// A "day's work" = active + meeting (idle is not work; Break is excluded). today/week
 // are period-scoped totals of that, each broken out so idle and meeting show on
 // their own. total_seconds is all-time worked.
 const hoursSummarySchema = z.object({

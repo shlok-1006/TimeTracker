@@ -47,11 +47,14 @@ fn is_weekend(day: NaiveDate) -> bool {
 }
 
 /// Derive (status, note) from tracked time + leave/holiday/weekend context.
-/// `tracked_seconds` is the day's total tracked time (active + idle).
-/// `full_day_seconds` is the threshold below which a *complete* day is partial.
+/// `tracked_seconds` is all tracked time (active + meeting + idle): any of it
+/// means the employee started their day. `worked_seconds` is the work in it
+/// (active + meeting — idle is not work); a *complete* day whose work is under
+/// `full_day_seconds` is partial, however much idle filled the rest.
 /// `day_complete` is false for the day still in progress (today).
 fn derive_status(
     tracked_seconds: i64,
+    worked_seconds: i64,
     full_day_seconds: i64,
     day_complete: bool,
     leave_type: Option<&str>,
@@ -72,7 +75,7 @@ fn derive_status(
     } else if tracked_seconds > 0 {
         // A day still in progress is optimistically present (they may yet reach
         // a full day); once complete, under the threshold makes it a half day.
-        if day_complete && tracked_seconds < full_day_seconds {
+        if day_complete && worked_seconds < full_day_seconds {
             ("partial", String::new())
         } else {
             ("present", String::new())
@@ -92,7 +95,8 @@ pub async fn rollup_day(
     let activity = attendance::day_activity(pool, user_id, start, end).await?;
 
     // Any tracked time — active or idle — means the user started their day, so
-    // it counts as present: only an untracked day looks up leave. A holiday is
+    // it is never absent: only an untracked day looks up leave. Whether it is a
+    // full day is judged on work alone (see derive_status). A holiday is
     // looked up ALWAYS, because like a weekend it is never a work day — working on
     // it must not turn it into `present` and add 8h to that week's requirement.
     let tracked_seconds = activity.worked_seconds + activity.idle_seconds;
@@ -107,6 +111,7 @@ pub async fn rollup_day(
     let day_complete = day < Utc::now().date_naive();
     let (status, note) = derive_status(
         tracked_seconds,
+        activity.worked_seconds,
         full_day_seconds(),
         day_complete,
         leave_type.as_deref(),
@@ -384,11 +389,11 @@ mod tests {
         // Today is optimistically present even below the full-day threshold —
         // the employee may still reach a full day.
         assert_eq!(
-            derive_status(1, FULL, false, None, None, weekday()).0,
+            derive_status(1, 1, FULL, false, None, None, weekday()).0,
             "present"
         );
         assert_eq!(
-            derive_status(3600, FULL, false, None, None, weekday()).0,
+            derive_status(3600, 3600, FULL, false, None, None, weekday()).0,
             "present"
         );
     }
@@ -397,19 +402,39 @@ mod tests {
     fn completed_day_under_threshold_is_partial() {
         // < 4h on a finished day is a half (partial) day; >= 4h is a full present day.
         assert_eq!(
-            derive_status(3600, FULL, true, None, None, weekday()).0,
+            derive_status(3600, 3600, FULL, true, None, None, weekday()).0,
             "partial"
         );
         assert_eq!(
-            derive_status(FULL - 1, FULL, true, None, None, weekday()).0,
+            derive_status(FULL - 1, FULL - 1, FULL, true, None, None, weekday()).0,
             "partial"
         );
         assert_eq!(
-            derive_status(FULL, FULL, true, None, None, weekday()).0,
+            derive_status(FULL, FULL, FULL, true, None, None, weekday()).0,
             "present"
         );
         assert_eq!(
-            derive_status(6 * 3600, FULL, true, None, None, weekday()).0,
+            derive_status(6 * 3600, 6 * 3600, FULL, true, None, None, weekday()).0,
+            "present"
+        );
+    }
+
+    #[test]
+    fn idle_is_not_work_toward_a_full_day() {
+        // 3h of work + 5h idle on a finished day: they started their day, but it
+        // is a half day — idle no longer tops it up to full.
+        assert_eq!(
+            derive_status(8 * 3600, 3 * 3600, FULL, true, None, None, weekday()).0,
+            "partial"
+        );
+        // Only idle all day: still not absent (the day was started), but partial.
+        assert_eq!(
+            derive_status(2 * 3600, 0, FULL, true, None, None, weekday()).0,
+            "partial"
+        );
+        // Enough work plus idle on top: present.
+        assert_eq!(
+            derive_status(9 * 3600, FULL, FULL, true, None, None, weekday()).0,
             "present"
         );
     }
@@ -418,11 +443,11 @@ mod tests {
     fn no_work_is_not_present() {
         // Zero tracked time on a plain weekday is absent — never partial.
         assert_eq!(
-            derive_status(0, FULL, true, None, None, weekday()).0,
+            derive_status(0, 0, FULL, true, None, None, weekday()).0,
             "absent"
         );
         assert_eq!(
-            derive_status(0, FULL, false, None, None, weekday()).0,
+            derive_status(0, 0, FULL, false, None, None, weekday()).0,
             "absent"
         );
     }
@@ -437,7 +462,7 @@ mod tests {
             for complete in [true, false] {
                 for (lt, hol) in [(None, None), (Some("Annual"), None), (None, Some("NY"))] {
                     for day in [weekday(), weekend()] {
-                        let (s, _) = derive_status(tracked, FULL, complete, lt, hol, day);
+                        let (s, _) = derive_status(tracked, tracked, FULL, complete, lt, hol, day);
                         assert!(ALLOWED.contains(&s), "disallowed status {s:?}");
                     }
                 }
@@ -450,19 +475,19 @@ mod tests {
         // Tracking on a Saturday/Sunday must not count as a work day — the day
         // stays `weekend`, whether in progress or complete, full or partial.
         assert_eq!(
-            derive_status(1, FULL, false, None, None, weekend()).0,
+            derive_status(1, 1, FULL, false, None, None, weekend()).0,
             "weekend"
         );
         assert_eq!(
-            derive_status(3600, FULL, true, None, None, weekend()).0,
+            derive_status(3600, 3600, FULL, true, None, None, weekend()).0,
             "weekend"
         );
         assert_eq!(
-            derive_status(FULL, FULL, true, None, None, weekend()).0,
+            derive_status(FULL, FULL, FULL, true, None, None, weekend()).0,
             "weekend"
         );
         assert_eq!(
-            derive_status(8 * 3600, FULL, false, None, None, weekend()).0,
+            derive_status(8 * 3600, 8 * 3600, FULL, false, None, None, weekend()).0,
             "weekend"
         );
     }
@@ -475,14 +500,22 @@ mod tests {
         let friday = d(2026, 6, 12);
         for (tracked, complete) in [(1, false), (3600, true), (FULL, true), (9 * 3600, false)] {
             assert_eq!(
-                derive_status(tracked, FULL, complete, None, Some("Founders' Day"), friday),
+                derive_status(
+                    tracked,
+                    tracked,
+                    FULL,
+                    complete,
+                    None,
+                    Some("Founders' Day"),
+                    friday
+                ),
                 ("holiday", "Founders' Day".to_string()),
                 "tracked={tracked} complete={complete}"
             );
         }
         // A holiday that falls on a weekend reads as the holiday.
         assert_eq!(
-            derive_status(3600, FULL, true, None, Some("Diwali"), weekend()).0,
+            derive_status(3600, 3600, FULL, true, None, Some("Diwali"), weekend()).0,
             "holiday"
         );
     }
@@ -490,26 +523,26 @@ mod tests {
     #[test]
     fn no_work_prefers_leave_then_holiday_then_weekend_then_absent() {
         assert_eq!(
-            derive_status(0, FULL, true, Some("Sick"), Some("NY"), weekday()).0,
+            derive_status(0, 0, FULL, true, Some("Sick"), Some("NY"), weekday()).0,
             "leave"
         );
         assert_eq!(
-            derive_status(0, FULL, true, None, Some("New Year"), weekday()).0,
+            derive_status(0, 0, FULL, true, None, Some("New Year"), weekday()).0,
             "holiday"
         );
         assert_eq!(
-            derive_status(0, FULL, true, None, None, weekend()).0,
+            derive_status(0, 0, FULL, true, None, None, weekend()).0,
             "weekend"
         );
         assert_eq!(
-            derive_status(0, FULL, true, None, None, weekday()).0,
+            derive_status(0, 0, FULL, true, None, None, weekday()).0,
             "absent"
         );
     }
 
     #[test]
     fn leave_note_carries_type_name() {
-        let (s, note) = derive_status(0, FULL, true, Some("Annual Leave"), None, weekday());
+        let (s, note) = derive_status(0, 0, FULL, true, Some("Annual Leave"), None, weekday());
         assert_eq!(s, "leave");
         assert_eq!(note, "Annual Leave");
     }

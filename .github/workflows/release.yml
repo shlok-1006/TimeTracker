@@ -93,12 +93,20 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # One-click updates: signs each update package (.app.tar.gz, .msi,
+          # .AppImage) and tauri-action writes latest.json, which the app's
+          # updater reads. The public half is plugins.updater.pubkey in
+          # tauri.conf.json; losing this key means no app can update itself
+          # again until everyone reinstalls by hand.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: "TimeTracker ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
+          includeUpdaterJson: true
           args: ${{ matrix.args }}
 
   # Copy the finished installers from this repo's draft release to the PUBLIC
@@ -192,6 +200,11 @@ jobs:
                       data = urllib.request.urlopen(e.headers["Location"]).read()
                   else:
                       print("download FAILED:", name, e.code); continue
+              if name == "latest.json":
+                  # The manifest points at this (private) repo's downloads, which
+                  # employees can't fetch; point it at the public copies instead.
+                  data = data.replace(f"github.com/{src}/releases/download/".encode(),
+                                      f"github.com/{dst}/releases/download/".encode())
               s, _ = call(f"{UP}/repos/{dst}/releases/{rid}/assets?name={name}", dst_tok,
                           "POST", data=data, raw=True, ctype="application/octet-stream")
               print(f"uploaded {name} ({len(data)//1024} KB) -> {s}")

@@ -12,11 +12,13 @@ use serde::{Deserialize, Serialize};
 /// Keychain service name. Debug builds use a separate entry so that running the
 /// app locally cannot read, refresh or overwrite the session belonging to the
 /// installed release on the same machine — signing in during development would
-/// otherwise rotate the real user's refresh token out from under them.
-const KEYRING_SERVICE: &str = if cfg!(debug_assertions) {
-    "com.timetracker.desktop.dev"
-} else {
-    "com.timetracker.desktop"
+/// otherwise rotate the real user's refresh token out from under them. A test
+/// *release* build (e.g. for trying an update end to end) sets
+/// `TIMETRACKER_KEYRING_SERVICE` at build time for the same reason.
+const KEYRING_SERVICE: &str = match option_env!("TIMETRACKER_KEYRING_SERVICE") {
+    Some(service) => service,
+    None if cfg!(debug_assertions) => "com.timetracker.desktop.dev",
+    None => "com.timetracker.desktop",
 };
 const ACCOUNT_ACCESS: &str = "access_token";
 const ACCOUNT_REFRESH: &str = "refresh_token";

@@ -125,7 +125,9 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
         tracing::warn!("screenshot outbox sweep failed: {e}");
     }
 
-    let state = timer::DesktopState::new(pool, idle, outbox);
+    let state = timer::DesktopState::new(pool, idle, outbox, data_dir.clone());
+    // Opened by an update's restart while the timer was running: carry on.
+    timer::resume_after_update(&state).await;
     handle.manage(state.clone());
     tauri::async_runtime::spawn(timer::run_recorder(state.clone()));
     tauri::async_runtime::spawn(sync_worker::run(state.clone()));
@@ -164,6 +166,9 @@ pub fn run() {
         // Reminders are raised as a persistent window (see `reminder`), not as
         // OS notifications — those auto-dismiss and cannot report delivery.
         // Launch at system login so tracking resumes when the machine starts.
+        // One-click updates (see `updates`): signed packages from the downloads
+        // repo, checked against the public key in tauri.conf.json.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -242,6 +247,7 @@ pub fn run() {
             screenshot::request_capture_permission,
             screenshot::relaunch_app,
             updates::check_for_update,
+            updates::install_update,
             updates::open_downloads_page
         ])
         .run(tauri::generate_context!())

@@ -31,14 +31,16 @@ use tauri::Manager;
 #[derive(Serialize)]
 pub struct AppInfo {
     pub name: &'static str,
-    pub version: &'static str,
+    pub version: String,
 }
 
+/// The installed version comes from tauri.conf.json, not the crate's own
+/// version (which `env!("CARGO_PKG_VERSION")` would give, and which is stale).
 #[tauri::command]
-fn app_info() -> AppInfo {
+fn app_info(app: tauri::AppHandle) -> AppInfo {
     AppInfo {
         name: "TimeTracker",
-        version: env!("CARGO_PKG_VERSION"),
+        version: app.package_info().version.to_string(),
     }
 }
 
@@ -103,7 +105,10 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     // logging wants it first so startup problems are captured too.
     let _ = std::fs::create_dir_all(&data_dir);
     init_logging(&data_dir);
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "TimeTracker starting");
+    tracing::info!(
+        version = %handle.package_info().version,
+        "TimeTracker starting"
+    );
     let db_path = data_dir.join("timetracker.db");
 
     let pool = db::connect(&db_path).await.context("open local database")?;

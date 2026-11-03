@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { invoker } from "@/lib/tauri";
 import { useSession } from "@/lib/session";
 import { useEmployeeSession } from "@/components/use-employee-session";
 import { Controls } from "@/components/controls";
@@ -40,6 +42,11 @@ export default function DashboardPage() {
   const { session, ready } = useEmployeeSession();
   const clear = useSession((s) => s.clear);
   const [view, setView] = useState<View>("dashboard");
+  const { data: appInfo } = useQuery({
+    queryKey: ["app_info"],
+    queryFn: async () => (await invoker())<{ name: string; version: string }>("app_info"),
+    staleTime: Infinity,
+  });
 
   async function signOut() {
     await clear();
@@ -60,7 +67,12 @@ export default function DashboardPage() {
 
       <aside className="flex h-screen w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
         <div className="border-b border-slate-200 px-5 py-5 dark:border-slate-800">
-          <h1 className="text-lg font-bold">TimeTracker</h1>
+          <h1 className="flex items-baseline gap-2 text-lg font-bold">
+            TimeTracker
+            {appInfo && (
+              <span className="text-xs font-medium text-slate-500">v{appInfo.version}</span>
+            )}
+          </h1>
           <p className="text-xs text-slate-500">{ROLE_LABEL[session.role] ?? session.role}</p>
         </div>
 

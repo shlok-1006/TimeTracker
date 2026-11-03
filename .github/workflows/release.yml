@@ -130,7 +130,10 @@ jobs:
           # Built-in token reads THIS (private) repo's draft release + assets.
           SRC_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # A fine-grained PAT scoped to the downloads repo (Contents: R/W).
-          DST_TOKEN: ${{ secrets.DOWNLOADS_TOKEN }}
+          # ruh-ai/time-tracker stores it as DOWNLOAD_TOKEN (no S); with only
+          # DOWNLOADS_TOKEN read, this job sent an empty token and failed with
+          # 401 on every release from v0.1.14 to v0.1.18.
+          DST_TOKEN: ${{ secrets.DOWNLOADS_TOKEN || secrets.DOWNLOAD_TOKEN }}
           DST_REPO: shlok-1006/TimeTracker-Download
           TAG: ${{ github.ref_name }}
         run: |

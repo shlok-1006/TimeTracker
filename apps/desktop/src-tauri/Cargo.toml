@@ -17,7 +17,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# macos-private-api: needed by tauri-nspanel (reminder panel, below). Only bars
+# Mac App Store distribution, which TimeTracker does not use.
+tauri = { version = "2", features = ["macos-private-api"] }
 # Native break-reminder notifications + launch-at-login (both driven from Rust,
 # so no frontend plugin plumbing needed).
 tauri-plugin-autostart = "2"
@@ -87,6 +89,9 @@ keyring = { version = "3", features = ["apple-native"] }
 # AppKit window level / Spaces behaviour for the reminder window, so it floats
 # over every app — including ones in full screen. Same version Tauri uses.
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSWindow"] }
+# Turns the reminder window into a non-activating NSPanel: the only kind of
+# window macOS shows over another app's full-screen Space.
+tauri-nspanel = "2.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }

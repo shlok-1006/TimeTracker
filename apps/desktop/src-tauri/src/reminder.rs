@@ -22,6 +22,8 @@
 //! and no notification permission, and it stays put until acknowledged.
 
 use serde::Serialize;
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -82,6 +84,20 @@ pub fn showing(kind: &str) -> bool {
         .unwrap_or(false)
 }
 
+// On macOS the reminder is an NSPanel rather than a plain window: a
+// non-activating floating panel is the only kind of window macOS will show in
+// another app's full-screen Space. Clicking it doesn't activate TimeTracker or
+// pull the user out of what they were in.
+#[cfg(target_os = "macos")]
+tauri_nspanel::tauri_panel! {
+    panel!(ReminderPanel {
+        config: {
+            can_become_key_window: true,
+            is_floating_panel: true
+        }
+    })
+}
+
 /// "Ok" — the user acknowledged, so close the window. Closing is done here
 /// rather than from the webview so the window needs no capability of its own.
 #[tauri::command]
@@ -117,6 +133,22 @@ pub fn show(app: &AppHandle, reminder: Reminder) {
 pub fn close(app: &AppHandle, reason: &'static str) {
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
+        // macOS: the panel is hidden, never closed, and reused by the next
+        // reminder. Closing it — even after turning it back into a Tauri
+        // window — raised an Objective-C exception that aborted the app the
+        // moment the user clicked Ok.
+        #[cfg(target_os = "macos")]
+        {
+            use tauri_nspanel::ManagerExt;
+            if let Ok(panel) = app.get_webview_panel(WINDOW_LABEL) {
+                tracing::info!(reason, "hiding reminder panel");
+                panel.hide();
+                if let Ok(mut pending) = PENDING.lock() {
+                    *pending = None;
+                }
+                return;
+            }
+        }
         if let Some(w) = app.get_webview_window(WINDOW_LABEL) {
             tracing::info!(reason, "closing reminder window");
             let _ = w.close();
@@ -159,9 +191,21 @@ fn build_or_focus(app: &AppHandle) -> tauri::Result<()> {
     // polls for the payload so it picks up a different reminder without needing
     // to be rebuilt. Deliberately no `set_focus` — see below.
     if let Some(w) = app.get_webview_window(WINDOW_LABEL) {
-        let _ = w.unminimize();
-        w.show()?;
-        float_above_other_apps(&w);
+        // macOS: the panel kept from an earlier reminder (see `close`). Reload
+        // the page so it reads the new payload and re-arms its click guard,
+        // then order the panel front — Tauri's `show` would make it key.
+        #[cfg(target_os = "macos")]
+        {
+            let _ = w.reload();
+            float_above_other_apps(&w);
+            keep_raised(app);
+            tracing::info!("reminder panel shown again");
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = w.unminimize();
+            w.show()?;
+        }
         return Ok(());
     }
 
@@ -193,6 +237,8 @@ fn build_or_focus(app: &AppHandle) -> tauri::Result<()> {
 
     park_in_corner(&win);
     float_above_other_apps(&win);
+    #[cfg(target_os = "macos")]
+    keep_raised(app);
 
     tracing::info!("reminder window shown");
     Ok(())
@@ -200,39 +246,105 @@ fn build_or_focus(app: &AppHandle) -> tauri::Result<()> {
 
 /// macOS: make the reminder cover whatever the user is in, not just the desktop.
 ///
-/// Tauri's `always_on_top` only gets halfway there. It brings the window up
-/// with `orderFront`, which from a background app leaves it behind the app the
-/// user is working in, and `visible_on_all_workspaces` covers ordinary desktops
-/// but not the Space a full-screen app runs in. So the reminder was only ever
-/// seen by someone looking at the desktop. Here it is raised to the status
-/// level (above app windows, below menus), allowed into full-screen Spaces,
-/// kept out of ⌘` cycling, and ordered front even though TimeTracker isn't the
-/// active app — still without taking keyboard focus (see `build_or_focus`).
+/// Tauri's `always_on_top` only gets halfway there: from a background app the
+/// window lands behind the app the user is working in. 0.1.19 raised it to the
+/// status level, which covers ordinary windows — but a plain window can never
+/// enter another app's full-screen Space, and many people work full screen, so
+/// the reminder still went unseen. The window is therefore converted into a
+/// non-activating panel (`ReminderPanel`) at the status level (above app
+/// windows, below menus), allowed into every Space including full-screen ones,
+/// kept out of ⌘` cycling, and ordered front without activating TimeTracker or
+/// taking keyboard focus (see `build_or_focus`).
 ///
 /// Windows needs none of this: `always_on_top` there is `HWND_TOPMOST`, which
-/// already sits over other apps.
+/// already sits over other apps, full-screen ones included.
 #[cfg(target_os = "macos")]
 fn float_above_other_apps(win: &tauri::WebviewWindow) {
-    use objc2_app_kit::{NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior as B};
+    use tauri::Manager;
+    use tauri_nspanel::{CollectionBehavior, ManagerExt, PanelLevel, WebviewWindowExt};
 
-    let Ok(ptr) = win.ns_window() else {
-        tracing::warn!("reminder: no native window to raise");
-        return;
+    let app = win.app_handle();
+    let panel = match app.get_webview_panel(WINDOW_LABEL) {
+        Ok(panel) => panel,
+        Err(_) => match win.to_panel::<ReminderPanel>() {
+            Ok(panel) => {
+                if let Err(e) =
+                    panel.add_style_mask(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel)
+                {
+                    tracing::warn!("reminder: could not make the panel non-activating: {e:?}");
+                }
+                panel.set_collection_behavior(
+                    CollectionBehavior::new()
+                        .can_join_all_spaces()
+                        .full_screen_auxiliary()
+                        .stationary()
+                        .ignores_cycle()
+                        .value(),
+                );
+                panel.set_floating_panel(true);
+                // After set_floating_panel, which resets the level to "floating".
+                panel.set_level(PanelLevel::Status.value());
+                panel.set_hides_on_deactivate(false);
+                panel
+            }
+            Err(e) => {
+                tracing::warn!("reminder: could not turn the window into a panel: {e}");
+                return;
+            }
+        },
     };
-    // SAFETY: Tauri returns this window's live NSWindow, and every caller runs
-    // on the main thread (`show` dispatches there), as AppKit requires.
-    let ns: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
-    ns.setLevel(NSStatusWindowLevel);
-    ns.setCollectionBehavior(
-        ns.collectionBehavior()
-            | B::CanJoinAllSpaces
-            | B::FullScreenAuxiliary
-            | B::Stationary
-            | B::IgnoresCycle,
-    );
-    ns.setHidesOnDeactivate(false);
-    ns.orderFrontRegardless();
+    panel.order_front_regardless();
 }
 
 #[cfg(not(target_os = "macos"))]
 fn float_above_other_apps(_win: &tauri::WebviewWindow) {}
+
+/// A `keep_raised` loop is running.
+#[cfg(target_os = "macos")]
+static KEEPING_RAISED: AtomicBool = AtomicBool::new(false);
+
+/// How often an open reminder is raised again.
+#[cfg(target_os = "macos")]
+const RERAISE_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[cfg(target_os = "macos")]
+fn is_up() -> bool {
+    PENDING.lock().map(|g| g.is_some()).unwrap_or(false)
+}
+
+/// macOS: follow the user to whichever Space they are on.
+///
+/// A panel that joins all Spaces still stays out of a full-screen Space the
+/// user switches to *after* it appeared — seen on a Mac: raised on the desktop,
+/// then gone once the user swiped back into a full-screen app. Ordering it
+/// front again from that Space brings it there. So while a reminder is up, it
+/// is raised again every couple of seconds (never focused — see
+/// `build_or_focus`); the loop ends with the reminder.
+#[cfg(target_os = "macos")]
+fn keep_raised(app: &AppHandle) {
+    if KEEPING_RAISED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(RERAISE_EVERY).await;
+            if !is_up() {
+                KEEPING_RAISED.store(false, Ordering::SeqCst);
+                // A reminder raised between the check and the store would have
+                // found the flag set and started no loop of its own.
+                if is_up() && !KEEPING_RAISED.swap(true, Ordering::SeqCst) {
+                    continue;
+                }
+                return;
+            }
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                use tauri_nspanel::ManagerExt;
+                if let Ok(panel) = handle.get_webview_panel(WINDOW_LABEL) {
+                    panel.order_front_regardless();
+                }
+            });
+        }
+    });
+}

@@ -135,6 +135,33 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     tauri::async_runtime::spawn(presence::run_break_reminders(handle.clone(), state.clone()));
     tauri::async_runtime::spawn(idle_notice::run(handle.clone(), state.clone()));
     tauri::async_runtime::spawn(call_detect::run(state.idle.clone()));
+    // Debug builds: `TIMETRACKER_DEBUG_REMINDER_SECS=N` raises a test reminder
+    // every N seconds, to see how it sits over other apps (full-screen ones
+    // included) and how it comes back after Ok, without waiting for a real
+    // break or idle stretch.
+    #[cfg(debug_assertions)]
+    if let Some(secs) = std::env::var("TIMETRACKER_DEBUG_REMINDER_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+    {
+        let h = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                reminder::show(
+                    &h,
+                    reminder::Reminder {
+                        kind: "test",
+                        title: "Test reminder".into(),
+                        body:
+                            "This should be on top of whatever you are using, full screen included."
+                                .into(),
+                    },
+                );
+            }
+        });
+    }
     tauri::async_runtime::spawn(presence::run_not_tracking_reminders(
         handle.clone(),
         state.clone(),
@@ -161,6 +188,10 @@ pub fn run() {
             let _ = window.set_focus();
         }
     }));
+
+    // The reminder window becomes an NSPanel on macOS (see `reminder`).
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
 
     builder
         // Reminders are raised as a persistent window (see `reminder`), not as

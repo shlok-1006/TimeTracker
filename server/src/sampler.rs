@@ -22,6 +22,14 @@
 //! The desktop also captures during meetings (tagged `meeting`, Feature 2); those
 //! are stored and viewable but are filtered out here and never sampled/analysed.
 //!
+//! MEETINGS. A sampled shot the analyzer recognises as a live Google Meet call
+//! or Slack huddle is re-tagged `meeting` and not scored; [`add_replacement`]
+//! then draws another working shot from between the neighbouring samples, so the
+//! day keeps its spread. It prefers shots well clear of any known meeting, since
+//! the next shot in the same call would only be another meeting. The meeting row
+//! stays in the set (the analyzer skips it without a model call), so the day
+//! still counts as sampled.
+//!
 //! Idempotency (Rules: "never resample same day"): the chosen set is persisted in
 //! `analysis_job_samples` and `analysis_jobs` is UNIQUE per (user, day). Re-running
 //! `sample_screenshots` for a day that already has samples returns the stored set
@@ -45,6 +53,11 @@ const DEFAULT_MIN_SHOTS: usize = 4;
 /// Ceiling. Every sample is a vision call, so this is the cost and wall-clock
 /// bound on one person-day; without it a 14-hour day would quietly cost triple.
 const DEFAULT_MAX_SHOTS: usize = 20;
+
+/// A replacement for a meeting shot is preferably at least this far from every
+/// known meeting shot. Calls run for half an hour or so; a frame two minutes on
+/// is the same call.
+const MEETING_CLEARANCE: chrono::Duration = chrono::Duration::minutes(20);
 
 fn env_num<T: std::str::FromStr>(key: &str, default: T) -> T {
     std::env::var(key)
@@ -141,6 +154,25 @@ fn choose_samples(shots: &[CandidateShot], want: usize) -> Vec<(String, Uuid)> {
             pick_one(&eligible[lo..hi]).map(|s| (format!("slot_{:02}", i + 1), s.id))
         })
         .collect()
+}
+
+/// Pick a replacement for a meeting shot from `candidates` (working shots in the
+/// gap the meeting shot leaves, not already sampled). Prefers one at least
+/// `MEETING_CLEARANCE` from every time in `meetings`; when every candidate is
+/// that close, any candidate will do — it may turn out not to be the call.
+fn choose_replacement(candidates: &[CandidateShot], meetings: &[DateTime<Utc>]) -> Option<Uuid> {
+    let eligible: Vec<&CandidateShot> = candidates.iter().filter(|s| is_eligible(s)).collect();
+    let clear: Vec<&CandidateShot> = eligible
+        .iter()
+        .copied()
+        .filter(|s| {
+            meetings
+                .iter()
+                .all(|m| (s.taken_at - *m).abs() >= MEETING_CLEARANCE)
+        })
+        .collect();
+    let pool = if clear.is_empty() { &eligible } else { &clear };
+    pick_one(pool).map(|s| s.id)
 }
 
 /// UTC `[start, end)` bounds of a calendar day.
@@ -323,6 +355,86 @@ pub async fn sample_screenshots(
     load_samples(pool, job.id).await
 }
 
+/// Draw a replacement for `rejected` — a sample just re-tagged `meeting` — and
+/// add it to the job's set under the same slot name.
+///
+/// The replacement comes from between the neighbouring *working* samples, so
+/// the day's spread holds: a 10:00 call is replaced by another morning shot, not
+/// one from the afternoon that already has its own. Returns `None` when that
+/// stretch has no other working shot.
+pub async fn add_replacement(
+    pool: &PgPool,
+    job_id: Uuid,
+    user_id: Uuid,
+    day: NaiveDate,
+    rejected: &SampledShot,
+) -> Result<Option<SampledShot>, AppError> {
+    let samples = load_samples(pool, job_id).await?;
+    let (day_from, day_to) = day_bounds(day);
+    let working = || {
+        samples
+            .iter()
+            .filter(|s| s.captured_status == "working" && s.screenshot_id != rejected.screenshot_id)
+    };
+    let from = working()
+        .filter(|s| s.taken_at < rejected.taken_at)
+        .map(|s| s.taken_at)
+        .max()
+        .unwrap_or(day_from);
+    let to = working()
+        .filter(|s| s.taken_at > rejected.taken_at)
+        .map(|s| s.taken_at)
+        .min()
+        .unwrap_or(day_to);
+
+    // The open gap between the neighbours. A meeting shot in it is any shot
+    // tagged `meeting`, by the analyzer or by an older desktop's Meeting mode.
+    let rows = sqlx::query!(
+        r#"SELECT id, taken_at, captured_status FROM screenshots sc
+           WHERE sc.user_id = $1 AND sc.taken_at > $2 AND sc.taken_at < $3
+             AND sc.captured_status IN ('working', 'meeting')
+             AND NOT EXISTS (SELECT 1 FROM analysis_job_samples x
+                             WHERE x.job_id = $4 AND x.screenshot_id = sc.id)
+           ORDER BY sc.taken_at"#,
+        user_id,
+        from,
+        to,
+        job_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut meetings = vec![rejected.taken_at];
+    let mut candidates = Vec::new();
+    for r in rows {
+        if r.captured_status == "meeting" {
+            meetings.push(r.taken_at);
+        } else {
+            candidates.push(CandidateShot {
+                id: r.id,
+                taken_at: r.taken_at,
+                captured_status: r.captured_status,
+            });
+        }
+    }
+
+    let Some(screenshot_id) = choose_replacement(&candidates, &meetings) else {
+        return Ok(None);
+    };
+    sqlx::query!(
+        "INSERT INTO analysis_job_samples (job_id, screenshot_id, bucket)
+         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        job_id,
+        screenshot_id,
+        rejected.bucket
+    )
+    .execute(pool)
+    .await?;
+    Ok(load_samples(pool, job_id)
+        .await?
+        .into_iter()
+        .find(|s| s.screenshot_id == screenshot_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,6 +581,46 @@ mod tests {
                 "{status} must be ineligible"
             );
         }
+    }
+
+    fn at(id: u8, hour: u32, minute: u32) -> CandidateShot {
+        let d = NaiveDate::from_ymd_opt(2026, 6, 8).unwrap();
+        CandidateShot {
+            id: Uuid::from_u128(id as u128),
+            taken_at: Utc.from_utc_datetime(&d.and_hms_opt(hour, minute, 0).unwrap()),
+            captured_status: "working".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_replacement_steers_clear_of_the_call() {
+        // The 10:00 shot was a Meet call. 10:05 and 10:12 are almost certainly the
+        // same call; 10:40 is clear of it.
+        let meeting = at(9, 10, 0).taken_at;
+        let candidates = vec![at(1, 10, 5), at(2, 10, 12), at(3, 10, 40)];
+        for _ in 0..50 {
+            assert_eq!(
+                choose_replacement(&candidates, &[meeting]),
+                Some(Uuid::from_u128(3))
+            );
+        }
+    }
+
+    #[test]
+    fn with_nothing_clear_any_candidate_will_do() {
+        let meeting = at(9, 10, 0).taken_at;
+        let candidates = vec![at(1, 10, 5), at(2, 10, 12)];
+        let picked = choose_replacement(&candidates, &[meeting]).unwrap();
+        assert!(picked == Uuid::from_u128(1) || picked == Uuid::from_u128(2));
+    }
+
+    #[test]
+    fn no_working_candidate_means_no_replacement() {
+        let meeting = at(9, 10, 0).taken_at;
+        assert_eq!(choose_replacement(&[], &[meeting]), None);
+        let mut not_working = at(1, 11, 0);
+        not_working.captured_status = "meeting".into();
+        assert_eq!(choose_replacement(&[not_working], &[meeting]), None);
     }
 
     #[test]

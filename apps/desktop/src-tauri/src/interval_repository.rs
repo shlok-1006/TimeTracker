@@ -78,17 +78,23 @@ pub async fn insert(pool: &SqlitePool, interval: &Interval) -> anyhow::Result<()
     Ok(())
 }
 
-/// Segments not yet acknowledged by the server (the sync queue).
-pub async fn pending_sync(pool: &SqlitePool) -> anyhow::Result<Vec<Interval>> {
+/// `user_id`'s segments not yet acknowledged by the server (the sync queue).
+///
+/// Scoped to one user because the server files a batch under whoever's token
+/// sends it: on a shared machine, a backlog left by someone else (say, a week
+/// on a VPN that blocked sync) must wait for *them* to sign in again rather than
+/// be uploaded as the next person's time.
+pub async fn pending_sync(pool: &SqlitePool, user_id: Uuid) -> anyhow::Result<Vec<Interval>> {
     let rows = sqlx::query(
         r#"
         SELECT i.id, i.user_id, i.start_utc, i.end_utc, i.kind, i.team_id
         FROM intervals i
         LEFT JOIN interval_sync s ON s.interval_id = i.id
-        WHERE s.interval_id IS NULL
+        WHERE s.interval_id IS NULL AND i.user_id = ?
         ORDER BY i.start_utc
         "#,
     )
+    .bind(user_id.to_string())
     .fetch_all(pool)
     .await
     .context("failed to load pending intervals")?;
@@ -189,9 +195,31 @@ mod tests {
         let u = Uuid::new_v4();
         let i = interval(u, "2026-01-01T00:00:00Z", "2026-01-01T00:10:00Z", "active");
         insert(&pool, &i).await.unwrap();
-        assert_eq!(pending_sync(&pool).await.unwrap().len(), 1);
+        assert_eq!(pending_sync(&pool, u).await.unwrap().len(), 1);
         mark_synced(&pool, &[i.id]).await.unwrap();
-        assert!(pending_sync(&pool).await.unwrap().is_empty());
+        assert!(pending_sync(&pool, u).await.unwrap().is_empty());
         mark_synced(&pool, &[i.id]).await.unwrap(); // idempotent
+    }
+
+    #[tokio::test]
+    async fn pending_sync_is_per_user() {
+        let pool = db::connect_in_memory().await.unwrap();
+        db::migrate(&pool).await.unwrap();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        insert(
+            &pool,
+            &interval(a, "2026-01-01T00:00:00Z", "2026-01-01T00:10:00Z", "active"),
+        )
+        .await
+        .unwrap();
+        insert(
+            &pool,
+            &interval(b, "2026-01-01T01:00:00Z", "2026-01-01T01:10:00Z", "active"),
+        )
+        .await
+        .unwrap();
+        let for_b = pending_sync(&pool, b).await.unwrap();
+        assert_eq!(for_b.len(), 1);
+        assert_eq!(for_b[0].user_id, b);
     }
 }

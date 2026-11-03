@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE screenshots\n           SET captured_status = 'meeting', meeting_detected_at = now()\n           WHERE id = $1 AND captured_status = 'working'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5bb1ceba148150b55a3d70d053c7e7a2eff462fb9b6925a9a6be27b6140f0149"
+}

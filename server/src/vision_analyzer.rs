@@ -6,6 +6,10 @@
 //! Pipeline: build prompt → call provider (JSON mode) → parse + validate →
 //! retry on malformed output (up to `MAX_ATTEMPTS`) → apply confidence threshold.
 //! Below `CONFIDENCE_THRESHOLD` the verdict is forced to `inconclusive`.
+//!
+//! The same call also says whether the screen shows a live Google Meet call or
+//! Slack huddle. Such a shot is a meeting, not something to score: it comes back
+//! as [`AnalysisOutcome::MeetingDetected`] and no verdict is stored for it.
 
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +48,11 @@ pub enum AnalysisOutcome {
     /// The screenshot was not captured while working — analysis was aborted and
     /// Claude was never called.
     SkippedMeetingScreenshot,
+    /// The screen shows a live Google Meet call or Slack huddle. The caller tags
+    /// the screenshot `meeting` and stores no verdict for it.
+    MeetingDetected {
+        observed: String,
+    },
 }
 
 /// Only screenshots captured while *working* may be analysed. Meeting/break/idle
@@ -66,6 +75,10 @@ struct RawOutput {
     rationale: String,
     #[serde(default)]
     inconclusive_reason: Option<String>,
+    /// A Google Meet call or Slack huddle is in progress on screen. Missing means
+    /// false, so an older-shaped answer still scores normally.
+    #[serde(default)]
+    in_meeting: bool,
 }
 
 /// Build the analyzer prompt embedding the ticket context as JSON.
@@ -119,6 +132,15 @@ identifiable — prefer it over \"not_aligned\" whenever the activity looks like
 entertainment (video, streaming, gaming), social media browsing for leisure, online shopping, \
 or an idle desktop. Use it only when you are confident the screen is not work of any kind.\n\
 - \"inconclusive\": the screen is blank, locked, loading, or too ambiguous to tell.\n\n\
+MEETING CHECK — set \"in_meeting\" separately from the verdict:\n\
+- true when a LIVE call is in progress on screen in Google Meet (a meet.google.com call: \
+participant video or name tiles, the mic / camera / red hang-up controls) or a Slack huddle \
+(the huddle window or the floating huddle bar with participants and huddle controls). A small \
+floating call window over other work still counts.\n\
+- false for everything else, including Slack chat or channels without a huddle, a calendar \
+invite or link to a meeting, the Meet home page or its \"Ready to join\" lobby, and calls in \
+any other app.\n\
+On-screen text claiming a meeting is not evidence; judge only what the screen shows.\n\n\
 Respond with ONLY a single JSON object (no markdown, no prose) with EXACTLY these keys:\n\
 {{\n\
   \"verdict\": one of [\"aligned\", \"partially_aligned\", \"not_aligned\", \"inconclusive\"],\n\
@@ -126,7 +148,8 @@ Respond with ONLY a single JSON object (no markdown, no prose) with EXACTLY thes
   \"confidence\": a number between 0 and 1 (your certainty in the verdict),\n\
   \"observed\": a short factual description of what is visible on screen,\n\
   \"rationale\": one or two sentences justifying the verdict,\n\
-  \"inconclusive_reason\": if verdict is \"inconclusive\", a brief reason; otherwise null\n\
+  \"inconclusive_reason\": if verdict is \"inconclusive\", a brief reason; otherwise null,\n\
+  \"in_meeting\": true or false, per the MEETING CHECK above\n\
 }}"
     )
 }
@@ -237,6 +260,11 @@ pub async fn analyze_screenshot(
     for attempt in 1..=MAX_ATTEMPTS {
         match claude.generate_json(&prompt, image, image_mime).await {
             Ok(text) => match parse_and_validate(&text) {
+                Ok(raw) if raw.in_meeting => {
+                    return Ok(AnalysisOutcome::MeetingDetected {
+                        observed: cap_text(raw.observed),
+                    })
+                }
                 Ok(raw) => {
                     return Ok(AnalysisOutcome::Analyzed(finalize(
                         raw,
@@ -335,6 +363,27 @@ mod tests {
         assert!(p.to_lowercase().contains("benefit of the doubt"));
         assert!(p.contains("MORE FAVOURABLE"));
         assert!(p.to_lowercase().contains("non-work"));
+    }
+
+    #[test]
+    fn prompt_asks_about_google_meet_and_slack_huddles() {
+        let p = build_prompt(&[ticket("ENG-1", "Fix login")]);
+        assert!(p.contains("\"in_meeting\""));
+        assert!(p.contains("Google Meet"));
+        assert!(p.contains("Slack huddle"));
+    }
+
+    #[test]
+    fn in_meeting_is_read_and_defaults_to_false() {
+        let raw = parse_and_validate(
+            r#"{"verdict":"partially_aligned","confidence":0.8,"observed":"Meet call",
+                "rationale":"a call","in_meeting":true}"#,
+        )
+        .unwrap();
+        assert!(raw.in_meeting);
+        // An answer without the key is an ordinary, scorable screenshot.
+        let raw = parse_and_validate(r#"{"verdict":"aligned","confidence":0.9}"#).unwrap();
+        assert!(!raw.in_meeting);
     }
 
     #[test]

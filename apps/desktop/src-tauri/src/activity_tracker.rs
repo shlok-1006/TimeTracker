@@ -187,14 +187,13 @@ pub async fn run(state: DesktopState) {
 
         let status = {
             let on_break = state.on_break.load(Ordering::Relaxed);
-            let in_meeting = state.in_meeting.load(Ordering::Relaxed);
             let tracking = state.tracker.lock().await.is_some();
-            derive_status(on_break, in_meeting, tracking, state.idle.is_idle())
+            derive_status(on_break, tracking, state.idle.is_idle())
         };
 
         if status == "working" {
             // Input in the last sample window? (Duration since last OS input.)
-            let input_active = state.idle.idle_for() < Duration::from_secs(SAMPLE_SECS as u64);
+            let input_active = state.idle.since_input() < Duration::from_secs(SAMPLE_SECS as u64);
             // Foreground lookup is a blocking OS call.
             let app = tokio::task::spawn_blocking(foreground_app_name)
                 .await

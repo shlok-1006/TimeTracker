@@ -2,7 +2,8 @@
 //!
 //! Feature 2: each screenshot records `captured_status` — the employee's
 //! presence status at capture time — so sampling/analysis can exclude
-//! non-working (e.g. meeting) shots.
+//! non-working (e.g. meeting) shots. A working shot the analyzer recognises as
+//! a call is re-tagged `meeting` afterwards (`mark_meeting_detected`).
 
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
@@ -24,7 +25,11 @@ pub fn is_valid_captured_status(s: &str) -> bool {
     CAPTURED_STATUSES.contains(&s)
 }
 
-/// Insert screenshot metadata, returning the new row id.
+/// Insert screenshot metadata, returning the row id. Idempotent on the storage
+/// key: the desktop retries a queued screenshot until it hears back, so a retry
+/// after a lost response returns the existing row instead of failing on the
+/// UNIQUE key forever. (The key is validated to sit in the caller's namespace,
+/// so an existing row with that key is always the caller's own.)
 pub async fn insert(
     pool: &PgPool,
     user_id: Uuid,
@@ -37,6 +42,7 @@ pub async fn insert(
         r#"
         INSERT INTO screenshots (user_id, storage_key, taken_at, interval_id, captured_status)
         VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (storage_key) DO UPDATE SET storage_key = EXCLUDED.storage_key
         RETURNING id
         "#,
         user_id,
@@ -219,6 +225,60 @@ pub async fn working_user_ids_on_day(pool: &PgPool, day: NaiveDate) -> Result<Ve
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(|r| r.user_id).collect())
+}
+
+/// Users with working screenshots on `day` whose analysis job for that day has
+/// no sampled shots — the nightly review ran before the screenshots arrived
+/// (a laptop on a VPN that blocked uploads), or never covered them. Sampling
+/// never resamples a day that HAS samples, so these are exactly the days a
+/// fresh review can still fill in.
+pub async fn users_with_unsampled_working_shots(
+    pool: &PgPool,
+    day: NaiveDate,
+) -> Result<Vec<Uuid>, AppError> {
+    let (from, to) = day_bounds(day);
+    let rows = sqlx::query!(
+        r#"SELECT DISTINCT s.user_id FROM screenshots s
+           WHERE s.captured_status = 'working' AND s.taken_at >= $1 AND s.taken_at < $2
+             AND NOT EXISTS (
+                 SELECT 1 FROM analysis_jobs j
+                 JOIN analysis_job_samples x ON x.job_id = j.id
+                 WHERE j.user_id = s.user_id AND j.day = $3)"#,
+        from,
+        to,
+        day
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.user_id).collect())
+}
+
+/// Re-tag a working screenshot the analyzer recognised as a call (Google Meet,
+/// Slack huddle) as `meeting`, stamping when that was decided. From then on it is
+/// treated like a meeting shot everywhere: never sampled or scored, and shown with
+/// the meeting badge. A verdict stored for it earlier is removed so it can't count
+/// towards a report. Returns whether the row changed (false if it was already
+/// tagged, or gone).
+pub async fn mark_meeting_detected(pool: &PgPool, screenshot_id: Uuid) -> Result<bool, AppError> {
+    let mut tx = pool.begin().await?;
+    let changed = sqlx::query!(
+        r#"UPDATE screenshots
+           SET captured_status = 'meeting', meeting_detected_at = now()
+           WHERE id = $1 AND captured_status = 'working'"#,
+        screenshot_id
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        > 0;
+    sqlx::query!(
+        "DELETE FROM analysis_results WHERE screenshot_id = $1",
+        screenshot_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(changed)
 }
 
 /// Count a user's screenshots (used by tests / future reporting).

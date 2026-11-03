@@ -74,10 +74,11 @@ pub async fn insert_batch(
 
 /// Dashboard hours summary (computed from intervals; Rule 2).
 ///
-/// A "day's work" = active + idle + meeting (only Break is excluded — it's a
-/// deliberate pause). Both TODAY and THIS WEEK are period-scoped totals of
-/// that, each broken out into active / idle / meeting so idle and meeting are
-/// visible on their own. All windows use the 4 AM local business-day boundary.
+/// A "day's work" = active + meeting. Idle is not work (since 0.1.19) and Break
+/// is a deliberate pause, so neither is in the totals. Both TODAY and THIS WEEK
+/// are period-scoped totals of that, each broken out into active / idle /
+/// meeting so idle stays visible on its own. All windows use the 4 AM local
+/// business-day boundary.
 #[derive(Debug, Serialize)]
 pub struct HoursSummary {
     pub today_seconds: i64,
@@ -93,7 +94,7 @@ pub struct HoursSummary {
     /// Manually-granted "grace" time in the current week (0 = none). When > 0 the
     /// UI tags the week total as including grace.
     pub week_grace_seconds: i64,
-    /// All-time worked (active+idle+meeting) — used only for the desktop's
+    /// All-time worked (active+meeting) — used only for the desktop's
     /// "server total (reconciled)" line.
     pub total_seconds: i64,
 }
@@ -139,15 +140,15 @@ pub async fn hours_summary(pool: &PgPool, user_id: Uuid) -> Result<HoursSummary,
         k AS (SELECT * FROM w, LATERAL interval_seconds($1, w.week_start, w.week_end, NULL)),
         t AS (SELECT * FROM interval_seconds($1, '-infinity'::timestamptz, 'infinity'::timestamptz, NULL))
         SELECT
-          CAST(d.active + d.idle + d.meeting AS BIGINT) AS "today!",
+          CAST(d.active + d.meeting AS BIGINT) AS "today!",
           CAST(d.active  AS BIGINT) AS "today_active!",
           CAST(d.idle    AS BIGINT) AS "today_idle!",
           CAST(d.meeting AS BIGINT) AS "today_meeting!",
-          CAST(k.active + k.idle + k.meeting AS BIGINT) AS "week!",
+          CAST(k.active + k.meeting AS BIGINT) AS "week!",
           CAST(k.active  AS BIGINT) AS "week_active!",
           CAST(k.idle    AS BIGINT) AS "week_idle!",
           CAST(k.meeting AS BIGINT) AS "week_meeting!",
-          CAST(t.active + t.idle + t.meeting AS BIGINT) AS "total!"
+          CAST(t.active + t.meeting AS BIGINT) AS "total!"
         FROM d, k, t
         "#,
         user_id,

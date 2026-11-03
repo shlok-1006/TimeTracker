@@ -1,13 +1,14 @@
-//! Screenshot capture + upload (STEP 4) with token-refreshing API calls.
+//! Screenshot capture (STEP 4).
 //!
-//! Captures the primary monitor while **Working or in a Meeting** (never during
-//! a break, idle, or when not tracking). Meeting shots are uploaded too, tagged
-//! `meeting`, so they appear in the gallery — but the server never samples or
-//! analyses them, so meeting time still can't skew the report. Each upload is
-//! tagged with the capture-time status. Flow per Rule 5:
-//!   1. POST /uploads/presign  -> presigned PUT URL + storage key
-//!   2. PUT the JPEG bytes directly to storage (MinIO/R2)
-//!   3. POST /screenshots      -> store metadata only
+//! Captures the primary monitor while **Working** (never during a break, idle,
+//! or when not tracking). Each capture is tagged with the capture-time status.
+//! Calls are recognised on the server from the screenshot itself: a Google Meet
+//! or Slack huddle shot is tagged `meeting` there and left out of the score.
+//!
+//! Capture never touches the network: the JPEG goes to the local `outbox`
+//! (Rule 1) and the sync worker uploads it (Rule 5: presign -> PUT to storage
+//! -> metadata) whenever the server is reachable — so a VPN that blocks us
+//! delays screenshots instead of losing them.
 //!
 //! Capture runs on a blocking thread; failures are logged and retried.
 
@@ -18,8 +19,6 @@ use chrono::Utc;
 use image::{codecs::jpeg::JpegEncoder, DynamicImage, ExtendedColorType, RgbaImage};
 use xcap::Monitor;
 
-use crate::auth;
-use crate::http;
 use crate::presence::derive_status;
 use crate::timer::DesktopState;
 
@@ -67,12 +66,10 @@ fn next_delay() -> Duration {
     Duration::from_secs(pick_delay_secs(min, max, rand::random::<u64>()))
 }
 
-/// Capture is allowed while actively **working** or **in a meeting**. Meeting
-/// shots are uploaded (tagged `meeting`) so they show in the gallery, but the
-/// server never samples or analyses them. Idle, break, and not-tracking are
-/// excluded.
+/// Capture is allowed only while actively **working**. Idle, break, and
+/// not-tracking are excluded.
 pub fn should_capture(status: &str) -> bool {
-    status == "working" || status == "meeting"
+    status == "working"
 }
 
 /// Encode an RGBA frame as JPEG bytes.
@@ -213,18 +210,19 @@ pub fn repair_stale_grant_if_needed(data_dir: &std::path::Path) {
     }
 }
 
-/// Background worker: after each randomized delay, capture + upload if Working
-/// or in a Meeting.
+/// Background worker: after each randomized delay, capture + queue if Working.
 pub async fn run(state: DesktopState) {
-    let client = reqwest::Client::new();
     loop {
         tokio::time::sleep(next_delay()).await;
 
-        let status = {
+        let (status, user_id) = {
             let on_break = state.on_break.load(Ordering::Relaxed);
-            let in_meeting = state.in_meeting.load(Ordering::Relaxed);
-            let tracking = state.tracker.lock().await.is_some();
-            derive_status(on_break, in_meeting, tracking, state.idle.is_idle())
+            let session = state.tracker.lock().await;
+            let status = derive_status(on_break, session.is_some(), state.idle.is_idle());
+            (status, session.as_ref().map(|s| s.user_id))
+        };
+        let Some(user_id) = user_id else {
+            continue; // not tracking
         };
 
         if !should_capture(status) {
@@ -242,60 +240,27 @@ pub async fn run(state: DesktopState) {
                 continue;
             }
         }
-        // Tag the upload with the status that authorized the capture (Feature 2).
-        if let Err(e) = capture_and_upload(&client, status).await {
-            tracing::warn!("screenshot capture/upload failed (will retry): {e}");
+        // Tag the shot with the status that authorized the capture (Feature 2).
+        if let Err(e) = capture_and_queue(&state, user_id, status).await {
+            tracing::warn!("screenshot capture failed (will retry): {e}");
         }
     }
 }
 
-async fn capture_and_upload(client: &reqwest::Client, status: &str) -> anyhow::Result<()> {
-    if auth::stored_access().is_none() {
-        return Ok(());
-    }
-
-    // 1. Presigned URL (server picks the namespaced key). Token auto-refreshes.
-    let presign = http::post_json("/uploads/presign", serde_json::json!({}))
-        .await
-        .map_err(|e| anyhow::anyhow!(e))?;
-    let url = presign
-        .get("url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing presign url"))?
-        .to_string();
-    let storage_key = presign
-        .get("storage_key")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing storage_key"))?
-        .to_string();
-
-    // 2. Capture on a blocking thread (xcap is synchronous).
+/// Capture now and hand the JPEG to the outbox, stamped with the capture time.
+async fn capture_and_queue(
+    state: &DesktopState,
+    user_id: uuid::Uuid,
+    status: &str,
+) -> anyhow::Result<()> {
+    let taken_at = Utc::now();
+    // Capture on a blocking thread (xcap is synchronous).
     let bytes = tokio::task::spawn_blocking(|| capture_primary_jpeg(JPEG_QUALITY)).await??;
-
-    // 3. Upload bytes directly to storage (presigned — no auth header).
-    let put = client
-        .put(&url)
-        .header("content-type", "image/jpeg")
-        .body(bytes)
-        .send()
+    let id = state
+        .outbox
+        .enqueue(&state.pool, user_id, taken_at, status, bytes)
         .await?;
-    if !put.status().is_success() {
-        anyhow::bail!("storage upload returned {}", put.status());
-    }
-
-    // 4. Notify the API (metadata only) with the capture-time status.
-    http::post_json(
-        "/screenshots",
-        serde_json::json!({
-            "storage_key": storage_key,
-            "taken_at": Utc::now().to_rfc3339(),
-            "captured_status": status,
-        }),
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!(e))?;
-
-    tracing::info!("screenshot uploaded: {}", storage_key);
+    tracing::info!(%id, "screenshot captured and queued");
     Ok(())
 }
 
@@ -304,9 +269,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn captures_while_working_or_meeting() {
+    fn captures_only_while_working() {
         assert!(should_capture("working"));
-        assert!(should_capture("meeting")); // meeting shots are captured (tagged, never analysed)
+        assert!(!should_capture("meeting")); // no Meeting mode since 0.1.19
         assert!(!should_capture("idle"));
         assert!(!should_capture("break"));
         assert!(!should_capture("not_working"));

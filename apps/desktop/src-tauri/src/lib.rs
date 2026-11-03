@@ -8,11 +8,14 @@
 
 mod activity_tracker;
 mod auth;
+mod call_detect;
 mod client;
 mod db;
 mod http;
 mod idle;
+mod idle_notice;
 mod interval_repository;
+mod outbox;
 mod presence;
 mod reminder;
 mod reports;
@@ -115,12 +118,23 @@ async fn init(handle: tauri::AppHandle) -> anyhow::Result<()> {
     // Idle is now read from the OS on demand (no sampler thread).
     let idle = idle::IdleHandle::from_env();
 
-    let state = timer::DesktopState::new(pool, idle);
+    // Screenshots queued on disk while the server was unreachable. Tidy any
+    // half-written entries left by a crash before the uploader starts.
+    let outbox = outbox::ScreenshotOutbox::new(&data_dir);
+    if let Err(e) = outbox.sweep(&pool).await {
+        tracing::warn!("screenshot outbox sweep failed: {e}");
+    }
+
+    let state = timer::DesktopState::new(pool, idle, outbox, data_dir.clone());
+    // Opened by an update's restart while the timer was running: carry on.
+    timer::resume_after_update(&state).await;
     handle.manage(state.clone());
     tauri::async_runtime::spawn(timer::run_recorder(state.clone()));
     tauri::async_runtime::spawn(sync_worker::run(state.clone()));
     tauri::async_runtime::spawn(presence::run(state.clone()));
     tauri::async_runtime::spawn(presence::run_break_reminders(handle.clone(), state.clone()));
+    tauri::async_runtime::spawn(idle_notice::run(handle.clone(), state.clone()));
+    tauri::async_runtime::spawn(call_detect::run(state.idle.clone()));
     tauri::async_runtime::spawn(presence::run_not_tracking_reminders(
         handle.clone(),
         state.clone(),
@@ -152,6 +166,9 @@ pub fn run() {
         // Reminders are raised as a persistent window (see `reminder`), not as
         // OS notifications — those auto-dismiss and cannot report delivery.
         // Launch at system login so tracking resumes when the machine starts.
+        // One-click updates (see `updates`): signed packages from the downloads
+        // repo, checked against the public key in tauri.conf.json.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -198,10 +215,10 @@ pub fn run() {
             presence::break_reminders_muted,
             reminder::current_reminder,
             reminder::dismiss_reminder,
-            presence::set_meeting,
-            presence::is_in_meeting,
             presence::current_status,
             presence::heartbeat_now,
+            sync_worker::sync_status,
+            sync_worker::sync_now,
             reports::get_hours_summary,
             reports::get_daily_timeline,
             client::me_hours,
@@ -230,6 +247,7 @@ pub fn run() {
             screenshot::request_capture_permission,
             screenshot::relaunch_app,
             updates::check_for_update,
+            updates::install_update,
             updates::open_downloads_page
         ])
         .run(tauri::generate_context!())

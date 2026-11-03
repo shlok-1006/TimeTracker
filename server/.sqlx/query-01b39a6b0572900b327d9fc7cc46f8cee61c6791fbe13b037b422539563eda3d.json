@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT s.user_id FROM screenshots s\n           WHERE s.captured_status = 'working' AND s.taken_at >= $1 AND s.taken_at < $2\n             AND NOT EXISTS (\n                 SELECT 1 FROM analysis_jobs j\n                 JOIN analysis_job_samples x ON x.job_id = j.id\n                 WHERE j.user_id = s.user_id AND j.day = $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "01b39a6b0572900b327d9fc7cc46f8cee61c6791fbe13b037b422539563eda3d"
+}

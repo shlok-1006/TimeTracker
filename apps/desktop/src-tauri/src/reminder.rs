@@ -72,6 +72,16 @@ pub fn current_reminder() -> Option<Reminder> {
     PENDING.lock().ok().and_then(|g| g.clone())
 }
 
+/// Is a reminder of this `kind` on screen right now (shown and not yet
+/// dismissed)?
+pub fn showing(kind: &str) -> bool {
+    PENDING
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|r| r.kind == kind))
+        .unwrap_or(false)
+}
+
 /// "Ok" — the user acknowledged, so close the window. Closing is done here
 /// rather than from the webview so the window needs no capability of its own.
 #[tauri::command]
@@ -151,6 +161,7 @@ fn build_or_focus(app: &AppHandle) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window(WINDOW_LABEL) {
         let _ = w.unminimize();
         w.show()?;
+        float_above_other_apps(&w);
         return Ok(());
     }
 
@@ -181,7 +192,47 @@ fn build_or_focus(app: &AppHandle) -> tauri::Result<()> {
         .build()?;
 
     park_in_corner(&win);
+    float_above_other_apps(&win);
 
     tracing::info!("reminder window shown");
     Ok(())
 }
+
+/// macOS: make the reminder cover whatever the user is in, not just the desktop.
+///
+/// Tauri's `always_on_top` only gets halfway there. It brings the window up
+/// with `orderFront`, which from a background app leaves it behind the app the
+/// user is working in, and `visible_on_all_workspaces` covers ordinary desktops
+/// but not the Space a full-screen app runs in. So the reminder was only ever
+/// seen by someone looking at the desktop. Here it is raised to the status
+/// level (above app windows, below menus), allowed into full-screen Spaces,
+/// kept out of ⌘` cycling, and ordered front even though TimeTracker isn't the
+/// active app — still without taking keyboard focus (see `build_or_focus`).
+///
+/// Windows needs none of this: `always_on_top` there is `HWND_TOPMOST`, which
+/// already sits over other apps.
+#[cfg(target_os = "macos")]
+fn float_above_other_apps(win: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior as B};
+
+    let Ok(ptr) = win.ns_window() else {
+        tracing::warn!("reminder: no native window to raise");
+        return;
+    };
+    // SAFETY: Tauri returns this window's live NSWindow, and every caller runs
+    // on the main thread (`show` dispatches there), as AppKit requires.
+    let ns: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+    ns.setLevel(NSStatusWindowLevel);
+    ns.setCollectionBehavior(
+        ns.collectionBehavior()
+            | B::CanJoinAllSpaces
+            | B::FullScreenAuxiliary
+            | B::Stationary
+            | B::IgnoresCycle,
+    );
+    ns.setHidesOnDeactivate(false);
+    ns.orderFrontRegardless();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn float_above_other_apps(_win: &tauri::WebviewWindow) {}

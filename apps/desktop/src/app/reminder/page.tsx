@@ -88,6 +88,7 @@ export default function ReminderPage() {
   }, []);
 
   const isBreak = reminder?.kind === "break";
+  const isIdle = reminder?.kind === "idle";
 
   return (
     <main
@@ -103,7 +104,7 @@ export default function ReminderPage() {
               : "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
           }`}
         >
-          {isBreak ? "☕" : "⏱"}
+          {isBreak ? "☕" : isIdle ? "💤" : "⏱"}
         </span>
         <div data-tauri-drag-region className="min-w-0">
           <h1 className="text-[15px] font-semibold leading-tight text-slate-900 dark:text-slate-100">

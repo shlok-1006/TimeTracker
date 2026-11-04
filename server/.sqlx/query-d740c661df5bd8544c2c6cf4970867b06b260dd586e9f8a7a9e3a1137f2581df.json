@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO attendance_days (user_id, day, status, worked_seconds, idle_seconds, note)\n             VALUES ($1, $2, $3, $4, 0, '')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d740c661df5bd8544c2c6cf4970867b06b260dd586e9f8a7a9e3a1137f2581df"
+}

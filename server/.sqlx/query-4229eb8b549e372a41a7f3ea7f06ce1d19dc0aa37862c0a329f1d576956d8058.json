@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, summary_text, model, created_at\n           FROM analysis_reports\n           WHERE user_id = $1 AND day >= $2 AND day <= $3\n           ORDER BY day",
+  "query": "SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,\n                  worked_seconds, idle_seconds, summary_text, model, created_at\n           FROM analysis_reports\n           WHERE user_id = $1 AND day >= $2 AND day <= $3\n           ORDER BY day",
   "describe": {
     "columns": [
       {
@@ -55,16 +55,31 @@
       },
       {
         "ordinal": 10,
+        "name": "screen_alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "worked_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "idle_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
         "name": "summary_text",
         "type_info": "Text"
       },
       {
-        "ordinal": 11,
+        "ordinal": 14,
         "name": "model",
         "type_info": "Text"
       },
       {
-        "ordinal": 12,
+        "ordinal": 15,
         "name": "created_at",
         "type_info": "Timestamptz"
       }
@@ -87,10 +102,13 @@
       false,
       false,
       false,
+      true,
+      true,
+      true,
       false,
       false,
       false
     ]
   },
-  "hash": "c3e4a99e02eea08a58283a0d99444a4e16a4aefbafa3f562ec81705f995e2a50"
+  "hash": "4229eb8b549e372a41a7f3ea7f06ce1d19dc0aa37862c0a329f1d576956d8058"
 }

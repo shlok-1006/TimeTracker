@@ -128,6 +128,7 @@ async fn run_once(state: &AppState) {
     tracing::info!(day = %yesterday, "nightly analysis: done");
 
     catch_up_late_days(state).await;
+    rescore_late_activity(state).await;
 }
 
 /// How far back the nightly run looks for days whose screenshots arrived after
@@ -168,6 +169,41 @@ async fn catch_up_late_days(state: &AppState) {
                     "late screenshots: report rebuilt"
                 ),
                 Err(e) => tracing::warn!(%user_id, %day, "late screenshot catch-up failed: {e}"),
+            }
+        }
+    }
+}
+
+/// Re-score the idle of any recent report whose user's activity reached the server after the report was built (the
+/// desktop queues intervals while the server is unreachable and uploads them later): the day score depends on that
+/// day's worked and idle time, so a report built on partial activity is stale. Cheap — no analysis, no AI summary
+/// (report_service::rescore_idle). Covers yesterday too: its report is built at 07:30 IST and a late sync can land
+/// after. No low-score email, like catch_up_late_days.
+async fn rescore_late_activity(state: &AppState) {
+    let today = org_time::today();
+    let offset = i32::try_from(org_time::offset_minutes()).unwrap_or(330);
+    let stale = match analysis_reports::stale_for_late_activity(
+        &state.db,
+        today - Duration::days(LATE_SCREENSHOT_DAYS),
+        today - Duration::days(1),
+        offset,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("late activity re-score: selection failed: {e}");
+            return;
+        }
+    };
+    for report in stale {
+        match report_service::rescore_idle(&state.db, &report).await {
+            Ok(r) => tracing::info!(
+                user_id = %r.user_id, day = %r.day, from = report.alignment_score, to = r.alignment_score,
+                "late activity: day score re-scored"
+            ),
+            Err(e) => {
+                tracing::warn!(user_id = %report.user_id, day = %report.day, "late activity re-score failed: {e}")
             }
         }
     }
@@ -231,6 +267,8 @@ async fn maybe_alert_low_score(state: &AppState, report: &AnalysisReport) {
         employee_email: &employee.email,
         day: report.day,
         score: report.alignment_score,
+        screen_score: report.screen_alignment_score,
+        idle_seconds: report.idle_seconds,
         threshold,
         total_analyzed: report.total_analyzed,
         summary: &report.summary_text,

@@ -224,7 +224,12 @@ const dailyReportSchema = z.object({
   partially_count: z.number(),
   not_aligned_count: z.number(),
   inconclusive_count: z.number(),
+  /** The DAY score: screenshot alignment lowered for idle beyond 30 min inside the working day (server 0061). */
   alignment_score: z.number(),
+  /** The screenshots alone; null/absent on reports built before 0061. */
+  screen_alignment_score: z.number().nullish(),
+  worked_seconds: z.number().nullish(),
+  idle_seconds: z.number().nullish(),
   summary_text: z.string(),
   model: z.string(),
   created_at: z.string(),

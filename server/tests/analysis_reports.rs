@@ -4,13 +4,14 @@
 //! the test skips rather than fails — consistent with the rest of the suite,
 //! which never assumes a live DB.
 
-use chrono::{NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use server::db::analysis_reports::ReportInput;
-use server::db::{analysis_reports, analysis_results, screenshots, users};
+use server::db::intervals::IntervalDto;
+use server::db::{analysis_reports, analysis_results, intervals, screenshots, users};
 use server::report_service;
 use server::role::UserRole;
 use server::sampler;
@@ -36,6 +37,9 @@ fn input(user_id: Uuid, day: NaiveDate, job_id: Uuid) -> ReportInput {
         not_aligned_count: 1,
         inconclusive_count: 0,
         alignment_score: 70.0,
+        screen_alignment_score: 70.0,
+        worked_seconds: Some(8 * 3600),
+        idle_seconds: Some(600),
         summary_text: "Mostly aligned with assigned work.".into(),
         model: "claude-haiku-4-5-20251001".into(),
     }
@@ -72,6 +76,10 @@ async fn upsert_get_and_unique_per_user_day() {
     assert_eq!(created.total_analyzed, 5);
     assert_eq!(created.aligned_count, 3);
     assert!((created.alignment_score - 70.0).abs() < 1e-9);
+    // The idle-score columns (migration 0061) round-trip.
+    assert_eq!(created.screen_alignment_score, Some(70.0));
+    assert_eq!(created.worked_seconds, Some(8 * 3600));
+    assert_eq!(created.idle_seconds, Some(600));
 
     // Get round-trips the stored values.
     let got = analysis_reports::get(&pool, user.id, day)
@@ -191,6 +199,115 @@ async fn build_report_computes_score_from_results() {
         report.alignment_score
     );
     assert_eq!(report.model, "claude-haiku-4-5-20251001");
+    // No tracked time that day → nothing for idle to weigh against: the day score is the screenshot score.
+    assert_eq!(report.screen_alignment_score, Some(68.75));
+    assert_eq!(report.idle_seconds, Some(0));
+
+    users::delete(&pool, user.id).await.expect("cleanup user");
+}
+
+#[tokio::test]
+async fn build_report_lowers_the_day_score_for_idle_beyond_the_allowance() {
+    let Some(pool) = pool().await else {
+        eprintln!("skipping idle day-score test: DATABASE_URL not set");
+        return;
+    };
+    if std::env::var("TIMETRACKER_IDLE_ALLOWANCE_MINUTES").is_ok() {
+        eprintln!("skipping idle day-score test: TIMETRACKER_IDLE_ALLOWANCE_MINUTES overrides the 30-min default");
+        return;
+    }
+
+    let email = format!("idle-score-{}@timetracker.local", Uuid::new_v4());
+    let user = users::create(
+        &pool,
+        "Idle Score",
+        &email,
+        "hash",
+        UserRole::Employee,
+        None,
+    )
+    .await
+    .expect("create temp user");
+    // IST day 3 Jun 2026 = [2 Jun 18:30Z, 3 Jun 18:30Z).
+    let day = NaiveDate::from_ymd_opt(2026, 6, 3).unwrap();
+    let job = sampler::create_daily_job(&pool, user.id, day)
+        .await
+        .expect("job");
+
+    // Same verdicts as above → screenshot score 68.75.
+    for (i, verdict) in [
+        "aligned",
+        "aligned",
+        "partially_aligned",
+        "not_aligned",
+        "inconclusive",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let sid = screenshots::insert(
+            &pool,
+            user.id,
+            &format!("{}/20260603/{i}.jpg", user.id),
+            Utc::now(),
+            None,
+            "working",
+        )
+        .await
+        .expect("insert screenshot");
+        analysis_results::upsert(&pool, job.id, sid, &result_with(verdict))
+            .await
+            .expect("insert result");
+    }
+
+    // 4h active, 1h30m idle, 4h active (09:00–18:30 IST): 1h30m idle INSIDE the working day, 1h over the
+    // 30-min allowance. Then a timer left running: 3h idle after the last active minute — must not count.
+    let t0 = Utc.with_ymd_and_hms(2026, 6, 3, 3, 30, 0).unwrap();
+    let iv = |from_min: i64, to_min: i64, kind: &str| IntervalDto {
+        id: Uuid::new_v4(),
+        start_utc: t0 + Duration::minutes(from_min),
+        end_utc: t0 + Duration::minutes(to_min),
+        kind: kind.into(),
+        team_id: None,
+    };
+    intervals::insert_batch(
+        &pool,
+        user.id,
+        &[
+            iv(0, 240, "active"),
+            iv(240, 330, "idle"),
+            iv(330, 570, "active"),
+            iv(570, 750, "idle"), // after the last active minute: a timer left on
+        ],
+    )
+    .await
+    .expect("insert intervals");
+
+    let provider = server::claude_provider::ClaudeProvider::from_env();
+    let report = report_service::build_report(&pool, user.id, day, job.id, &provider)
+        .await
+        .expect("build report");
+
+    assert_eq!(report.screen_alignment_score, Some(68.75));
+    assert_eq!(report.worked_seconds, Some(8 * 3600));
+    assert_eq!(
+        report.idle_seconds,
+        Some(90 * 60),
+        "only the idle inside the working day counts"
+    );
+    let expected = 68.75 * 8.0 / 9.0;
+    assert!(
+        (report.alignment_score - expected).abs() < 1e-9,
+        "day score was {}",
+        report.alignment_score
+    );
+
+    // Re-scoring (the late-activity path) gives the same answer and keeps the screenshot score.
+    let again = report_service::rescore_idle(&pool, &report)
+        .await
+        .expect("rescore");
+    assert_eq!(again.screen_alignment_score, Some(68.75));
+    assert!((again.alignment_score - expected).abs() < 1e-9);
 
     users::delete(&pool, user.id).await.expect("cleanup user");
 }

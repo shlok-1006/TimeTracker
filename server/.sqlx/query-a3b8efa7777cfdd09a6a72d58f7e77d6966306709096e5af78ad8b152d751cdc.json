@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO intervals (id, user_id, start_utc, end_utc, idle, kind)\n             VALUES ($1, $2, $3, $4, false, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a3b8efa7777cfdd09a6a72d58f7e77d6966306709096e5af78ad8b152d751cdc"
+}

@@ -1,0 +1,117 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE analysis_reports\n              SET alignment_score = $3, screen_alignment_score = $4, worked_seconds = $5,\n                  idle_seconds = $6, created_at = now()\n            WHERE user_id = $1 AND day = $2\n        RETURNING id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,\n                  worked_seconds, idle_seconds, summary_text, model, created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "day",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 3,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "partially_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "not_aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "inconclusive_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "screen_alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "worked_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "idle_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "summary_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "model",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Float8",
+        "Float8",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6a8f56356c7e042aca008dd8ab99e4f2c498d8c5cc0e56e99bd5fd3d913a2b38"
+}

@@ -38,8 +38,8 @@ fn input(user_id: Uuid, day: NaiveDate, job_id: Uuid) -> ReportInput {
         inconclusive_count: 0,
         alignment_score: 70.0,
         screen_alignment_score: 70.0,
-        worked_seconds: 8 * 3600,
-        idle_seconds: 600,
+        worked_seconds: Some(8 * 3600),
+        idle_seconds: Some(600),
         summary_text: "Mostly aligned with assigned work.".into(),
         model: "claude-haiku-4-5-20251001".into(),
     }
@@ -260,26 +260,24 @@ async fn build_report_lowers_the_day_score_for_idle_beyond_the_allowance() {
             .expect("insert result");
     }
 
-    // 8h active (09:00–17:00 IST) then 1h30m idle (17:00–18:30 IST): 1h over the 30-min allowance.
-    let start = Utc.with_ymd_and_hms(2026, 6, 3, 3, 30, 0).unwrap();
+    // 4h active, 1h30m idle, 4h active (09:00–18:30 IST): 1h30m idle INSIDE the working day, 1h over the
+    // 30-min allowance. Then a timer left running: 3h idle after the last active minute — must not count.
+    let t0 = Utc.with_ymd_and_hms(2026, 6, 3, 3, 30, 0).unwrap();
+    let iv = |from_min: i64, to_min: i64, kind: &str| IntervalDto {
+        id: Uuid::new_v4(),
+        start_utc: t0 + Duration::minutes(from_min),
+        end_utc: t0 + Duration::minutes(to_min),
+        kind: kind.into(),
+        team_id: None,
+    };
     intervals::insert_batch(
         &pool,
         user.id,
         &[
-            IntervalDto {
-                id: Uuid::new_v4(),
-                start_utc: start,
-                end_utc: start + Duration::hours(8),
-                kind: "active".into(),
-                team_id: None,
-            },
-            IntervalDto {
-                id: Uuid::new_v4(),
-                start_utc: start + Duration::hours(8),
-                end_utc: start + Duration::minutes(8 * 60 + 90),
-                kind: "idle".into(),
-                team_id: None,
-            },
+            iv(0, 240, "active"),
+            iv(240, 330, "idle"),
+            iv(330, 570, "active"),
+            iv(570, 750, "idle"), // after the last active minute: a timer left on
         ],
     )
     .await
@@ -292,13 +290,24 @@ async fn build_report_lowers_the_day_score_for_idle_beyond_the_allowance() {
 
     assert_eq!(report.screen_alignment_score, Some(68.75));
     assert_eq!(report.worked_seconds, Some(8 * 3600));
-    assert_eq!(report.idle_seconds, Some(90 * 60));
+    assert_eq!(
+        report.idle_seconds,
+        Some(90 * 60),
+        "only the idle inside the working day counts"
+    );
     let expected = 68.75 * 8.0 / 9.0;
     assert!(
         (report.alignment_score - expected).abs() < 1e-9,
         "day score was {}",
         report.alignment_score
     );
+
+    // Re-scoring (the late-activity path) gives the same answer and keeps the screenshot score.
+    let again = report_service::rescore_idle(&pool, &report)
+        .await
+        .expect("rescore");
+    assert_eq!(again.screen_alignment_score, Some(68.75));
+    assert!((again.alignment_score - expected).abs() < 1e-9);
 
     users::delete(&pool, user.id).await.expect("cleanup user");
 }

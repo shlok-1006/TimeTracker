@@ -14,9 +14,11 @@
 //! sub-task, research, or supporting activity — and that is real work, so it
 //! should score close to fully aligned rather than halfway to unproductive.
 //!
-//! IDLE (migration 0061, HR 4 Nov 2026): the day score also accounts for idle time. The first
-//! `idle_allowance_seconds()` (30 min) of idle are free; beyond that the screenshot alignment is scaled by
-//! worked / (worked + extra idle) — see `idle_adjusted`. The stored `alignment_score` is that day score (the Daily
+//! IDLE (migration 0061, HR 4 Nov 2026): the day score also accounts for idle time. Only idle INSIDE the working
+//! span counts — between the day's first and last active/meeting minute — so a timer left running after someone
+//! leaves (the desktop has no idle auto-stop) or a second machine idling overnight doesn't sink the day. Of that,
+//! the first `idle_allowance_seconds()` (30 min) are free; beyond it the screenshot alignment is scaled by
+//! worked / (worked + extra idle) — see `idle_adjusted` and `day_idle`. The stored `alignment_score` is that day score (the Daily
 //! Report, the low-score alert and the monthly average all read it); `screen_alignment_score` keeps the
 //! screenshot-only figure beside it.
 
@@ -49,7 +51,7 @@ pub fn idle_allowance_seconds() -> i64 {
         .ok()
         .and_then(|s| s.trim().parse::<i64>().ok())
         .filter(|m| *m >= 0)
-        .map(|m| m * 60)
+        .map(|m| m.min(24 * 60) * 60) // a day at most — and no overflow from a silly value
         .unwrap_or(DEFAULT_IDLE_ALLOWANCE_SECONDS)
 }
 
@@ -170,17 +172,75 @@ fn summarize(a: &ReportAggregate) -> String {
 }
 
 /// The deterministic summary, plus how much idle took off when it did.
-fn summarize_with_idle(a: &ReportAggregate, day_score: f64, idle_seconds: i64) -> String {
+fn summarize_with_idle(
+    a: &ReportAggregate,
+    day_score: f64,
+    idle_seconds: i64,
+    allowance_seconds: i64,
+) -> String {
     let base = summarize(a);
     if a.total_analyzed == 0 || day_score >= a.alignment_score {
         return base;
     }
     format!(
-        "{base} Day score {:.0}% after {}h {:02}m idle.",
+        "{base} Day score {:.0}% after {} idle ({} over the {} allowance).",
         day_score,
-        idle_seconds / 3600,
-        (idle_seconds % 3600) / 60
+        hm(idle_seconds),
+        hm(idle_seconds - allowance_seconds),
+        hm(allowance_seconds)
     )
+}
+
+/// "1h 05m".
+fn hm(secs: i64) -> String {
+    let secs = secs.max(0);
+    format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
+}
+
+/// Worked seconds (active + meeting) for the org/IST `day`, and the idle that counts: idle INSIDE the working span —
+/// from the first to the last active/meeting minute. Attendance's own rule and multi-device de-overlap
+/// (`attendance::day_activity`, interval_seconds). Idle before anyone started or after they stopped (a timer left
+/// on, a second machine idling) is not "idle at work", so it doesn't lower the score. No work → (0, 0).
+pub async fn day_idle(
+    pool: &PgPool,
+    user_id: Uuid,
+    day: NaiveDate,
+) -> Result<(i64, i64), AppError> {
+    let (day_start, day_end) = org_time::day_bounds_utc(day);
+    let whole = attendance::day_activity(pool, user_id, day_start, day_end).await?;
+    let (Some(first_in), Some(last_out)) = (whole.first_in_utc, whole.last_out_utc) else {
+        return Ok((whole.worked_seconds, 0));
+    };
+    if last_out <= first_in {
+        return Ok((whole.worked_seconds, 0));
+    }
+    let span = attendance::day_activity(pool, user_id, first_in, last_out).await?;
+    Ok((whole.worked_seconds, span.idle_seconds))
+}
+
+/// Re-score an existing report's idle without re-running the analysis or the AI summary — for days whose activity
+/// reached the server after the report was built (a late or VPN sync). Keeps the screenshot score and summary;
+/// recomputes worked, in-span idle and the day score, and stamps `created_at` so the same late data isn't picked up
+/// again. Returns the refreshed report.
+pub async fn rescore_idle(
+    pool: &PgPool,
+    report: &AnalysisReport,
+) -> Result<AnalysisReport, AppError> {
+    let screen = report
+        .screen_alignment_score
+        .unwrap_or(report.alignment_score);
+    let (worked, idle) = day_idle(pool, report.user_id, report.day).await?;
+    let day_score = idle_adjusted(screen, worked, idle, idle_allowance_seconds());
+    analysis_reports::set_idle_score(
+        pool,
+        report.user_id,
+        report.day,
+        day_score,
+        screen,
+        clamp_i32(worked),
+        clamp_i32(idle),
+    )
+    .await
 }
 
 /// Seconds as the INTEGER column stores them (a day never comes near i32::MAX; saturate rather than wrap).
@@ -212,18 +272,18 @@ pub async fn build_report(
     // Prefer an AI-generated summary from the rationales; on any failure (model
     // not configured, transport error, repeated malformed output) fall back to
     // the deterministic count line so a report is always produced.
-    // Idle for the day (attendance's own rule: worked = active + meeting, idle apart, break neither), over the same
-    // org/IST day the report is filed under. A failed read must not lose the report: score on screenshots alone.
-    let (day_start, day_end) = org_time::day_bounds_utc(day);
-    let (worked, idle) = match attendance::day_activity(pool, user_id, day_start, day_end).await {
-        Ok(a) => (a.worked_seconds, a.idle_seconds),
+    // Worked and in-span idle for the day. A failed read must not lose the report: score on screenshots alone, and
+    // store the worked/idle columns as NULL ("unknown"), not as a real zero.
+    let activity = match day_idle(pool, user_id, day).await {
+        Ok(a) => Some(a),
         Err(e) => {
             tracing::warn!(
                 "day activity unavailable for {user_id} on {day}, scoring screenshots only: {e}"
             );
-            (0, 0)
+            None
         }
     };
+    let (worked, idle) = activity.unwrap_or((0, 0));
     let day_score = idle_adjusted(agg.alignment_score, worked, idle, idle_allowance_seconds());
 
     let rationales: Vec<String> = results.iter().map(|r| r.rationale.clone()).collect();
@@ -231,7 +291,7 @@ pub async fn build_report(
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("AI summary unavailable, using deterministic summary: {e}");
-            summarize_with_idle(&agg, day_score, idle)
+            summarize_with_idle(&agg, day_score, idle, idle_allowance_seconds())
         }
     };
 
@@ -246,8 +306,8 @@ pub async fn build_report(
         inconclusive_count: agg.inconclusive_count,
         alignment_score: day_score,
         screen_alignment_score: agg.alignment_score,
-        worked_seconds: clamp_i32(worked),
-        idle_seconds: clamp_i32(idle),
+        worked_seconds: activity.map(|(w, _)| clamp_i32(w)),
+        idle_seconds: activity.map(|(_, i)| clamp_i32(i)),
         summary_text,
         model,
     };
@@ -456,8 +516,11 @@ mod tests {
     #[test]
     fn deterministic_summary_mentions_idle_only_when_it_lowered_the_score() {
         let a = aggregate(&v(&["aligned", "not_aligned"]));
-        assert!(!summarize_with_idle(&a, a.alignment_score, 10 * 60).contains("idle"));
-        let s = summarize_with_idle(&a, 40.0, 2 * H + 5 * 60);
-        assert!(s.contains("Day score 40% after 2h 05m idle."), "{s}");
+        assert!(!summarize_with_idle(&a, a.alignment_score, 10 * 60, 30 * 60).contains("idle"));
+        let s = summarize_with_idle(&a, 40.0, 2 * H + 5 * 60, 30 * 60);
+        assert!(
+            s.contains("Day score 40% after 2h 05m idle (1h 35m over the 0h 30m allowance)."),
+            "{s}"
+        );
     }
 }

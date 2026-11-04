@@ -108,8 +108,11 @@ export default function DayPage() {
                 <span className={`text-2xl font-bold tabular-nums ${scoreColor(rep.alignment_score)}`}>
                   {Math.round(rep.alignment_score)}%
                 </span>
+                {/* The day score counts idle beyond 30 min inside the working day (server 0061). */}
                 <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  aligned
+                  {rep.screen_alignment_score != null && Math.round(rep.screen_alignment_score) > Math.round(rep.alignment_score)
+                    ? `day score · screens ${Math.round(rep.screen_alignment_score!)}%`
+                    : "aligned"}
                 </span>
               </div>
             </div>

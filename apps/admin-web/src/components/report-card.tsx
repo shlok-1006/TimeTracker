@@ -61,7 +61,13 @@ export function ReportCard({ report }: { report: DailyReport | null }) {
           <span className={`text-3xl font-bold tabular-nums ${scoreColor(report.alignment_score)}`}>
             {Math.round(report.alignment_score)}%
           </span>
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">aligned</span>
+          {/* The day score counts idle beyond 30 min inside the working day (server 0061): say what the screenshots
+              alone scored when idle lowered it; older reports read "aligned" as before. */}
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {report.screen_alignment_score != null && Math.round(report.screen_alignment_score) > Math.round(report.alignment_score)
+              ? `day score · screens ${Math.round(report.screen_alignment_score!)}%`
+              : "aligned"}
+          </span>
         </div>
       </div>
 

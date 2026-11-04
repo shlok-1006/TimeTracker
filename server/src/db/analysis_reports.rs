@@ -48,8 +48,9 @@ pub struct ReportInput {
     pub inconclusive_count: i32,
     pub alignment_score: f64,
     pub screen_alignment_score: f64,
-    pub worked_seconds: i32,
-    pub idle_seconds: i32,
+    /// None = the day's activity couldn't be read (stored NULL, not a real zero).
+    pub worked_seconds: Option<i32>,
+    pub idle_seconds: Option<i32>,
     pub summary_text: String,
     pub model: String,
 }
@@ -120,6 +121,112 @@ pub async fn upsert(pool: &PgPool, r: &ReportInput) -> Result<AnalysisReport, Ap
         row.model,
         row.created_at,
     ))
+}
+
+/// Update only the idle-score columns of an existing report (report_service::rescore_idle), stamping `created_at`
+/// so data that arrived before now isn't treated as late again.
+pub async fn set_idle_score(
+    pool: &PgPool,
+    user_id: Uuid,
+    day: NaiveDate,
+    alignment_score: f64,
+    screen_alignment_score: f64,
+    worked_seconds: i32,
+    idle_seconds: i32,
+) -> Result<AnalysisReport, AppError> {
+    let r = sqlx::query!(
+        r#"UPDATE analysis_reports
+              SET alignment_score = $3, screen_alignment_score = $4, worked_seconds = $5,
+                  idle_seconds = $6, created_at = now()
+            WHERE user_id = $1 AND day = $2
+        RETURNING id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,
+                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,
+                  worked_seconds, idle_seconds, summary_text, model, created_at"#,
+        user_id,
+        day,
+        alignment_score,
+        screen_alignment_score,
+        worked_seconds,
+        idle_seconds
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(map_row(
+        r.id,
+        r.user_id,
+        r.day,
+        r.job_id,
+        r.total_analyzed,
+        r.aligned_count,
+        r.partially_count,
+        r.not_aligned_count,
+        r.inconclusive_count,
+        r.alignment_score,
+        IdleParts {
+            screen_alignment_score: r.screen_alignment_score,
+            worked_seconds: r.worked_seconds,
+            idle_seconds: r.idle_seconds,
+        },
+        r.summary_text,
+        r.model,
+        r.created_at,
+    ))
+}
+
+/// Reports in `[from, to]` (with real verdicts) whose user has activity that reached the server AFTER the report was
+/// built and falls inside that report's org day — they were scored on incomplete idle (a late / VPN sync).
+/// `offset_minutes` is the org timezone offset (org_time::offset_minutes).
+pub async fn stale_for_late_activity(
+    pool: &PgPool,
+    from: NaiveDate,
+    to: NaiveDate,
+    offset_minutes: i32,
+) -> Result<Vec<AnalysisReport>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT r.id, r.user_id, r.day, r.job_id, r.total_analyzed, r.aligned_count,
+                  r.partially_count, r.not_aligned_count, r.inconclusive_count, r.alignment_score,
+                  r.screen_alignment_score, r.worked_seconds, r.idle_seconds, r.summary_text,
+                  r.model, r.created_at
+           FROM analysis_reports r
+           WHERE r.day >= $1 AND r.day <= $2
+             AND r.aligned_count + r.partially_count + r.not_aligned_count > 0
+             AND EXISTS (
+               SELECT 1 FROM intervals i
+                WHERE i.user_id = r.user_id
+                  AND i.received_at > r.created_at
+                  AND i.end_utc > ((r.day::timestamp - make_interval(mins => $3)) AT TIME ZONE 'UTC')
+                  AND i.start_utc < ((r.day::timestamp + interval '1 day' - make_interval(mins => $3)) AT TIME ZONE 'UTC'))"#,
+        from,
+        to,
+        offset_minutes
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            map_row(
+                r.id,
+                r.user_id,
+                r.day,
+                r.job_id,
+                r.total_analyzed,
+                r.aligned_count,
+                r.partially_count,
+                r.not_aligned_count,
+                r.inconclusive_count,
+                r.alignment_score,
+                IdleParts {
+                    screen_alignment_score: r.screen_alignment_score,
+                    worked_seconds: r.worked_seconds,
+                    idle_seconds: r.idle_seconds,
+                },
+                r.summary_text,
+                r.model,
+                r.created_at,
+            )
+        })
+        .collect())
 }
 
 /// The report for a specific `(user, day)`, if one exists.

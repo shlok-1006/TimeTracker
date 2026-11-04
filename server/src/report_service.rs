@@ -13,14 +13,21 @@
 //! `partially_aligned` for genuine work it cannot pin to a specific ticket — a
 //! sub-task, research, or supporting activity — and that is real work, so it
 //! should score close to fully aligned rather than halfway to unproductive.
+//!
+//! IDLE (migration 0061, HR 4 Nov 2026): the day score also accounts for idle time. The first
+//! `idle_allowance_seconds()` (30 min) of idle are free; beyond that the screenshot alignment is scaled by
+//! worked / (worked + extra idle) — see `idle_adjusted`. The stored `alignment_score` is that day score (the Daily
+//! Report, the low-score alert and the monthly average all read it); `screen_alignment_score` keeps the
+//! screenshot-only figure beside it.
 
 use chrono::NaiveDate;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::db::analysis_reports::{self, AnalysisReport, ReportInput};
-use crate::db::analysis_results;
+use crate::db::{analysis_results, attendance};
 use crate::error::AppError;
+use crate::org_time;
 use crate::summary_generator::{self, SummaryProvider};
 
 /// Alignment score (0–100) below which HR is alerted about a daily report.
@@ -31,6 +38,42 @@ pub const DEFAULT_LOW_SCORE_THRESHOLD: f64 = 35.0;
 /// could not tie to a specific ticket (a sub-task or supporting activity).
 /// Set generously in the employee's favour: much closer to aligned than to zero.
 pub const PARTIAL_WEIGHT: f64 = 0.75;
+
+/// Idle a day may have before it lowers the score — the same 30 minutes the HRMS Daily Report's idle list uses.
+/// Overridable via `TIMETRACKER_IDLE_ALLOWANCE_MINUTES`.
+pub const DEFAULT_IDLE_ALLOWANCE_SECONDS: i64 = 30 * 60;
+
+/// The configured idle allowance in seconds (≥ 0), env-overridable in whole minutes.
+pub fn idle_allowance_seconds() -> i64 {
+    std::env::var("TIMETRACKER_IDLE_ALLOWANCE_MINUTES")
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|m| *m >= 0)
+        .map(|m| m * 60)
+        .unwrap_or(DEFAULT_IDLE_ALLOWANCE_SECONDS)
+}
+
+/// The day score: the screenshot alignment scaled down by idle beyond the allowance,
+///
+///     screen × worked / (worked + max(0, idle − allowance))
+///
+/// e.g. 80% with 8h worked and 1h30m idle (1h over) → 80 × 8 / 9 = 71.1. Idle inside the allowance changes
+/// nothing. With no worked time there is nothing to weigh idle against, so the screenshot score stands (a day is
+/// only analysed when there were working screenshots, so this is the "attendance not rolled up yet" case).
+/// Never above the screenshot score, never below 0.
+pub fn idle_adjusted(
+    screen: f64,
+    worked_seconds: i64,
+    idle_seconds: i64,
+    allowance_seconds: i64,
+) -> f64 {
+    let extra = (idle_seconds - allowance_seconds).max(0);
+    if worked_seconds <= 0 || extra == 0 {
+        return screen;
+    }
+    let worked = worked_seconds as f64;
+    (screen * worked / (worked + extra as f64)).clamp(0.0, screen.max(0.0))
+}
 
 /// The configured low-score alert threshold (0–100), env-overridable.
 pub fn low_score_threshold() -> f64 {
@@ -126,6 +169,25 @@ fn summarize(a: &ReportAggregate) -> String {
     )
 }
 
+/// The deterministic summary, plus how much idle took off when it did.
+fn summarize_with_idle(a: &ReportAggregate, day_score: f64, idle_seconds: i64) -> String {
+    let base = summarize(a);
+    if a.total_analyzed == 0 || day_score >= a.alignment_score {
+        return base;
+    }
+    format!(
+        "{base} Day score {:.0}% after {}h {:02}m idle.",
+        day_score,
+        idle_seconds / 3600,
+        (idle_seconds % 3600) / 60
+    )
+}
+
+/// Seconds as the INTEGER column stores them (a day never comes near i32::MAX; saturate rather than wrap).
+fn clamp_i32(v: i64) -> i32 {
+    i32::try_from(v.max(0)).unwrap_or(i32::MAX)
+}
+
 /// Build (or refresh) the daily report for a job from its stored verdicts and
 /// persist it. Idempotent via `analysis_reports.upsert` (UNIQUE(user, day)).
 pub async fn build_report(
@@ -150,12 +212,26 @@ pub async fn build_report(
     // Prefer an AI-generated summary from the rationales; on any failure (model
     // not configured, transport error, repeated malformed output) fall back to
     // the deterministic count line so a report is always produced.
+    // Idle for the day (attendance's own rule: worked = active + meeting, idle apart, break neither), over the same
+    // org/IST day the report is filed under. A failed read must not lose the report: score on screenshots alone.
+    let (day_start, day_end) = org_time::day_bounds_utc(day);
+    let (worked, idle) = match attendance::day_activity(pool, user_id, day_start, day_end).await {
+        Ok(a) => (a.worked_seconds, a.idle_seconds),
+        Err(e) => {
+            tracing::warn!(
+                "day activity unavailable for {user_id} on {day}, scoring screenshots only: {e}"
+            );
+            (0, 0)
+        }
+    };
+    let day_score = idle_adjusted(agg.alignment_score, worked, idle, idle_allowance_seconds());
+
     let rationales: Vec<String> = results.iter().map(|r| r.rationale.clone()).collect();
     let summary_text = match summary_generator::generate_summary(provider, &rationales).await {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("AI summary unavailable, using deterministic summary: {e}");
-            summarize(&agg)
+            summarize_with_idle(&agg, day_score, idle)
         }
     };
 
@@ -168,7 +244,10 @@ pub async fn build_report(
         partially_count: agg.partially_count,
         not_aligned_count: agg.not_aligned_count,
         inconclusive_count: agg.inconclusive_count,
-        alignment_score: agg.alignment_score,
+        alignment_score: day_score,
+        screen_alignment_score: agg.alignment_score,
+        worked_seconds: clamp_i32(worked),
+        idle_seconds: clamp_i32(idle),
         summary_text,
         model,
     };
@@ -289,6 +368,9 @@ mod tests {
             not_aligned_count: a.not_aligned_count,
             inconclusive_count: a.inconclusive_count,
             alignment_score: a.alignment_score,
+            screen_alignment_score: Some(a.alignment_score),
+            worked_seconds: None,
+            idle_seconds: None,
             summary_text: String::new(),
             model: String::new(),
             created_at: chrono::Utc::now(),
@@ -333,5 +415,49 @@ mod tests {
             &report_from(&["not_aligned", "not_aligned"]),
             35.0
         ));
+    }
+
+    const H: i64 = 3600;
+
+    #[test]
+    fn idle_inside_the_allowance_changes_nothing() {
+        assert_eq!(idle_adjusted(80.0, 8 * H, 20 * 60, 30 * 60), 80.0);
+        assert_eq!(idle_adjusted(80.0, 8 * H, 30 * 60, 30 * 60), 80.0);
+    }
+
+    #[test]
+    fn idle_beyond_the_allowance_scales_the_score() {
+        // 1h30m idle → 1h over: 80 × 8 / 9
+        let s = idle_adjusted(80.0, 8 * H, 90 * 60, 30 * 60);
+        assert!((s - 80.0 * 8.0 / 9.0).abs() < 1e-9, "{s}");
+        // 3h idle → 2h30 over: 80 × 8 / 10.5
+        let s = idle_adjusted(80.0, 8 * H, 3 * H, 30 * 60);
+        assert!((s - 80.0 * 8.0 / 10.5).abs() < 1e-9, "{s}");
+    }
+
+    #[test]
+    fn idle_adjustment_edges() {
+        // No worked time to weigh idle against → screenshot score stands.
+        assert_eq!(idle_adjusted(70.0, 0, 5 * H, 30 * 60), 70.0);
+        // A zero day stays zero; never above the screenshot score, never negative.
+        assert_eq!(idle_adjusted(0.0, 8 * H, 5 * H, 30 * 60), 0.0);
+        let s = idle_adjusted(100.0, 1, 10 * H, 0);
+        assert!((0.0..=100.0).contains(&s));
+        // No allowance: every idle second counts.
+        let s = idle_adjusted(80.0, 8 * H, 2 * H, 0);
+        assert!((s - 64.0).abs() < 1e-9, "{s}");
+    }
+
+    #[test]
+    fn idle_allowance_defaults_to_thirty_minutes() {
+        assert_eq!(DEFAULT_IDLE_ALLOWANCE_SECONDS, 1800);
+    }
+
+    #[test]
+    fn deterministic_summary_mentions_idle_only_when_it_lowered_the_score() {
+        let a = aggregate(&v(&["aligned", "not_aligned"]));
+        assert!(!summarize_with_idle(&a, a.alignment_score, 10 * 60).contains("idle"));
+        let s = summarize_with_idle(&a, 40.0, 2 * H + 5 * 60);
+        assert!(s.contains("Day score 40% after 2h 05m idle."), "{s}");
     }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, summary_text, model, created_at\n           FROM analysis_reports WHERE user_id = $1 ORDER BY day DESC",
+  "query": "SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,\n                  worked_seconds, idle_seconds, summary_text, model, created_at\n           FROM analysis_reports WHERE user_id = $1 AND day = $2",
   "describe": {
     "columns": [
       {
@@ -55,23 +55,39 @@
       },
       {
         "ordinal": 10,
+        "name": "screen_alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "worked_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "idle_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
         "name": "summary_text",
         "type_info": "Text"
       },
       {
-        "ordinal": 11,
+        "ordinal": 14,
         "name": "model",
         "type_info": "Text"
       },
       {
-        "ordinal": 12,
+        "ordinal": 15,
         "name": "created_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Date"
       ]
     },
     "nullable": [
@@ -85,10 +101,13 @@
       false,
       false,
       false,
+      true,
+      true,
+      true,
       false,
       false,
       false
     ]
   },
-  "hash": "c59c7a4b0ed4982c9b5b3d88cd42a75843491b3fe74738d6340eb38193efb246"
+  "hash": "eb01b3fc52b60e9c830712a3bfc184846315a48047f5f510cab62882c5e95238"
 }

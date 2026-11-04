@@ -1,27 +1,27 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, summary_text, model, created_at\n           FROM analysis_reports\n           WHERE user_id = $1 AND day >= $2 AND day <= $3\n           ORDER BY day",
+  "query": "SELECT r.user_id, u.name AS employee_name, u.email AS employee_email, r.day,\n                  r.total_analyzed, r.aligned_count, r.partially_count, r.not_aligned_count,\n                  r.inconclusive_count, r.alignment_score, r.screen_alignment_score, r.worked_seconds,\n                  r.idle_seconds, r.summary_text, r.model, r.created_at\n           FROM analysis_reports r\n           JOIN users u ON u.id = r.user_id\n           WHERE r.day = $1\n             AND ($2::uuid IS NULL\n                  OR EXISTS (SELECT 1 FROM user_managers um\n                             WHERE um.user_id = u.id AND um.manager_id = $2))\n           ORDER BY u.name",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
-        "type_info": "Uuid"
-      },
-      {
-        "ordinal": 1,
         "name": "user_id",
         "type_info": "Uuid"
       },
       {
+        "ordinal": 1,
+        "name": "employee_name",
+        "type_info": "Text"
+      },
+      {
         "ordinal": 2,
-        "name": "day",
-        "type_info": "Date"
+        "name": "employee_email",
+        "type_info": "Text"
       },
       {
         "ordinal": 3,
-        "name": "job_id",
-        "type_info": "Uuid"
+        "name": "day",
+        "type_info": "Date"
       },
       {
         "ordinal": 4,
@@ -55,25 +55,39 @@
       },
       {
         "ordinal": 10,
+        "name": "screen_alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "worked_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "idle_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
         "name": "summary_text",
         "type_info": "Text"
       },
       {
-        "ordinal": 11,
+        "ordinal": 14,
         "name": "model",
         "type_info": "Text"
       },
       {
-        "ordinal": 12,
+        "ordinal": 15,
         "name": "created_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
         "Date",
-        "Date"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -87,10 +101,13 @@
       false,
       false,
       false,
+      true,
+      true,
+      true,
       false,
       false,
       false
     ]
   },
-  "hash": "c3e4a99e02eea08a58283a0d99444a4e16a4aefbafa3f562ec81705f995e2a50"
+  "hash": "ecd57f28a77e4b6a76df4d935dea98e0aebf5abb6ce1f1cdc2c9d511485e87b8"
 }

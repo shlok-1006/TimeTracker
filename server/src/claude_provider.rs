@@ -21,6 +21,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::time::Duration;
+use tokio::sync::Semaphore;
 
 const DEFAULT_ANTHROPIC_MODEL: &str = "claude-haiku-4-5-20251001";
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -37,6 +38,12 @@ const DEFAULT_BRIDGE_MODEL: &str = "claude-haiku-4-5";
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(120);
 /// 429 = "bridge busy" (max 3 concurrent) — back off and retry.
 const BRIDGE_BUSY_RETRIES: u32 = 3;
+/// Bridge calls this server keeps in flight AT MOST, across every caller (the
+/// nightly scheduler, HR-triggered day and range analyses, report summaries).
+/// The bridge runs 3 calls at once for its whole VM, shared with the HR bot,
+/// recruitment and Knowledge, and its owner asks each system for at most 2.
+/// A per-run limit isn't enough: an HR click during the nightly run would double it.
+const BRIDGE_MAX_IN_FLIGHT: usize = 2;
 const BRIDGE_BUSY_BACKOFF: Duration = Duration::from_secs(5);
 
 /// Generous enough for a short JSON verdict or summary paragraph, bounded to
@@ -69,6 +76,8 @@ pub struct ClaudeProvider {
     base_url: Option<String>,
     model: String,
     client: reqwest::Client,
+    /// Bridge only: process-wide cap on in-flight calls (see BRIDGE_MAX_IN_FLIGHT).
+    bridge_slots: Semaphore,
 }
 
 fn env_nonempty(var: &str) -> Option<String> {
@@ -89,16 +98,11 @@ impl ClaudeProvider {
             env_nonempty("VISION_BRIDGE_URL"),
             env_nonempty("VISION_BRIDGE_TOKEN"),
         ) {
-            return Self {
-                backend: Backend::Bridge,
-                api_key: Some(token),
-                base_url: Some(url.trim_end_matches('/').to_string()),
-                model: env_model("VISION_BRIDGE_MODEL", DEFAULT_BRIDGE_MODEL),
-                client: reqwest::Client::builder()
-                    .timeout(BRIDGE_TIMEOUT)
-                    .build()
-                    .unwrap_or_else(|_| reqwest::Client::new()),
-            };
+            return Self::bridge(
+                &url,
+                token,
+                env_model("VISION_BRIDGE_MODEL", DEFAULT_BRIDGE_MODEL),
+            );
         }
         if let Some(key) = env_nonempty("XAI_API_KEY") {
             return Self {
@@ -107,6 +111,7 @@ impl ClaudeProvider {
                 base_url: None,
                 model: env_model("XAI_MODEL", DEFAULT_XAI_MODEL),
                 client: reqwest::Client::new(),
+                bridge_slots: Semaphore::new(BRIDGE_MAX_IN_FLIGHT),
             };
         }
         Self {
@@ -115,6 +120,22 @@ impl ClaudeProvider {
             base_url: None,
             model: env_model("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL),
             client: reqwest::Client::new(),
+            bridge_slots: Semaphore::new(BRIDGE_MAX_IN_FLIGHT),
+        }
+    }
+
+    /// A provider for the RUH bridge at `url` (no env lookup).
+    pub fn bridge(url: &str, token: String, model: String) -> Self {
+        Self {
+            backend: Backend::Bridge,
+            api_key: Some(token),
+            base_url: Some(url.trim_end_matches('/').to_string()),
+            model,
+            client: reqwest::Client::builder()
+                .timeout(BRIDGE_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+            bridge_slots: Semaphore::new(BRIDGE_MAX_IN_FLIGHT),
         }
     }
 
@@ -194,6 +215,21 @@ impl ClaudeProvider {
     /// the other backends have a single fixed URL and ignore it.
     async fn post(&self, body: Value, bridge_path: &str) -> Result<String, ClaudeError> {
         let key = self.api_key.as_ref().ok_or(ClaudeError::NotConfigured)?;
+
+        // Bridge: wait for one of this server's slots and hold it for the whole
+        // call, retries included, so we never have more than BRIDGE_MAX_IN_FLIGHT
+        // calls on the shared bridge. The semaphore is never closed, so acquire
+        // can't fail; map it anyway rather than unwrap.
+        let _slot = if self.backend == Backend::Bridge {
+            Some(
+                self.bridge_slots
+                    .acquire()
+                    .await
+                    .map_err(|e| ClaudeError::Http(e.to_string()))?,
+            )
+        } else {
+            None
+        };
 
         // 429 from the bridge means "busy" (max 3 concurrent) — back off and retry.
         let mut attempt = 0u32;
@@ -296,6 +332,52 @@ fn extract_text_openai(v: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// However many callers fire at once (an HR-triggered run overlapping the
+    /// nightly one), the shared bridge never sees more than BRIDGE_MAX_IN_FLIGHT
+    /// calls from this server.
+    #[tokio::test]
+    async fn bridge_calls_are_capped_across_callers() {
+        let now = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let (n, p) = (now.clone(), peak.clone());
+        let app = axum::Router::new().route(
+            "/v1/prompt",
+            axum::routing::post(move || {
+                let (n, p) = (n.clone(), p.clone());
+                async move {
+                    let cur = n.fetch_add(1, Ordering::SeqCst) + 1;
+                    p.fetch_max(cur, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    n.fetch_sub(1, Ordering::SeqCst);
+                    axum::Json(json!({ "text": "{}", "model": "m" }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let provider = Arc::new(ClaudeProvider::bridge(
+            &format!("http://{addr}/"),
+            "t".into(),
+            "m".into(),
+        ));
+        let calls: Vec<_> = (0..6)
+            .map(|_| {
+                let pr = provider.clone();
+                tokio::spawn(async move { pr.generate_text_json("hi").await })
+            })
+            .collect();
+        for c in calls {
+            assert_eq!(c.await.expect("join").expect("call"), "{}");
+        }
+        assert_eq!(peak.load(Ordering::SeqCst), BRIDGE_MAX_IN_FLIGHT);
+    }
 
     #[test]
     fn extracts_anthropic_text_blocks() {

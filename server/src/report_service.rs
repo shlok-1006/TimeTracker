@@ -57,7 +57,9 @@ pub fn idle_allowance_seconds() -> i64 {
 
 /// The day score: the screenshot alignment scaled down by idle beyond the allowance,
 ///
-///     screen × worked / (worked + max(0, idle − allowance))
+/// ```text
+/// screen × worked / (worked + max(0, idle − allowance))
+/// ```
 ///
 /// e.g. 80% with 8h worked and 1h30m idle (1h over) → 80 × 8 / 9 = 71.1. Idle inside the allowance changes
 /// nothing. With no worked time there is nothing to weigh idle against, so the screenshot score stands (a day is

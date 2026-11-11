@@ -1,0 +1,114 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id, r.user_id, r.day, r.job_id, r.total_analyzed, r.aligned_count,\n                  r.partially_count, r.not_aligned_count, r.inconclusive_count, r.alignment_score,\n                  r.screen_alignment_score, r.worked_seconds, r.idle_seconds, r.summary_text,\n                  r.model, r.created_at\n           FROM analysis_reports r\n           WHERE r.day >= $1 AND r.day <= $2\n             AND r.aligned_count + r.partially_count + r.not_aligned_count > 0\n             AND EXISTS (\n               SELECT 1 FROM intervals i\n                WHERE i.user_id = r.user_id\n                  AND i.received_at > r.created_at\n                  AND i.end_utc > ((r.day::timestamp - make_interval(mins => $3)) AT TIME ZONE 'UTC')\n                  AND i.start_utc < ((r.day::timestamp + interval '1 day' - make_interval(mins => $3)) AT TIME ZONE 'UTC'))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "day",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 3,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "partially_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "not_aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "inconclusive_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "screen_alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "worked_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "idle_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "summary_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "model",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Date",
+        "Date",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0dc1edabe1b508e49e7ee11c978947bd63ff2c63e7a800cbe54b23272d74c7bf"
+}

@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO analysis_reports\n            (user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n             not_aligned_count, inconclusive_count, alignment_score, summary_text, model,\n             screen_alignment_score, worked_seconds, idle_seconds)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)\n        ON CONFLICT (user_id, day) DO UPDATE SET\n            job_id             = EXCLUDED.job_id,\n            total_analyzed     = EXCLUDED.total_analyzed,\n            aligned_count      = EXCLUDED.aligned_count,\n            partially_count    = EXCLUDED.partially_count,\n            not_aligned_count  = EXCLUDED.not_aligned_count,\n            inconclusive_count = EXCLUDED.inconclusive_count,\n            alignment_score    = EXCLUDED.alignment_score,\n            screen_alignment_score = EXCLUDED.screen_alignment_score,\n            worked_seconds     = EXCLUDED.worked_seconds,\n            idle_seconds       = EXCLUDED.idle_seconds,\n            summary_text       = EXCLUDED.summary_text,\n            model              = EXCLUDED.model,\n            created_at         = now()\n        RETURNING id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,\n                  worked_seconds, idle_seconds, summary_text, model, created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "day",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 3,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "partially_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "not_aligned_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "inconclusive_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "screen_alignment_score",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "worked_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "idle_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "summary_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "model",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Float8",
+        "Text",
+        "Text",
+        "Float8",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a810782b5075061a1fe8ad17fc3f065dda44eb4c638715dd9cbdb2d593f9e662"
+}

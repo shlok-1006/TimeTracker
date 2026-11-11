@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO analysis_reports\n               (user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                not_aligned_count, inconclusive_count, alignment_score, summary_text, model)\n             VALUES ($1,$2,$3,$4,0,0,0,0,$5,'test','test-model')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Uuid",
+        "Int4",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "04aa1db59db515d3a6e57338e5bd1ceb60435c29ba990fee1d36e2a2c48c2784"
+}

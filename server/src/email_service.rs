@@ -326,13 +326,17 @@ pub struct LowScoreEmail<'a> {
     pub employee_name: &'a str,
     pub employee_email: &'a str,
     pub day: chrono::NaiveDate,
+    /// The day score (idle-adjusted, report_service::idle_adjusted).
     pub score: f64,
+    /// The screenshots alone, and the in-span idle that lowered the day score (None on older reports).
+    pub screen_score: Option<f64>,
+    pub idle_seconds: Option<i32>,
     pub threshold: f64,
     pub total_analyzed: i32,
     pub summary: &'a str,
 }
 
-/// Alert HR that an employee's daily alignment score fell below the threshold.
+/// Alert HR that an employee's day score (screenshot alignment, lowered for idle) fell below the threshold.
 pub async fn send_low_score_alert(e: LowScoreEmail<'_>) -> anyhow::Result<()> {
     // RA-11: sanitize identity fields and the AI-generated summary (model text).
     use crate::validate::sanitize_line;
@@ -343,9 +347,19 @@ pub async fn send_low_score_alert(e: LowScoreEmail<'_>) -> anyhow::Result<()> {
         "[TimeTracker] Low productivity score — {} ({}: {:.0}%)",
         name, e.day, e.score
     );
+    // The day score counts idle beyond the allowance; say what the screenshots alone scored when idle lowered it.
+    let breakdown = match (e.screen_score, e.idle_seconds) {
+        (Some(screen), Some(idle)) if screen.round() > e.score.round() => format!(
+            "Screenshot alignment: {screen:.0}% (idle during the working day: {}h {:02}m)\n",
+            idle.max(0) / 3600,
+            (idle.max(0) % 3600) / 60
+        ),
+        _ => String::new(),
+    };
     let body = format!(
-        "Hi,\n\n{name} ({email}) had a daily alignment score of {score:.0}% on {day}, \
+        "Hi,\n\n{name} ({email}) had a day score of {score:.0}% on {day}, \
          which is below the {th:.0}% threshold.\n\n\
+         {breakdown}\
          Screenshots analysed: {n}\n\
          Summary: {summary}\n\n\
          Please review with the employee.\n\n(TimeTracker)\n",
@@ -354,6 +368,7 @@ pub async fn send_low_score_alert(e: LowScoreEmail<'_>) -> anyhow::Result<()> {
         score = e.score,
         day = e.day,
         th = e.threshold,
+        breakdown = breakdown,
         n = e.total_analyzed,
         summary = summary,
     );

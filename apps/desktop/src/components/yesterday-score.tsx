@@ -10,7 +10,11 @@ type Report = {
   partially_count: number;
   not_aligned_count: number;
   inconclusive_count: number;
+  /** The day score: screenshot alignment lowered for idle beyond 30 min (server 0061). */
   alignment_score: number;
+  /** The screenshots alone; absent on older reports. */
+  screen_alignment_score?: number | null;
+  idle_seconds?: number | null;
   summary_text: string;
   model: string;
 } | null;
@@ -126,7 +130,12 @@ export function YesterdayScoreDialog() {
           <span className={`text-5xl font-bold tabular-nums ${scoreColor(rep.alignment_score)}`}>
             {Math.round(rep.alignment_score)}%
           </span>
-          <span className="text-sm text-slate-400">aligned</span>
+          {/* The day score counts idle beyond 30 min inside the working day (server 0061). */}
+          <span className="text-sm text-slate-400">
+            {rep.screen_alignment_score != null && Math.round(rep.screen_alignment_score) > Math.round(rep.alignment_score)
+              ? `day score · screens ${Math.round(rep.screen_alignment_score!)}%`
+              : "aligned"}
+          </span>
         </div>
 
         {rep.summary_text && <p className="mt-3 text-sm leading-relaxed">{rep.summary_text}</p>}

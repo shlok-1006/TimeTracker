@@ -20,7 +20,15 @@ pub struct AnalysisReport {
     pub partially_count: i32,
     pub not_aligned_count: i32,
     pub inconclusive_count: i32,
+    /// The day score (0–100): the screenshot alignment scaled down by idle beyond the allowance
+    /// (report_service::idle_adjusted). Screenshot-only on reports built before migration 0061.
     pub alignment_score: f64,
+    /// The verdicts alone, before idle (None on reports built before migration 0061).
+    pub screen_alignment_score: Option<f64>,
+    /// Active + meeting seconds that day, as the idle adjustment saw them (None before 0061).
+    pub worked_seconds: Option<i32>,
+    /// Idle seconds that day, as the idle adjustment saw them (None before 0061).
+    pub idle_seconds: Option<i32>,
     pub summary_text: String,
     pub model: String,
     pub created_at: DateTime<Utc>,
@@ -39,6 +47,10 @@ pub struct ReportInput {
     pub not_aligned_count: i32,
     pub inconclusive_count: i32,
     pub alignment_score: f64,
+    pub screen_alignment_score: f64,
+    /// None = the day's activity couldn't be read (stored NULL, not a real zero).
+    pub worked_seconds: Option<i32>,
+    pub idle_seconds: Option<i32>,
     pub summary_text: String,
     pub model: String,
 }
@@ -50,8 +62,9 @@ pub async fn upsert(pool: &PgPool, r: &ReportInput) -> Result<AnalysisReport, Ap
         r#"
         INSERT INTO analysis_reports
             (user_id, day, job_id, total_analyzed, aligned_count, partially_count,
-             not_aligned_count, inconclusive_count, alignment_score, summary_text, model)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             not_aligned_count, inconclusive_count, alignment_score, summary_text, model,
+             screen_alignment_score, worked_seconds, idle_seconds)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         ON CONFLICT (user_id, day) DO UPDATE SET
             job_id             = EXCLUDED.job_id,
             total_analyzed     = EXCLUDED.total_analyzed,
@@ -60,11 +73,15 @@ pub async fn upsert(pool: &PgPool, r: &ReportInput) -> Result<AnalysisReport, Ap
             not_aligned_count  = EXCLUDED.not_aligned_count,
             inconclusive_count = EXCLUDED.inconclusive_count,
             alignment_score    = EXCLUDED.alignment_score,
+            screen_alignment_score = EXCLUDED.screen_alignment_score,
+            worked_seconds     = EXCLUDED.worked_seconds,
+            idle_seconds       = EXCLUDED.idle_seconds,
             summary_text       = EXCLUDED.summary_text,
             model              = EXCLUDED.model,
             created_at         = now()
         RETURNING id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,
-                  not_aligned_count, inconclusive_count, alignment_score, summary_text, model, created_at
+                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,
+                  worked_seconds, idle_seconds, summary_text, model, created_at
         "#,
         r.user_id,
         r.day,
@@ -77,6 +94,9 @@ pub async fn upsert(pool: &PgPool, r: &ReportInput) -> Result<AnalysisReport, Ap
         r.alignment_score,
         r.summary_text,
         r.model,
+        r.screen_alignment_score,
+        r.worked_seconds,
+        r.idle_seconds,
     )
     .fetch_one(pool)
     .await?;
@@ -92,10 +112,121 @@ pub async fn upsert(pool: &PgPool, r: &ReportInput) -> Result<AnalysisReport, Ap
         row.not_aligned_count,
         row.inconclusive_count,
         row.alignment_score,
+        IdleParts {
+            screen_alignment_score: row.screen_alignment_score,
+            worked_seconds: row.worked_seconds,
+            idle_seconds: row.idle_seconds,
+        },
         row.summary_text,
         row.model,
         row.created_at,
     ))
+}
+
+/// Update only the idle-score columns of an existing report (report_service::rescore_idle), stamping `created_at`
+/// so data that arrived before now isn't treated as late again.
+pub async fn set_idle_score(
+    pool: &PgPool,
+    user_id: Uuid,
+    day: NaiveDate,
+    alignment_score: f64,
+    screen_alignment_score: f64,
+    worked_seconds: i32,
+    idle_seconds: i32,
+) -> Result<AnalysisReport, AppError> {
+    let r = sqlx::query!(
+        r#"UPDATE analysis_reports
+              SET alignment_score = $3, screen_alignment_score = $4, worked_seconds = $5,
+                  idle_seconds = $6, created_at = now()
+            WHERE user_id = $1 AND day = $2
+        RETURNING id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,
+                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,
+                  worked_seconds, idle_seconds, summary_text, model, created_at"#,
+        user_id,
+        day,
+        alignment_score,
+        screen_alignment_score,
+        worked_seconds,
+        idle_seconds
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(map_row(
+        r.id,
+        r.user_id,
+        r.day,
+        r.job_id,
+        r.total_analyzed,
+        r.aligned_count,
+        r.partially_count,
+        r.not_aligned_count,
+        r.inconclusive_count,
+        r.alignment_score,
+        IdleParts {
+            screen_alignment_score: r.screen_alignment_score,
+            worked_seconds: r.worked_seconds,
+            idle_seconds: r.idle_seconds,
+        },
+        r.summary_text,
+        r.model,
+        r.created_at,
+    ))
+}
+
+/// Reports in `[from, to]` (with real verdicts) whose user has activity that reached the server AFTER the report was
+/// built and falls inside that report's org day — they were scored on incomplete idle (a late / VPN sync).
+/// `offset_minutes` is the org timezone offset (org_time::offset_minutes).
+pub async fn stale_for_late_activity(
+    pool: &PgPool,
+    from: NaiveDate,
+    to: NaiveDate,
+    offset_minutes: i32,
+) -> Result<Vec<AnalysisReport>, AppError> {
+    let rows = sqlx::query!(
+        r#"SELECT r.id, r.user_id, r.day, r.job_id, r.total_analyzed, r.aligned_count,
+                  r.partially_count, r.not_aligned_count, r.inconclusive_count, r.alignment_score,
+                  r.screen_alignment_score, r.worked_seconds, r.idle_seconds, r.summary_text,
+                  r.model, r.created_at
+           FROM analysis_reports r
+           WHERE r.day >= $1 AND r.day <= $2
+             AND r.aligned_count + r.partially_count + r.not_aligned_count > 0
+             AND EXISTS (
+               SELECT 1 FROM intervals i
+                WHERE i.user_id = r.user_id
+                  AND i.received_at > r.created_at
+                  AND i.end_utc > ((r.day::timestamp - make_interval(mins => $3)) AT TIME ZONE 'UTC')
+                  AND i.start_utc < ((r.day::timestamp + interval '1 day' - make_interval(mins => $3)) AT TIME ZONE 'UTC'))"#,
+        from,
+        to,
+        offset_minutes
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            map_row(
+                r.id,
+                r.user_id,
+                r.day,
+                r.job_id,
+                r.total_analyzed,
+                r.aligned_count,
+                r.partially_count,
+                r.not_aligned_count,
+                r.inconclusive_count,
+                r.alignment_score,
+                IdleParts {
+                    screen_alignment_score: r.screen_alignment_score,
+                    worked_seconds: r.worked_seconds,
+                    idle_seconds: r.idle_seconds,
+                },
+                r.summary_text,
+                r.model,
+                r.created_at,
+            )
+        })
+        .collect())
 }
 
 /// The report for a specific `(user, day)`, if one exists.
@@ -106,7 +237,8 @@ pub async fn get(
 ) -> Result<Option<AnalysisReport>, AppError> {
     let row = sqlx::query!(
         r#"SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,
-                  not_aligned_count, inconclusive_count, alignment_score, summary_text, model, created_at
+                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,
+                  worked_seconds, idle_seconds, summary_text, model, created_at
            FROM analysis_reports WHERE user_id = $1 AND day = $2"#,
         user_id,
         day
@@ -126,6 +258,11 @@ pub async fn get(
             r.not_aligned_count,
             r.inconclusive_count,
             r.alignment_score,
+            IdleParts {
+                screen_alignment_score: r.screen_alignment_score,
+                worked_seconds: r.worked_seconds,
+                idle_seconds: r.idle_seconds,
+            },
             r.summary_text,
             r.model,
             r.created_at,
@@ -178,7 +315,11 @@ pub struct ReportRow {
     pub partially_count: i32,
     pub not_aligned_count: i32,
     pub inconclusive_count: i32,
+    /// The day score (idle-adjusted from migration 0061 on).
     pub alignment_score: f64,
+    pub screen_alignment_score: Option<f64>,
+    pub worked_seconds: Option<i32>,
+    pub idle_seconds: Option<i32>,
     pub summary_text: String,
     pub model: String,
     pub created_at: DateTime<Utc>,
@@ -194,7 +335,8 @@ pub async fn list_for_day(
     let rows = sqlx::query!(
         r#"SELECT r.user_id, u.name AS employee_name, u.email AS employee_email, r.day,
                   r.total_analyzed, r.aligned_count, r.partially_count, r.not_aligned_count,
-                  r.inconclusive_count, r.alignment_score, r.summary_text, r.model, r.created_at
+                  r.inconclusive_count, r.alignment_score, r.screen_alignment_score, r.worked_seconds,
+                  r.idle_seconds, r.summary_text, r.model, r.created_at
            FROM analysis_reports r
            JOIN users u ON u.id = r.user_id
            WHERE r.day = $1
@@ -221,6 +363,9 @@ pub async fn list_for_day(
             not_aligned_count: r.not_aligned_count,
             inconclusive_count: r.inconclusive_count,
             alignment_score: r.alignment_score,
+            screen_alignment_score: r.screen_alignment_score,
+            worked_seconds: r.worked_seconds,
+            idle_seconds: r.idle_seconds,
             summary_text: r.summary_text,
             model: r.model,
             created_at: r.created_at,
@@ -232,7 +377,8 @@ pub async fn list_for_day(
 pub async fn list_for_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<AnalysisReport>, AppError> {
     let rows = sqlx::query!(
         r#"SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,
-                  not_aligned_count, inconclusive_count, alignment_score, summary_text, model, created_at
+                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,
+                  worked_seconds, idle_seconds, summary_text, model, created_at
            FROM analysis_reports WHERE user_id = $1 ORDER BY day DESC"#,
         user_id
     )
@@ -253,6 +399,11 @@ pub async fn list_for_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<AnalysisR
                 r.not_aligned_count,
                 r.inconclusive_count,
                 r.alignment_score,
+                IdleParts {
+                    screen_alignment_score: r.screen_alignment_score,
+                    worked_seconds: r.worked_seconds,
+                    idle_seconds: r.idle_seconds,
+                },
                 r.summary_text,
                 r.model,
                 r.created_at,
@@ -273,6 +424,7 @@ fn map_row(
     not_aligned_count: i32,
     inconclusive_count: i32,
     alignment_score: f64,
+    idle: IdleParts,
     summary_text: String,
     model: String,
     created_at: DateTime<Utc>,
@@ -288,10 +440,20 @@ fn map_row(
         not_aligned_count,
         inconclusive_count,
         alignment_score,
+        screen_alignment_score: idle.screen_alignment_score,
+        worked_seconds: idle.worked_seconds,
+        idle_seconds: idle.idle_seconds,
         summary_text,
         model,
         created_at,
     }
+}
+
+/// The idle-score columns of a row (migration 0061), all NULL on older reports.
+struct IdleParts {
+    screen_alignment_score: Option<f64>,
+    worked_seconds: Option<i32>,
+    idle_seconds: Option<i32>,
 }
 
 /// One user's daily reports across an inclusive day range — the source for the
@@ -304,7 +466,8 @@ pub async fn list_for_range(
 ) -> Result<Vec<AnalysisReport>, AppError> {
     let rows = sqlx::query!(
         r#"SELECT id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,
-                  not_aligned_count, inconclusive_count, alignment_score, summary_text, model, created_at
+                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,
+                  worked_seconds, idle_seconds, summary_text, model, created_at
            FROM analysis_reports
            WHERE user_id = $1 AND day >= $2 AND day <= $3
            ORDER BY day"#,
@@ -327,6 +490,9 @@ pub async fn list_for_range(
             not_aligned_count: r.not_aligned_count,
             inconclusive_count: r.inconclusive_count,
             alignment_score: r.alignment_score,
+            screen_alignment_score: r.screen_alignment_score,
+            worked_seconds: r.worked_seconds,
+            idle_seconds: r.idle_seconds,
             summary_text: r.summary_text,
             model: r.model,
             created_at: r.created_at,

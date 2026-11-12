@@ -343,21 +343,27 @@ pub async fn send_low_score_alert(e: LowScoreEmail<'_>) -> anyhow::Result<()> {
     let name = sanitize_line(e.employee_name, 200);
     let email = sanitize_line(e.employee_email, 320);
     let summary = sanitize_line(e.summary, 1000);
+    // Percentages are printed already rounded (half away from zero, as the apps' Math.round): `{:.0}` rounds half
+    // to even, which made 62.5 read "62" here and "63" in the apps, and could print two equal figures as different.
+    use crate::report_service::pct;
     let subject = format!(
-        "[TimeTracker] Low productivity score — {} ({}: {:.0}%)",
-        name, e.day, e.score
+        "[TimeTracker] Low productivity score — {} ({}: {}%)",
+        name,
+        e.day,
+        pct(e.score)
     );
     // The day score counts idle beyond the allowance; say what the screenshots alone scored when idle lowered it.
     let breakdown = match (e.screen_score, e.idle_seconds) {
-        (Some(screen), Some(idle)) if screen.round() > e.score.round() => format!(
-            "Screenshot alignment: {screen:.0}% (idle during the working day: {}h {:02}m)\n",
+        (Some(screen), Some(idle)) if pct(screen) > pct(e.score) => format!(
+            "Screenshot alignment: {}% (idle during the working day: {}h {:02}m)\n",
+            pct(screen),
             idle.max(0) / 3600,
             (idle.max(0) % 3600) / 60
         ),
         _ => String::new(),
     };
     let body = format!(
-        "Hi,\n\n{name} ({email}) had a day score of {score:.0}% on {day}, \
+        "Hi,\n\n{name} ({email}) had a day score of {score}% on {day}, \
          which is below the {th:.0}% threshold.\n\n\
          {breakdown}\
          Screenshots analysed: {n}\n\
@@ -365,7 +371,7 @@ pub async fn send_low_score_alert(e: LowScoreEmail<'_>) -> anyhow::Result<()> {
          Please review with the employee.\n\n(TimeTracker)\n",
         name = name,
         email = email,
-        score = e.score,
+        score = pct(e.score),
         day = e.day,
         th = e.threshold,
         breakdown = breakdown,

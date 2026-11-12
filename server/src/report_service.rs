@@ -16,13 +16,15 @@
 //!
 //! IDLE (migration 0061, HR 4 Nov 2026): the day score also accounts for idle time. Only idle INSIDE the working
 //! span counts — between the day's first and last active/meeting minute — so a timer left running after someone
-//! leaves (the desktop has no idle auto-stop) or a second machine idling overnight doesn't sink the day. Of that,
+//! leaves (the desktop has no idle auto-stop) or a second machine idling overnight doesn't sink the day. A second
+//! that any device spent on a break isn't idle either, and a night session's span carries across midnight
+//! (`MIDNIGHT_BRIDGE_SECONDS`, see `attendance::score_idle_activity`). Of that,
 //! the first `idle_allowance_seconds()` (30 min) are free; beyond it the screenshot alignment is scaled by
 //! worked / (worked + extra idle) — see `idle_adjusted` and `day_idle`. The stored `alignment_score` is that day score (the Daily
 //! Report, the low-score alert and the monthly average all read it); `screen_alignment_score` keeps the
 //! screenshot-only figure beside it.
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -44,6 +46,11 @@ pub const PARTIAL_WEIGHT: f64 = 0.75;
 /// Idle a day may have before it lowers the score — the same 30 minutes the HRMS Daily Report's idle list uses.
 /// Overridable via `TIMETRACKER_IDLE_ALLOWANCE_MINUTES`.
 pub const DEFAULT_IDLE_ALLOWANCE_SECONDS: i64 = 30 * 60;
+
+/// A working span carries across midnight when there's active/meeting time within this long on BOTH sides of it
+/// (a night session), so its idle is counted; a timer left running overnight (work ends in the evening, resumes in
+/// the morning) is further apart than that and still isn't.
+pub const MIDNIGHT_BRIDGE_SECONDS: i64 = 4 * 3600;
 
 /// The configured idle allowance in seconds (≥ 0), env-overridable in whole minutes.
 pub fn idle_allowance_seconds() -> i64 {
@@ -157,19 +164,25 @@ pub fn aggregate(verdicts: &[String]) -> ReportAggregate {
 }
 
 /// A short, deterministic summary line derived from the aggregate.
+/// A percentage as every surface shows it: rounded half away from zero (`f64::round`, JS `Math.round` for positive
+/// values). `{:.0}` rounds half to even, so 62.5 printed "62" here and "63" in the apps.
+pub fn pct(v: f64) -> i64 {
+    v.round() as i64
+}
+
 fn summarize(a: &ReportAggregate) -> String {
     if a.total_analyzed == 0 {
         return "No screenshots were analysed for this day.".to_string();
     }
     format!(
         "{} screenshot(s) analysed: {} aligned, {} partially aligned, {} not aligned, \
-         {} inconclusive. Alignment score {:.0}%.",
+         {} inconclusive. Alignment score {}%.",
         a.total_analyzed,
         a.aligned_count,
         a.partially_count,
         a.not_aligned_count,
         a.inconclusive_count,
-        a.alignment_score,
+        pct(a.alignment_score),
     )
 }
 
@@ -185,8 +198,8 @@ fn summarize_with_idle(
         return base;
     }
     format!(
-        "{base} Day score {:.0}% after {} idle ({} over the {} allowance).",
-        day_score,
+        "{base} Day score {}% after {} idle ({} over the {} allowance).",
+        pct(day_score),
         hm(idle_seconds),
         hm(idle_seconds - allowance_seconds),
         hm(allowance_seconds)
@@ -200,47 +213,80 @@ fn hm(secs: i64) -> String {
 }
 
 /// Worked seconds (active + meeting) for the org/IST `day`, and the idle that counts: idle INSIDE the working span —
-/// from the first to the last active/meeting minute. Attendance's own rule and multi-device de-overlap
-/// (`attendance::day_activity`, interval_seconds). Idle before anyone started or after they stopped (a timer left
-/// on, a second machine idling) is not "idle at work", so it doesn't lower the score. No work → (0, 0).
+/// from the first to the last active/meeting minute, carried across midnight for a night session — and only when no
+/// device was active, in a meeting or on a break (`attendance::score_idle_activity`). Idle before anyone started or
+/// after they stopped (a timer left on, a second machine idling) is not "idle at work", so it doesn't lower the score.
+/// No work → (0, 0).
 pub async fn day_idle(
     pool: &PgPool,
     user_id: Uuid,
     day: NaiveDate,
 ) -> Result<(i64, i64), AppError> {
     let (day_start, day_end) = org_time::day_bounds_utc(day);
-    let whole = attendance::day_activity(pool, user_id, day_start, day_end).await?;
-    let (Some(first_in), Some(last_out)) = (whole.first_in_utc, whole.last_out_utc) else {
-        return Ok((whole.worked_seconds, 0));
-    };
-    if last_out <= first_in {
-        return Ok((whole.worked_seconds, 0));
-    }
-    let span = attendance::day_activity(pool, user_id, first_in, last_out).await?;
-    Ok((whole.worked_seconds, span.idle_seconds))
+    attendance::score_idle_activity(pool, user_id, day_start, day_end, MIDNIGHT_BRIDGE_SECONDS)
+        .await
+}
+
+/// The screenshot-only score from a report's verdict counts — the same weights as `aggregate`. None when nothing
+/// was scored. The stored `screen_alignment_score` can be stale (a rollback to a binary without migration 0061 rebuilds
+/// the counts and the day score but never touches it), the counts can't.
+fn screen_from_counts(r: &AnalysisReport) -> Option<f64> {
+    screen_score_from_counts(r.aligned_count, r.partially_count, r.not_aligned_count)
+}
+
+/// The screenshot-only score (0–100) from verdict counts, `aggregate`'s weights; None when nothing was scored.
+pub fn screen_score_from_counts(aligned: i32, partially: i32, not_aligned: i32) -> Option<f64> {
+    let scored = aligned + partially + not_aligned;
+    (scored > 0).then(|| {
+        (f64::from(aligned) + PARTIAL_WEIGHT * f64::from(partially)) / f64::from(scored) * 100.0
+    })
 }
 
 /// Re-score an existing report's idle without re-running the analysis or the AI summary — for days whose activity
-/// reached the server after the report was built (a late or VPN sync). Keeps the screenshot score and summary;
-/// recomputes worked, in-span idle and the day score, and stamps `created_at` so the same late data isn't picked up
-/// again. Returns the refreshed report.
+/// reached the server after the report was built (a late or VPN sync). Recomputes worked, in-span idle and the day
+/// score from the verdict counts (not the stored screenshot score, which can be stale), and refreshes the summary when
+/// it's the deterministic one (it quotes the day score and idle). An AI summary is kept as it is.
+///
+/// Writes only if the report is still the one that was read: if it was rebuilt meanwhile (an admin re-analysis, a
+/// range run), that rebuild already scored the day on fresh activity, so this returns `Ok(None)` and changes nothing.
+/// `created_at` is stamped with the time the activity was read, so data that lands while this runs counts as late
+/// next time instead of being lost.
 pub async fn rescore_idle(
     pool: &PgPool,
     report: &AnalysisReport,
-) -> Result<AnalysisReport, AppError> {
-    let screen = report
-        .screen_alignment_score
+) -> Result<Option<AnalysisReport>, AppError> {
+    let screen = screen_from_counts(report)
+        .or(report.screen_alignment_score)
         .unwrap_or(report.alignment_score);
+    let as_of = Utc::now();
     let (worked, idle) = day_idle(pool, report.user_id, report.day).await?;
-    let day_score = idle_adjusted(screen, worked, idle, idle_allowance_seconds());
+    let allowance = idle_allowance_seconds();
+    let day_score = idle_adjusted(screen, worked, idle, allowance);
+    let agg = ReportAggregate {
+        total_analyzed: report.total_analyzed,
+        aligned_count: report.aligned_count,
+        partially_count: report.partially_count,
+        not_aligned_count: report.not_aligned_count,
+        inconclusive_count: report.inconclusive_count,
+        alignment_score: screen,
+    };
+    let summary = report
+        .summary_text
+        .starts_with(&summarize(&agg))
+        .then(|| summarize_with_idle(&agg, day_score, idle, allowance));
     analysis_reports::set_idle_score(
         pool,
-        report.user_id,
-        report.day,
-        day_score,
-        screen,
-        clamp_i32(worked),
-        clamp_i32(idle),
+        analysis_reports::IdleScore {
+            user_id: report.user_id,
+            day: report.day,
+            expected_created_at: report.created_at,
+            alignment_score: day_score,
+            screen_alignment_score: screen,
+            worked_seconds: clamp_i32(worked),
+            idle_seconds: clamp_i32(idle),
+            summary_text: summary,
+            as_of,
+        },
     )
     .await
 }
@@ -276,6 +322,7 @@ pub async fn build_report(
     // the deterministic count line so a report is always produced.
     // Worked and in-span idle for the day. A failed read must not lose the report: score on screenshots alone, and
     // store the worked/idle columns as NULL ("unknown"), not as a real zero.
+    let as_of = Utc::now(); // stamped as created_at: activity landing after this read counts as late, not lost
     let activity = match day_idle(pool, user_id, day).await {
         Ok(a) => Some(a),
         Err(e) => {
@@ -312,6 +359,7 @@ pub async fn build_report(
         idle_seconds: activity.map(|(_, i)| clamp_i32(i)),
         summary_text,
         model,
+        as_of,
     };
     analysis_reports::upsert(pool, &input).await
 }

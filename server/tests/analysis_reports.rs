@@ -37,11 +37,13 @@ fn input(user_id: Uuid, day: NaiveDate, job_id: Uuid) -> ReportInput {
         not_aligned_count: 1,
         inconclusive_count: 0,
         alignment_score: 70.0,
-        screen_alignment_score: 70.0,
+        // what the counts above score on screenshots alone: (3 + 0.75) / 5 (the idle columns must match the counts)
+        screen_alignment_score: 75.0,
         worked_seconds: Some(8 * 3600),
         idle_seconds: Some(600),
         summary_text: "Mostly aligned with assigned work.".into(),
         model: "claude-haiku-4-5-20251001".into(),
+        as_of: chrono::Utc::now(),
     }
 }
 
@@ -77,7 +79,7 @@ async fn upsert_get_and_unique_per_user_day() {
     assert_eq!(created.aligned_count, 3);
     assert!((created.alignment_score - 70.0).abs() < 1e-9);
     // The idle-score columns (migration 0061) round-trip.
-    assert_eq!(created.screen_alignment_score, Some(70.0));
+    assert_eq!(created.screen_alignment_score, Some(75.0));
     assert_eq!(created.worked_seconds, Some(8 * 3600));
     assert_eq!(created.idle_seconds, Some(600));
 
@@ -305,7 +307,8 @@ async fn build_report_lowers_the_day_score_for_idle_beyond_the_allowance() {
     // Re-scoring (the late-activity path) gives the same answer and keeps the screenshot score.
     let again = report_service::rescore_idle(&pool, &report)
         .await
-        .expect("rescore");
+        .expect("rescore")
+        .expect("the report wasn't rebuilt meanwhile");
     assert_eq!(again.screen_alignment_score, Some(68.75));
     assert!((again.alignment_score - expected).abs() < 1e-9);
 

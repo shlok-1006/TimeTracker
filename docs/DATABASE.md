@@ -169,12 +169,29 @@ the employee's Linear tickets + manual tasks. **Fetched by:** the day gallery
 (verdict badges) and report building.
 
 ### `analysis_reports`
-One aggregate per `(user, day)` (UNIQUE): verdict counts, `alignment_score`
-(0–100 weighted: aligned=1, partial=0.5, inconclusive excluded),
-`summary_text` (AI-written), `low_score_notified_at` (stamps the one-time HR
-alert so restarts never re-email). **Written by:** the nightly job (2:00 UTC)
-and on-demand analysis. **Fetched by:** the per-day report card and HR/PM
-roster report views.
+One aggregate per `(user, day)` (UNIQUE): verdict counts, `alignment_score`,
+`summary_text` (AI-written, or a deterministic fallback), `low_score_notified_at`
+(stamps the one-time HR alert so restarts never re-email). **Written by:** the
+nightly job and on-demand analysis. **Fetched by:** the per-day report card,
+HR/PM roster report views, the low-score email and the monthly average.
+
+- `alignment_score` is the **day score** (migration 0061): the screenshot score
+  (aligned=1, partial=0.75, inconclusive excluded) scaled down by idle beyond a
+  30-minute allowance — `report_service::idle_adjusted`. Only idle inside the
+  working span counts, never a second any device spent active, in a meeting or
+  on a break; a night session's span carries across IST midnight.
+- `screen_alignment_score`, `worked_seconds`, `idle_seconds` (0061) record what
+  the day score was computed from; NULL on reports built before 0061, and read
+  as NULL when they no longer match the row's own verdict counts.
+- `created_at` is the time the day's activity was read. Activity received after
+  it marks the report stale and the nightly job re-scores the idle
+  (`stale_for_late_activity`, `rescore_idle`) — skipped if the report was
+  rebuilt meanwhile.
+- **Rolling back past 0061:** delete its `_sqlx_migrations` row and NULL the
+  three columns (`UPDATE analysis_reports SET screen_alignment_score = NULL,
+  worked_seconds = NULL, idle_seconds = NULL`), so nothing shows a screenshot
+  figure the old binary no longer keeps up to date. Redeploying re-runs 0061
+  (`ADD COLUMN IF NOT EXISTS`) and the columns fill again as reports rebuild.
 
 ### `analysis_range_runs`
 Progress tracking for the admin "analyze every screenshot in a range" feature:

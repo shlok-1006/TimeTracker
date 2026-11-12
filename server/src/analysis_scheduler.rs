@@ -198,9 +198,14 @@ async fn rescore_late_activity(state: &AppState) {
     };
     for report in stale {
         match report_service::rescore_idle(&state.db, &report).await {
-            Ok(r) => tracing::info!(
+            Ok(Some(r)) => tracing::info!(
                 user_id = %r.user_id, day = %r.day, from = report.alignment_score, to = r.alignment_score,
                 "late activity: day score re-scored"
+            ),
+            // Rebuilt since the list was read (re-analysis / range run): that rebuild already used fresh activity.
+            Ok(None) => tracing::info!(
+                user_id = %report.user_id, day = %report.day,
+                "late activity: report was rebuilt meanwhile, re-score skipped"
             ),
             Err(e) => {
                 tracing::warn!(user_id = %report.user_id, day = %report.day, "late activity re-score failed: {e}")

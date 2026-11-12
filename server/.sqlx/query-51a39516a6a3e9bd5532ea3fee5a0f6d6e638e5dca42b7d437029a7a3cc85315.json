@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE analysis_reports\n              SET alignment_score = $3, screen_alignment_score = $4, worked_seconds = $5,\n                  idle_seconds = $6, created_at = now()\n            WHERE user_id = $1 AND day = $2\n        RETURNING id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,\n                  worked_seconds, idle_seconds, summary_text, model, created_at",
+  "query": "\n        INSERT INTO analysis_reports\n            (user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n             not_aligned_count, inconclusive_count, alignment_score, summary_text, model,\n             screen_alignment_score, worked_seconds, idle_seconds, created_at)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)\n        ON CONFLICT (user_id, day) DO UPDATE SET\n            job_id             = EXCLUDED.job_id,\n            total_analyzed     = EXCLUDED.total_analyzed,\n            aligned_count      = EXCLUDED.aligned_count,\n            partially_count    = EXCLUDED.partially_count,\n            not_aligned_count  = EXCLUDED.not_aligned_count,\n            inconclusive_count = EXCLUDED.inconclusive_count,\n            alignment_score    = EXCLUDED.alignment_score,\n            screen_alignment_score = EXCLUDED.screen_alignment_score,\n            worked_seconds     = EXCLUDED.worked_seconds,\n            idle_seconds       = EXCLUDED.idle_seconds,\n            summary_text       = EXCLUDED.summary_text,\n            model              = EXCLUDED.model,\n            created_at         = EXCLUDED.created_at\n        RETURNING id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,\n                  not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,\n                  worked_seconds, idle_seconds, summary_text, model, created_at\n        ",
   "describe": {
     "columns": [
       {
@@ -88,10 +88,19 @@
       "Left": [
         "Uuid",
         "Date",
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
         "Float8",
+        "Text",
+        "Text",
         "Float8",
         "Int4",
-        "Int4"
+        "Int4",
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -113,5 +122,5 @@
       false
     ]
   },
-  "hash": "6a8f56356c7e042aca008dd8ab99e4f2c498d8c5cc0e56e99bd5fd3d913a2b38"
+  "hash": "51a39516a6a3e9bd5532ea3fee5a0f6d6e638e5dca42b7d437029a7a3cc85315"
 }

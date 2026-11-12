@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH iv AS (\n          SELECT kind, start_utc, end_utc FROM intervals\n          WHERE user_id = $1\n            AND end_utc > $2::timestamptz - make_interval(secs => $4::float8)\n            AND start_utc < $3::timestamptz + make_interval(secs => $4::float8)\n        ),\n        edges AS (\n          SELECT\n            MIN(GREATEST(start_utc, $2::timestamptz)) FILTER (WHERE kind IN ('active','meeting') AND end_utc > $2::timestamptz AND start_utc < $3::timestamptz) AS first_in,\n            MAX(LEAST(end_utc, $3::timestamptz))      FILTER (WHERE kind IN ('active','meeting') AND end_utc > $2::timestamptz AND start_utc < $3::timestamptz) AS last_out,\n            COALESCE(BOOL_OR(kind IN ('active','meeting') AND start_utc < $2::timestamptz\n                             AND end_utc > $2::timestamptz - make_interval(secs => $4::float8)), FALSE) AS worked_before,\n            COALESCE(BOOL_OR(kind IN ('active','meeting') AND end_utc > $3::timestamptz\n                             AND start_utc < $3::timestamptz + make_interval(secs => $4::float8)), FALSE) AS worked_after\n          FROM iv\n        ),\n        span AS (\n          SELECT\n            CASE WHEN worked_before AND first_in <= $2::timestamptz + make_interval(secs => $4::float8) THEN $2::timestamptz ELSE first_in END AS s,\n            CASE WHEN worked_after  AND last_out >= $3::timestamptz - make_interval(secs => $4::float8) THEN $3::timestamptz ELSE last_out END AS e\n          FROM edges\n        ),\n        clipped AS (\n          SELECT iv.kind, tstzrange(GREATEST(iv.start_utc, span.s), LEAST(iv.end_utc, span.e), '[)') AS r\n          FROM iv, span\n          WHERE span.s IS NOT NULL AND span.e IS NOT NULL AND GREATEST(iv.start_utc, span.s) < LEAST(iv.end_utc, span.e)\n        ),\n        by_kind AS (SELECT kind, range_agg(r) AS m FROM clipped GROUP BY kind),\n        pick AS (\n          SELECT\n            COALESCE((SELECT m FROM by_kind WHERE kind = 'meeting'), '{}'::tstzmultirange) AS mtg,\n            COALESCE((SELECT m FROM by_kind WHERE kind = 'active'),  '{}'::tstzmultirange) AS act,\n            COALESCE((SELECT m FROM by_kind WHERE kind = 'idle'),    '{}'::tstzmultirange) AS idl,\n            COALESCE((SELECT m FROM by_kind WHERE kind = 'break'),   '{}'::tstzmultirange) AS brk\n        )\n        SELECT\n          (SELECT CAST(s.active + s.meeting AS BIGINT) FROM interval_seconds($1, $2::timestamptz, $3::timestamptz, NULL) s) AS \"worked!\",\n          CAST(tstz_multirange_seconds(idl - mtg - act - brk) AS BIGINT) AS \"idle!\"\n        FROM pick\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "worked!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "idle!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "23bb68d06a6e0a07d8e014e60f806b2f13d1b9fd4fe8e25cb2ee02bfb66e1b6d"
+}

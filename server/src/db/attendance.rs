@@ -77,6 +77,76 @@ pub async fn day_activity(
     })
 }
 
+/// Worked seconds for `[day_start, day_end)` and the idle that lowers the day score (report_service::day_idle).
+///
+/// The idle that counts is idle INSIDE the working span — from the first to the last active/meeting minute — and
+/// only seconds when no device was active, in a meeting OR ON A BREAK: `interval_seconds` ranks idle above break
+/// (right for attendance, where it only decides a label), but a break paused on one device while another sat idle is
+/// still a break, not idle at work.
+///
+/// The span stretches to the day's edge when the work carries on across midnight: to `day_start` when there was
+/// active/meeting time within `bridge_seconds` before it AND the day's first active minute is within
+/// `bridge_seconds` after it (and likewise at `day_end`), so idle in a night session is counted (each part on its
+/// own day) while a timer left on overnight still isn't. No work in the day → (worked, 0).
+pub async fn score_idle_activity(
+    pool: &PgPool,
+    user_id: Uuid,
+    day_start: DateTime<Utc>,
+    day_end: DateTime<Utc>,
+    bridge_seconds: i64,
+) -> Result<(i64, i64), AppError> {
+    let r = sqlx::query!(
+        r#"
+        WITH iv AS (
+          SELECT kind, start_utc, end_utc FROM intervals
+          WHERE user_id = $1
+            AND end_utc > $2::timestamptz - make_interval(secs => $4::float8)
+            AND start_utc < $3::timestamptz + make_interval(secs => $4::float8)
+        ),
+        edges AS (
+          SELECT
+            MIN(GREATEST(start_utc, $2::timestamptz)) FILTER (WHERE kind IN ('active','meeting') AND end_utc > $2::timestamptz AND start_utc < $3::timestamptz) AS first_in,
+            MAX(LEAST(end_utc, $3::timestamptz))      FILTER (WHERE kind IN ('active','meeting') AND end_utc > $2::timestamptz AND start_utc < $3::timestamptz) AS last_out,
+            COALESCE(BOOL_OR(kind IN ('active','meeting') AND start_utc < $2::timestamptz
+                             AND end_utc > $2::timestamptz - make_interval(secs => $4::float8)), FALSE) AS worked_before,
+            COALESCE(BOOL_OR(kind IN ('active','meeting') AND end_utc > $3::timestamptz
+                             AND start_utc < $3::timestamptz + make_interval(secs => $4::float8)), FALSE) AS worked_after
+          FROM iv
+        ),
+        span AS (
+          SELECT
+            CASE WHEN worked_before AND first_in <= $2::timestamptz + make_interval(secs => $4::float8) THEN $2::timestamptz ELSE first_in END AS s,
+            CASE WHEN worked_after  AND last_out >= $3::timestamptz - make_interval(secs => $4::float8) THEN $3::timestamptz ELSE last_out END AS e
+          FROM edges
+        ),
+        clipped AS (
+          SELECT iv.kind, tstzrange(GREATEST(iv.start_utc, span.s), LEAST(iv.end_utc, span.e), '[)') AS r
+          FROM iv, span
+          WHERE span.s IS NOT NULL AND span.e IS NOT NULL AND GREATEST(iv.start_utc, span.s) < LEAST(iv.end_utc, span.e)
+        ),
+        by_kind AS (SELECT kind, range_agg(r) AS m FROM clipped GROUP BY kind),
+        pick AS (
+          SELECT
+            COALESCE((SELECT m FROM by_kind WHERE kind = 'meeting'), '{}'::tstzmultirange) AS mtg,
+            COALESCE((SELECT m FROM by_kind WHERE kind = 'active'),  '{}'::tstzmultirange) AS act,
+            COALESCE((SELECT m FROM by_kind WHERE kind = 'idle'),    '{}'::tstzmultirange) AS idl,
+            COALESCE((SELECT m FROM by_kind WHERE kind = 'break'),   '{}'::tstzmultirange) AS brk
+        )
+        SELECT
+          (SELECT CAST(s.active + s.meeting AS BIGINT) FROM interval_seconds($1, $2::timestamptz, $3::timestamptz, NULL) s) AS "worked!",
+          CAST(tstz_multirange_seconds(idl - mtg - act - brk) AS BIGINT) AS "idle!"
+        FROM pick
+        "#,
+        user_id,
+        day_start,
+        day_end,
+        bridge_seconds as f64
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok((r.worked, r.idle))
+}
+
 /// Upsert a derived attendance row (idempotent per user/day).
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert(

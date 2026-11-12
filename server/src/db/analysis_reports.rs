@@ -34,8 +34,7 @@ pub struct AnalysisReport {
     pub created_at: DateTime<Utc>,
 }
 
-/// Fields needed to create/refresh a report (everything except the generated
-/// id and created_at).
+/// Fields needed to create/refresh a report (everything except the generated id).
 #[derive(Debug, Clone)]
 pub struct ReportInput {
     pub user_id: Uuid,
@@ -53,6 +52,9 @@ pub struct ReportInput {
     pub idle_seconds: Option<i32>,
     pub summary_text: String,
     pub model: String,
+    /// When the day's activity was read for this report; stored as `created_at`, so activity that reaches the server
+    /// after the read (even while the report is being built) is picked up as late by `stale_for_late_activity`.
+    pub as_of: DateTime<Utc>,
 }
 
 /// Insert or refresh the report for a `(user, day)` (idempotent via the unique
@@ -63,8 +65,8 @@ pub async fn upsert(pool: &PgPool, r: &ReportInput) -> Result<AnalysisReport, Ap
         INSERT INTO analysis_reports
             (user_id, day, job_id, total_analyzed, aligned_count, partially_count,
              not_aligned_count, inconclusive_count, alignment_score, summary_text, model,
-             screen_alignment_score, worked_seconds, idle_seconds)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             screen_alignment_score, worked_seconds, idle_seconds, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         ON CONFLICT (user_id, day) DO UPDATE SET
             job_id             = EXCLUDED.job_id,
             total_analyzed     = EXCLUDED.total_analyzed,
@@ -78,7 +80,7 @@ pub async fn upsert(pool: &PgPool, r: &ReportInput) -> Result<AnalysisReport, Ap
             idle_seconds       = EXCLUDED.idle_seconds,
             summary_text       = EXCLUDED.summary_text,
             model              = EXCLUDED.model,
-            created_at         = now()
+            created_at         = EXCLUDED.created_at
         RETURNING id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,
                   not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,
                   worked_seconds, idle_seconds, summary_text, model, created_at
@@ -97,6 +99,7 @@ pub async fn upsert(pool: &PgPool, r: &ReportInput) -> Result<AnalysisReport, Ap
         r.screen_alignment_score,
         r.worked_seconds,
         r.idle_seconds,
+        r.as_of,
     )
     .fetch_one(pool)
     .await?;
@@ -112,46 +115,70 @@ pub async fn upsert(pool: &PgPool, r: &ReportInput) -> Result<AnalysisReport, Ap
         row.not_aligned_count,
         row.inconclusive_count,
         row.alignment_score,
-        IdleParts {
-            screen_alignment_score: row.screen_alignment_score,
-            worked_seconds: row.worked_seconds,
-            idle_seconds: row.idle_seconds,
-        },
+        IdleParts::checked(
+            (
+                row.aligned_count,
+                row.partially_count,
+                row.not_aligned_count,
+            ),
+            row.screen_alignment_score,
+            row.worked_seconds,
+            row.idle_seconds,
+        ),
         row.summary_text,
         row.model,
         row.created_at,
     ))
 }
 
-/// Update only the idle-score columns of an existing report (report_service::rescore_idle), stamping `created_at`
-/// so data that arrived before now isn't treated as late again.
+/// A re-scored report's idle columns (report_service::rescore_idle).
+#[derive(Debug, Clone)]
+pub struct IdleScore {
+    pub user_id: Uuid,
+    pub day: NaiveDate,
+    /// The `created_at` of the report the re-score was computed from: the update only applies while it's unchanged.
+    pub expected_created_at: DateTime<Utc>,
+    pub alignment_score: f64,
+    pub screen_alignment_score: f64,
+    pub worked_seconds: i32,
+    pub idle_seconds: i32,
+    /// A refreshed summary, or None to keep the stored one.
+    pub summary_text: Option<String>,
+    /// When the activity was read; stored as `created_at`.
+    pub as_of: DateTime<Utc>,
+}
+
+/// Update only the idle-score columns of an existing report — IF it is still the report the re-score read (same
+/// `created_at`). A report rebuilt in between (re-analysis, range run) already has fresh numbers; writing the
+/// re-score over it would put back the old screenshot score, so that case returns `Ok(None)` and changes nothing.
 pub async fn set_idle_score(
     pool: &PgPool,
-    user_id: Uuid,
-    day: NaiveDate,
-    alignment_score: f64,
-    screen_alignment_score: f64,
-    worked_seconds: i32,
-    idle_seconds: i32,
-) -> Result<AnalysisReport, AppError> {
-    let r = sqlx::query!(
+    u: IdleScore,
+) -> Result<Option<AnalysisReport>, AppError> {
+    let Some(r) = sqlx::query!(
         r#"UPDATE analysis_reports
-              SET alignment_score = $3, screen_alignment_score = $4, worked_seconds = $5,
-                  idle_seconds = $6, created_at = now()
-            WHERE user_id = $1 AND day = $2
+              SET alignment_score = $4, screen_alignment_score = $5, worked_seconds = $6,
+                  idle_seconds = $7, summary_text = COALESCE($8, summary_text), created_at = $9
+            WHERE user_id = $1 AND day = $2 AND created_at = $3
         RETURNING id, user_id, day, job_id, total_analyzed, aligned_count, partially_count,
                   not_aligned_count, inconclusive_count, alignment_score, screen_alignment_score,
                   worked_seconds, idle_seconds, summary_text, model, created_at"#,
-        user_id,
-        day,
-        alignment_score,
-        screen_alignment_score,
-        worked_seconds,
-        idle_seconds
+        u.user_id,
+        u.day,
+        u.expected_created_at,
+        u.alignment_score,
+        u.screen_alignment_score,
+        u.worked_seconds,
+        u.idle_seconds,
+        u.summary_text,
+        u.as_of
     )
-    .fetch_one(pool)
-    .await?;
-    Ok(map_row(
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(map_row(
         r.id,
         r.user_id,
         r.day,
@@ -162,15 +189,16 @@ pub async fn set_idle_score(
         r.not_aligned_count,
         r.inconclusive_count,
         r.alignment_score,
-        IdleParts {
-            screen_alignment_score: r.screen_alignment_score,
-            worked_seconds: r.worked_seconds,
-            idle_seconds: r.idle_seconds,
-        },
+        IdleParts::checked(
+            (r.aligned_count, r.partially_count, r.not_aligned_count),
+            r.screen_alignment_score,
+            r.worked_seconds,
+            r.idle_seconds,
+        ),
         r.summary_text,
         r.model,
         r.created_at,
-    ))
+    )))
 }
 
 /// Reports in `[from, to]` (with real verdicts) whose user has activity that reached the server AFTER the report was
@@ -216,11 +244,12 @@ pub async fn stale_for_late_activity(
                 r.not_aligned_count,
                 r.inconclusive_count,
                 r.alignment_score,
-                IdleParts {
-                    screen_alignment_score: r.screen_alignment_score,
-                    worked_seconds: r.worked_seconds,
-                    idle_seconds: r.idle_seconds,
-                },
+                IdleParts::checked(
+                    (r.aligned_count, r.partially_count, r.not_aligned_count),
+                    r.screen_alignment_score,
+                    r.worked_seconds,
+                    r.idle_seconds,
+                ),
                 r.summary_text,
                 r.model,
                 r.created_at,
@@ -258,11 +287,12 @@ pub async fn get(
             r.not_aligned_count,
             r.inconclusive_count,
             r.alignment_score,
-            IdleParts {
-                screen_alignment_score: r.screen_alignment_score,
-                worked_seconds: r.worked_seconds,
-                idle_seconds: r.idle_seconds,
-            },
+            IdleParts::checked(
+                (r.aligned_count, r.partially_count, r.not_aligned_count),
+                r.screen_alignment_score,
+                r.worked_seconds,
+                r.idle_seconds,
+            ),
             r.summary_text,
             r.model,
             r.created_at,
@@ -352,23 +382,31 @@ pub async fn list_for_day(
 
     Ok(rows
         .into_iter()
-        .map(|r| ReportRow {
-            user_id: r.user_id,
-            employee_name: r.employee_name,
-            employee_email: r.employee_email,
-            day: r.day,
-            total_analyzed: r.total_analyzed,
-            aligned_count: r.aligned_count,
-            partially_count: r.partially_count,
-            not_aligned_count: r.not_aligned_count,
-            inconclusive_count: r.inconclusive_count,
-            alignment_score: r.alignment_score,
-            screen_alignment_score: r.screen_alignment_score,
-            worked_seconds: r.worked_seconds,
-            idle_seconds: r.idle_seconds,
-            summary_text: r.summary_text,
-            model: r.model,
-            created_at: r.created_at,
+        .map(|r| {
+            let idle = IdleParts::checked(
+                (r.aligned_count, r.partially_count, r.not_aligned_count),
+                r.screen_alignment_score,
+                r.worked_seconds,
+                r.idle_seconds,
+            );
+            ReportRow {
+                user_id: r.user_id,
+                employee_name: r.employee_name,
+                employee_email: r.employee_email,
+                day: r.day,
+                total_analyzed: r.total_analyzed,
+                aligned_count: r.aligned_count,
+                partially_count: r.partially_count,
+                not_aligned_count: r.not_aligned_count,
+                inconclusive_count: r.inconclusive_count,
+                alignment_score: r.alignment_score,
+                screen_alignment_score: idle.screen_alignment_score,
+                worked_seconds: idle.worked_seconds,
+                idle_seconds: idle.idle_seconds,
+                summary_text: r.summary_text,
+                model: r.model,
+                created_at: r.created_at,
+            }
         })
         .collect())
 }
@@ -399,11 +437,12 @@ pub async fn list_for_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<AnalysisR
                 r.not_aligned_count,
                 r.inconclusive_count,
                 r.alignment_score,
-                IdleParts {
-                    screen_alignment_score: r.screen_alignment_score,
-                    worked_seconds: r.worked_seconds,
-                    idle_seconds: r.idle_seconds,
-                },
+                IdleParts::checked(
+                    (r.aligned_count, r.partially_count, r.not_aligned_count),
+                    r.screen_alignment_score,
+                    r.worked_seconds,
+                    r.idle_seconds,
+                ),
                 r.summary_text,
                 r.model,
                 r.created_at,
@@ -456,6 +495,40 @@ struct IdleParts {
     idle_seconds: Option<i32>,
 }
 
+impl IdleParts {
+    /// The idle columns as read — unless they no longer match the row. A binary without migration 0061 (a rollback)
+    /// rebuilds the counts and `alignment_score` but never touches these three, so a stored screenshot score that
+    /// disagrees with the row's own verdict counts is stale: then all three read as unknown (NULL), and the apps and
+    /// the email fall back to the plain score instead of captioning it with a stale "screens N%".
+    fn checked(
+        counts: (i32, i32, i32),
+        screen: Option<f64>,
+        worked: Option<i32>,
+        idle: Option<i32>,
+    ) -> Self {
+        let (aligned, partial, not_aligned) = counts;
+        let stale = match (
+            screen,
+            crate::report_service::screen_score_from_counts(aligned, partial, not_aligned),
+        ) {
+            (Some(stored), Some(from_counts)) => (stored - from_counts).abs() > 0.01,
+            _ => false,
+        };
+        if stale {
+            return IdleParts {
+                screen_alignment_score: None,
+                worked_seconds: None,
+                idle_seconds: None,
+            };
+        }
+        IdleParts {
+            screen_alignment_score: screen,
+            worked_seconds: worked,
+            idle_seconds: idle,
+        }
+    }
+}
+
 /// One user's daily reports across an inclusive day range — the source for the
 /// monthly rollup's "how many days scored above the threshold" figure.
 pub async fn list_for_range(
@@ -479,23 +552,31 @@ pub async fn list_for_range(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| AnalysisReport {
-            id: r.id,
-            user_id: r.user_id,
-            day: r.day,
-            job_id: r.job_id,
-            total_analyzed: r.total_analyzed,
-            aligned_count: r.aligned_count,
-            partially_count: r.partially_count,
-            not_aligned_count: r.not_aligned_count,
-            inconclusive_count: r.inconclusive_count,
-            alignment_score: r.alignment_score,
-            screen_alignment_score: r.screen_alignment_score,
-            worked_seconds: r.worked_seconds,
-            idle_seconds: r.idle_seconds,
-            summary_text: r.summary_text,
-            model: r.model,
-            created_at: r.created_at,
+        .map(|r| {
+            let idle = IdleParts::checked(
+                (r.aligned_count, r.partially_count, r.not_aligned_count),
+                r.screen_alignment_score,
+                r.worked_seconds,
+                r.idle_seconds,
+            );
+            AnalysisReport {
+                id: r.id,
+                user_id: r.user_id,
+                day: r.day,
+                job_id: r.job_id,
+                total_analyzed: r.total_analyzed,
+                aligned_count: r.aligned_count,
+                partially_count: r.partially_count,
+                not_aligned_count: r.not_aligned_count,
+                inconclusive_count: r.inconclusive_count,
+                alignment_score: r.alignment_score,
+                screen_alignment_score: idle.screen_alignment_score,
+                worked_seconds: idle.worked_seconds,
+                idle_seconds: idle.idle_seconds,
+                summary_text: r.summary_text,
+                model: r.model,
+                created_at: r.created_at,
+            }
         })
         .collect())
 }
